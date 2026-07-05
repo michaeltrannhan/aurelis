@@ -4,30 +4,35 @@
 
 FineTune launches as a menu-bar app, creates long-lived app services, requests Screen & System Audio Recording permission, discovers CoreAudio apps and devices, creates process taps, applies persisted per-app settings, and renders controls in a menu-bar popup.
 
-EQMacRep keeps that shape but starts with a mock backend. This makes the UI, persistence, and state transitions visible before adding realtime audio code.
+EQMacRep keeps that shape with a mock backend for tests and a CoreAudio backend for real discovery. The current CoreAudio path creates private process taps for active apps and applies volume, mute, and boost on a follow-default output path. Realtime EQ and explicit routing are still later phases.
 
 ## Launch Flow
 
 1. `EQMacRepApp` creates a `SettingsStore`.
-2. It creates a `MockAudioBackend` with deterministic app/device snapshots.
-3. It creates an `AudioControlStore`, loading JSON settings or defaults.
-4. The menu-bar extra opens `MenuBarRootView`.
-5. The popup calls `refresh()`, which reconciles backend apps with persisted settings.
+2. It loads persisted settings and reads `AppCustomization.backendMode`.
+3. `AudioBackendFactory` creates either `MockAudioBackend` or `CoreAudioDiscoveryBackend`.
+4. It creates an `AudioControlStore`, loading JSON settings or defaults.
+5. The menu-bar extra opens `MenuBarRootView`.
+6. The popup calls `refresh()`, which reconciles backend apps with persisted settings.
 
 ## Discovery Flow
 
-First build:
+Mock mode:
 
 1. `MockAudioBackend.fetchSnapshot()` returns mock apps and output devices.
 2. `AudioControlStore.refresh()` stores snapshots in memory.
 3. New apps receive default settings from `AppCustomization`.
 
-Later CoreAudio build:
+CoreAudio Discovery mode:
 
-1. A CoreAudio backend observes `kAudioHardwarePropertyProcessObjectList`.
-2. Helper processes are mapped to responsible apps.
-3. Device changes are read from HAL device-list/default-device properties.
-4. The backend emits the same snapshot shape used by the mock backend.
+1. `CoreAudioProcessDiscovery` reads `kAudioHardwarePropertyProcessObjectList`.
+2. Each process object is mapped from PID, running-output state, bundle identifier, and `NSRunningApplication` display metadata.
+3. Helper processes are coalesced into their parent app identity where CoreAudio exposes both records.
+4. EQMacRep's own process and obvious CoreAudio/system daemons are filtered out.
+5. The backend emits the same snapshot shape used by the mock backend and caches tap targets by app identity.
+6. `CoreAudioDeviceDiscovery` reads HAL device-list and default-output properties.
+7. Devices without output streams and hidden devices are filtered out.
+8. The default output UID is passed to the tap manager for follow-default output.
 
 ## App State Flow
 
@@ -37,11 +42,13 @@ Later CoreAudio build:
 4. The store forwards supported commands to the backend.
 5. `displayRows` is rebuilt from snapshots plus pinned/ignored state.
 
-Pinned apps stay visible when inactive. Ignored apps are hidden and are the future place where real CoreAudio taps will be torn down.
+Pinned apps stay visible when inactive. Ignored apps are hidden and any active CoreAudio tap for that app is torn down.
+
+In CoreAudio Discovery mode, `setVolume`, `setMuted`, and `setBoost` update realtime gain state for the active tap controller. `setEQ` still persists only until the realtime EQ phase. If tap setup fails, refresh still keeps discovered rows visible and surfaces a tap setup error in the status text.
 
 ## EQ Flow
 
-The first build stores a 10-band `EQCurve` per app. Gains are normalized to exactly 10 bands and clamped to the selected range: 6 dB, 12 dB, or 18 dB.
+EQMacRep stores a 10-band `EQCurve` per app. Gains are normalized to exactly 10 bands and clamped to the selected range: 6 dB, 12 dB, or 18 dB.
 
 Later, a realtime EQ processor can consume the same `EQCurve` values when a process tap is active.
 
@@ -53,6 +60,12 @@ Later, a realtime EQ processor can consume the same `EQCurve` values when a proc
 
 `SettingsView` edits `AppCustomization`. Changing EQ range reclamps existing app EQ curves. Popup density changes row sizing and width. Default new-app volume affects apps first seen after the change.
 
+Backend mode is also stored in `AppCustomization`. Changing it in Settings replaces the backend immediately, refreshes rows, and tears down old taps.
+
 ## Routing Flow
 
-The first build records routing intent through `DeviceRoute`, but the UI focuses on follow-default behavior and mock output devices. Real routing belongs to the later process-tap and aggregate-device phase.
+The current CoreAudio path follows the default output device when creating per-app aggregate devices. Explicit per-app routing through `DeviceRoute`, multi-output, and device-switch recovery belong to later phases.
+
+## Debug App Bundle Flow
+
+Real process taps require macOS 14.2 or newer and an app bundle with `NSAudioCaptureUsageDescription`. Use `Scripts/build-debug-app.sh` and open `.build/EQMacRep.app` for manual audio testing. Running with `swift run EQMacRep` is useful for UI smoke tests, but it is not the correct permission path for real per-app volume.

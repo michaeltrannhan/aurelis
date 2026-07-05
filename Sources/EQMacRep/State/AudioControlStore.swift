@@ -4,7 +4,8 @@ import Foundation
 @MainActor
 final class AudioControlStore: ObservableObject {
     let settingsStore: SettingsStore
-    private let backend: any AudioBackend
+    private var backend: any AudioBackend
+    private let backendFactory: (BackendMode) -> any AudioBackend
 
     @Published var settings: PersistedSettings
     @Published private(set) var appSnapshots: [AudioAppSnapshot] = []
@@ -12,10 +13,16 @@ final class AudioControlStore: ObservableObject {
     @Published private(set) var displayRows: [DisplayableAppRow] = []
     @Published private(set) var statusMessage: String = "Ready"
 
-    init(settingsStore: SettingsStore = SettingsStore(), backend: any AudioBackend = MockAudioBackend()) throws {
+    init(
+        settingsStore: SettingsStore = SettingsStore(),
+        backend: (any AudioBackend)? = nil,
+        backendFactory: @escaping (BackendMode) -> any AudioBackend = { AudioBackendFactory.makeBackend(mode: $0) }
+    ) throws {
+        let loadedSettings = try settingsStore.load()
         self.settingsStore = settingsStore
-        self.backend = backend
-        self.settings = try settingsStore.load()
+        self.backendFactory = backendFactory
+        self.backend = backend ?? backendFactory(loadedSettings.customization.backendMode)
+        self.settings = loadedSettings
         rebuildDisplayRows()
     }
 
@@ -27,8 +34,15 @@ final class AudioControlStore: ObservableObject {
             for app in appSnapshots {
                 ensureSettings(for: app)
             }
+            let tapError = synchronizeBackendTapsCapturingError()
             try persist()
-            statusMessage = "Loaded \(appSnapshots.count) app\(appSnapshots.count == 1 ? "" : "s")"
+            if let tapError {
+                statusMessage = "Tap setup error: \(tapError.localizedDescription)"
+            } else if let statusProvider = backend as? AudioBackendStatusProviding {
+                statusMessage = statusProvider.statusMessage(appCount: appSnapshots.count, deviceCount: devices.count)
+            } else {
+                statusMessage = "Loaded \(appSnapshots.count) app\(appSnapshots.count == 1 ? "" : "s")"
+            }
         } catch {
             statusMessage = "Backend error: \(error.localizedDescription)"
             throw error
@@ -49,11 +63,16 @@ final class AudioControlStore: ObservableObject {
     func ignore(_ identity: AudioAppIdentity) throws {
         settings.ignoredAppIDs.insert(identity)
         settings.pinnedAppIDs.remove(identity)
+        if let tapBackend = backend as? AudioBackendTapSynchronizing {
+            try tapBackend.tearDownTap(for: identity)
+        }
+        try synchronizeBackendTaps()
         try persistAndRebuild()
     }
 
     func unignore(_ identity: AudioAppIdentity) throws {
         settings.ignoredAppIDs.remove(identity)
+        try synchronizeBackendTaps()
         try persistAndRebuild()
     }
 
@@ -89,6 +108,7 @@ final class AudioControlStore: ObservableObject {
     }
 
     func applyCustomization(_ customization: AppCustomization) throws {
+        let previousBackendMode = settings.customization.backendMode
         let previousRange = settings.customization.eqGainRange
         settings.customization = customization
         if previousRange != customization.eqGainRange {
@@ -96,12 +116,34 @@ final class AudioControlStore: ObservableObject {
                 settings.appSettings[identity]?.eq.applyRange(customization.eqGainRange)
             }
         }
+
+        if previousBackendMode != customization.backendMode {
+            try (backend as? AudioBackendTapSynchronizing)?.tearDownAllTaps()
+            backend = backendFactory(customization.backendMode)
+            appSnapshots = []
+            devices = []
+            displayRows = []
+            try persist()
+            try refresh()
+            return
+        }
+
         try persistAndRebuild()
     }
 
     func reset() throws {
+        try (backend as? AudioBackendTapSynchronizing)?.tearDownAllTaps()
         settings = PersistedSettings()
-        try persistAndRebuild()
+        backend = backendFactory(settings.customization.backendMode)
+        appSnapshots = []
+        devices = []
+        displayRows = []
+        try persist()
+        try refresh()
+    }
+
+    func shutdown() {
+        try? (backend as? AudioBackendTapSynchronizing)?.tearDownAllTaps()
     }
 
     private func ensureSettings(for app: AudioAppSnapshot) {
@@ -164,6 +206,23 @@ final class AudioControlStore: ObservableObject {
     private func persistAndRebuild() throws {
         try persist()
         rebuildDisplayRows()
+    }
+
+    private func synchronizeBackendTaps() throws {
+        guard let tapBackend = backend as? AudioBackendTapSynchronizing else { return }
+        try tapBackend.synchronizeTaps(
+            activeAppIDs: Set(appSnapshots.map(\.identity)),
+            ignoredAppIDs: settings.ignoredAppIDs
+        )
+    }
+
+    private func synchronizeBackendTapsCapturingError() -> Error? {
+        do {
+            try synchronizeBackendTaps()
+            return nil
+        } catch {
+            return error
+        }
     }
 
     private func persist() throws {

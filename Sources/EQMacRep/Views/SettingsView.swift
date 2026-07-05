@@ -5,6 +5,17 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section("Backend") {
+                Picker("Backend Mode", selection: customizationBinding(\.backendMode)) {
+                    ForEach(BackendMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                Text("CoreAudio Discovery lists real apps and output devices. Volume, mute, and boost require Screen & System Audio Recording permission.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Picker("Appearance", selection: customizationBinding(\.appearance)) {
                 ForEach(AppAppearance.allCases) { appearance in
                     Text(appearance.label).tag(appearance)

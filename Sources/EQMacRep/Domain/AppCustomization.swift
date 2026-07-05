@@ -63,6 +63,20 @@ enum VolumeStep: Double, CaseIterable, Codable, Identifiable {
     }
 }
 
+enum BackendMode: String, CaseIterable, Codable, Identifiable {
+    case mock
+    case coreAudioDiscovery
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .mock: return "Mock"
+        case .coreAudioDiscovery: return "CoreAudio Discovery"
+        }
+    }
+}
+
 struct AppCustomization: Codable, Equatable {
     var appearance: AppAppearance
     var popupDensity: PopupDensity
@@ -70,6 +84,7 @@ struct AppCustomization: Codable, Equatable {
     var eqGainRange: EQGainRange
     var volumeStep: VolumeStep
     var showInactiveApps: Bool
+    var backendMode: BackendMode
 
     init(
         appearance: AppAppearance = .system,
@@ -77,7 +92,8 @@ struct AppCustomization: Codable, Equatable {
         defaultNewAppVolume: Double = 1,
         eqGainRange: EQGainRange = .db12,
         volumeStep: VolumeStep = .fivePercent,
-        showInactiveApps: Bool = true
+        showInactiveApps: Bool = true,
+        backendMode: BackendMode = .coreAudioDiscovery
     ) {
         self.appearance = appearance
         self.popupDensity = popupDensity
@@ -85,6 +101,30 @@ struct AppCustomization: Codable, Equatable {
         self.eqGainRange = eqGainRange
         self.volumeStep = volumeStep
         self.showInactiveApps = showInactiveApps
+        self.backendMode = backendMode
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case appearance
+        case popupDensity
+        case defaultNewAppVolume
+        case eqGainRange
+        case volumeStep
+        case showInactiveApps
+        case backendMode
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            appearance: try values.decodeIfPresent(AppAppearance.self, forKey: .appearance) ?? .system,
+            popupDensity: try values.decodeIfPresent(PopupDensity.self, forKey: .popupDensity) ?? .comfortable,
+            defaultNewAppVolume: try values.decodeIfPresent(Double.self, forKey: .defaultNewAppVolume) ?? 1,
+            eqGainRange: try values.decodeIfPresent(EQGainRange.self, forKey: .eqGainRange) ?? .db12,
+            volumeStep: try values.decodeIfPresent(VolumeStep.self, forKey: .volumeStep) ?? .fivePercent,
+            showInactiveApps: try values.decodeIfPresent(Bool.self, forKey: .showInactiveApps) ?? true,
+            backendMode: try values.decodeIfPresent(BackendMode.self, forKey: .backendMode) ?? .coreAudioDiscovery
+        )
     }
 
     mutating func setDefaultNewAppVolume(_ volume: Double) {

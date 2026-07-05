@@ -57,6 +57,38 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(try store.load().customization.defaultNewAppVolume, 0.25)
     }
 
+    func testVersionOneDefaultMockSettingsMigrateToCoreAudioDiscovery() throws {
+        let url = uniqueSettingsURL()
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let json = """
+        {
+          "version": 1,
+          "customization": {
+            "appearance": "system",
+            "backendMode": "mock",
+            "defaultNewAppVolume": 1,
+            "eqGainRange": 12,
+            "popupDensity": "comfortable",
+            "showInactiveApps": true,
+            "volumeStep": 0.05
+          },
+          "appSettings": [],
+          "pinnedAppIDs": [],
+          "ignoredAppIDs": []
+        }
+        """
+        try Data(json.utf8).write(to: url)
+        let store = SettingsStore(settingsURL: url)
+
+        let settings = try store.load()
+
+        XCTAssertEqual(settings.version, PersistedSettings.currentVersion)
+        XCTAssertEqual(settings.customization.backendMode, .coreAudioDiscovery)
+    }
+
     private func uniqueSettingsURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("EQMacRepTests-\(UUID().uuidString)", isDirectory: true)

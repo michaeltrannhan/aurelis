@@ -21,4 +21,8 @@ final class CustomizationTests: XCTestCase {
         XCTAssertEqual(VolumeStep.fivePercent.fraction, 0.05, accuracy: 0.0001)
         XCTAssertEqual(VolumeStep.tenPercent.fraction, 0.10, accuracy: 0.0001)
     }
+
+    func testDefaultBackendModeIsCoreAudioDiscovery() {
+        XCTAssertEqual(AppCustomization().backendMode, .coreAudioDiscovery)
+    }
 }

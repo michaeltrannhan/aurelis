@@ -8,7 +8,7 @@ final class AudioControlStoreTests: XCTestCase {
         let backend = MockAudioBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music", bundleIdentifier: music.rawValue, level: 0.6)
         ])
-        let store = try makeStore(backend: backend)
+        let store = try AudioControlStore(settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()), backend: backend)
 
         try store.refresh()
 
@@ -24,7 +24,7 @@ final class AudioControlStoreTests: XCTestCase {
         let backend = MockAudioBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music", bundleIdentifier: music.rawValue)
         ])
-        let store = try makeStore(backend: backend)
+        let store = try AudioControlStore(settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()), backend: backend)
         try store.refresh()
 
         try store.ignore(music)
@@ -81,6 +81,73 @@ final class AudioControlStoreTests: XCTestCase {
         )
     }
 
+    func testBackendModeChangeReplacesBackendAndRefreshesRows() throws {
+        let mockIdentity = AudioAppIdentity(rawValue: "com.example.Mock")
+        let realIdentity = AudioAppIdentity(rawValue: "com.example.Real")
+        let initialBackend = MockAudioBackend(apps: [
+            AudioAppSnapshot(identity: mockIdentity, displayName: "Mock App")
+        ])
+        let replacementBackend = MockAudioBackend(apps: [
+            AudioAppSnapshot(identity: realIdentity, displayName: "Real App")
+        ])
+        let settingsStore = SettingsStore(settingsURL: uniqueSettingsURL())
+        var settings = PersistedSettings()
+        settings.customization.backendMode = .mock
+        try settingsStore.save(settings)
+        var requestedModes: [BackendMode] = []
+        let store = try AudioControlStore(
+            settingsStore: settingsStore,
+            backend: initialBackend,
+            backendFactory: { mode in
+                requestedModes.append(mode)
+                return replacementBackend
+            }
+        )
+        try store.refresh()
+
+        var customization = store.settings.customization
+        customization.backendMode = .coreAudioDiscovery
+        try store.applyCustomization(customization)
+
+        XCTAssertEqual(requestedModes, [.coreAudioDiscovery])
+        XCTAssertEqual(store.displayRows.map(\.identity), [realIdentity])
+    }
+
+    func testRefreshSynchronizesTapsWithIgnoredApps() throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let backend = TapSynchronizingMockBackend(apps: [
+            AudioAppSnapshot(identity: music, displayName: "Music")
+        ])
+        let store = try AudioControlStore(
+            settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()),
+            backend: backend
+        )
+
+        try store.refresh()
+        try store.ignore(music)
+
+        XCTAssertEqual(backend.synchronizedActiveIDs, [music])
+        XCTAssertEqual(backend.synchronizedIgnoredIDs, [music])
+        XCTAssertEqual(backend.tornDownIDs, [music])
+    }
+
+    func testRefreshKeepsRowsWhenTapSynchronizationFails() throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let backend = TapSynchronizingMockBackend(apps: [
+            AudioAppSnapshot(identity: music, displayName: "Music")
+        ])
+        backend.syncError = NSError(domain: "EQMacRepTests", code: 17)
+        let store = try AudioControlStore(
+            settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()),
+            backend: backend
+        )
+
+        try store.refresh()
+
+        XCTAssertEqual(store.displayRows.map(\.identity), [music])
+        XCTAssertTrue(store.statusMessage.contains("Tap setup error"))
+    }
+
     private func makeStore(backend: MockAudioBackend) throws -> AudioControlStore {
         let store = SettingsStore(settingsURL: uniqueSettingsURL())
         return try AudioControlStore(settingsStore: store, backend: backend)
@@ -90,5 +157,38 @@ final class AudioControlStoreTests: XCTestCase {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("EQMacRepStoreTests-\(UUID().uuidString)", isDirectory: true)
             .appendingPathComponent("settings.json")
+    }
+}
+
+private final class TapSynchronizingMockBackend: AudioBackend, AudioBackendTapSynchronizing {
+    var snapshot: AudioBackendSnapshot
+    var syncError: Error?
+    private(set) var synchronizedActiveIDs: Set<AudioAppIdentity> = []
+    private(set) var synchronizedIgnoredIDs: Set<AudioAppIdentity> = []
+    private(set) var tornDownIDs: [AudioAppIdentity] = []
+    private(set) var tearDownAllCount = 0
+
+    init(apps: [AudioAppSnapshot], devices: [AudioDeviceSnapshot] = []) {
+        snapshot = AudioBackendSnapshot(apps: apps, devices: devices)
+    }
+
+    func fetchSnapshot() throws -> AudioBackendSnapshot {
+        snapshot
+    }
+
+    func apply(_ command: AudioBackendCommand) throws {}
+
+    func synchronizeTaps(activeAppIDs: Set<AudioAppIdentity>, ignoredAppIDs: Set<AudioAppIdentity>) throws {
+        if let syncError { throw syncError }
+        synchronizedActiveIDs = activeAppIDs
+        synchronizedIgnoredIDs = ignoredAppIDs
+    }
+
+    func tearDownTap(for identity: AudioAppIdentity) throws {
+        tornDownIDs.append(identity)
+    }
+
+    func tearDownAllTaps() throws {
+        tearDownAllCount += 1
     }
 }

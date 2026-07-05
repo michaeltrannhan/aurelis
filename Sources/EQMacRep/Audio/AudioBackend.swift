@@ -21,3 +21,13 @@ protocol AudioBackend: AnyObject {
     func fetchSnapshot() throws -> AudioBackendSnapshot
     func apply(_ command: AudioBackendCommand) throws
 }
+
+protocol AudioBackendStatusProviding {
+    func statusMessage(appCount: Int, deviceCount: Int) -> String
+}
+
+protocol AudioBackendTapSynchronizing {
+    func synchronizeTaps(activeAppIDs: Set<AudioAppIdentity>, ignoredAppIDs: Set<AudioAppIdentity>) throws
+    func tearDownTap(for identity: AudioAppIdentity) throws
+    func tearDownAllTaps() throws
+}

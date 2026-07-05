@@ -1,7 +1,7 @@
 import Foundation
 
 struct PersistedSettings: Codable, Equatable {
-    static let currentVersion = 1
+    static let currentVersion = 2
 
     var version: Int
     var customization: AppCustomization
@@ -21,6 +21,30 @@ struct PersistedSettings: Codable, Equatable {
         self.appSettings = appSettings
         self.pinnedAppIDs = pinnedAppIDs
         self.ignoredAppIDs = ignoredAppIDs
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case version
+        case customization
+        case appSettings
+        case pinnedAppIDs
+        case ignoredAppIDs
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedVersion = try values.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        var decodedCustomization = try values.decodeIfPresent(AppCustomization.self, forKey: .customization) ?? AppCustomization()
+
+        if decodedVersion < 2, decodedCustomization.backendMode == .mock {
+            decodedCustomization.backendMode = .coreAudioDiscovery
+        }
+
+        version = Self.currentVersion
+        customization = decodedCustomization
+        appSettings = try values.decodeIfPresent([AudioAppIdentity: AppAudioSettings].self, forKey: .appSettings) ?? [:]
+        pinnedAppIDs = try values.decodeIfPresent(Set<AudioAppIdentity>.self, forKey: .pinnedAppIDs) ?? []
+        ignoredAppIDs = try values.decodeIfPresent(Set<AudioAppIdentity>.self, forKey: .ignoredAppIDs) ?? []
     }
 }
 

@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:eq-mac-rep}",
+            "name": "Debug EQMacRep",
+            "target": "EQMacRep",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug EQMacRep"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:eq-mac-rep}",
+            "name": "Release EQMacRep",
+            "target": "EQMacRep",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release EQMacRep"
+        }
+    ]
+}

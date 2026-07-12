@@ -6,7 +6,7 @@ enum AudioBackendFactory {
         case .mock:
             return MockAudioBackend()
         case .coreAudioDiscovery:
-            return CoreAudioDiscoveryBackend()
+            return CoreAudioDiscoveryBackend(runStartupRecovery: true)
         }
     }
 }

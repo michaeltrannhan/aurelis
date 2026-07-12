@@ -15,6 +15,7 @@ enum AudioBackendCommand: Equatable {
     case setMuted(AudioAppIdentity, Bool)
     case setBoost(AudioAppIdentity, BoostLevel)
     case setEQ(AudioAppIdentity, EQCurve)
+    case setRoute(AudioAppIdentity, DeviceRoute)
 }
 
 protocol AudioBackend: AnyObject {
@@ -30,4 +31,10 @@ protocol AudioBackendTapSynchronizing {
     func synchronizeTaps(activeAppIDs: Set<AudioAppIdentity>, ignoredAppIDs: Set<AudioAppIdentity>) throws
     func tearDownTap(for identity: AudioAppIdentity) throws
     func tearDownAllTaps() throws
+}
+
+/// Backends that can notify observers of external audio-topology changes
+/// (process list, device list, default output) so the store can refresh live.
+protocol AudioBackendUpdatePublishing {
+    var updateEvents: AsyncStream<Void> { get }
 }

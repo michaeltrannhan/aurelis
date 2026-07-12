@@ -15,18 +15,33 @@ Track phase status and active goal state in `Documentation/phase-tracker.md`.
 
 ## Current State
 
+Last audited: 2026-07-08. See `Documentation/phase-tracker.md` for active phase and queue.
+
 - [x] SwiftUI menu-bar shell
 - [x] Mock backend
 - [x] Per-app volume, mute, boost, pin, ignore, and EQ state
 - [x] JSON persistence
 - [x] Backend picker
 - [x] CoreAudio discovery for output apps and output devices
-- [ ] Live discovery listeners
-- [ ] Permission flow
-- [ ] Process taps
-- [ ] Real audio mutation
-- [ ] Routing
-- [ ] Packaging
+- [x] Helper-process coalescing and system-daemon filtering
+- [x] Process taps with tap lifecycle tests
+- [x] Real per-app volume, mute, and boost on follow-default output path
+- [x] Realtime 10-band EQ DSP (biquad cascade before gain stage)
+- [x] Basic tap teardown on ignore, reset, and quit
+- [x] Debug app bundle script (`Scripts/build-debug-app.sh`) and `NSAudioCaptureUsageDescription` plist
+- [x] Live discovery listeners (HAL property listeners + debounced store refresh) — Phase 0
+- [x] Permission flow (detect state, banner, System Settings action, tap gate) — Phase 1
+- [x] Single-device routing (`DeviceRoute` resolver + per-app picker, wired) — Phase 5
+- [x] Stability/recovery hardening (orphan cleanup, crash guard, retry cap, health) — Phase 6
+- [x] Settings tabs + keyboard nav + scroll-wheel volume + reorder — Phase 7
+- [x] Media keys, global hotkeys, HUD, dynamic menu-bar icon — Phase 8
+- [ ] Manual audio/hardware verification for all of the above (owned by user)
+- [ ] Input devices, multi-output, presets/AutoEQ, loudness/DDC, inspector — Phases 9–12
+- [ ] Packaging (signing, notarization, updater) — Phase 13
+
+All Phase 0–8 code builds and passes `swift test` (104 tests, 0 failures) as of
+2026-07-08. Remaining items need real hardware, permission grants, or an Apple
+Developer certificate.
 
 ## Parallelization Model
 
@@ -43,23 +58,27 @@ Do not parallelize two tasks that both edit tap lifecycle, route switching, or D
 
 **Goal:** Make current CoreAudio Discovery mode reliable enough to build taps on top.
 
-**Status:** Partly done.
+**Status:** In progress (~65%).
 
 **Acceptance criteria:**
 
 - [ ] Real output apps appear without manual relaunch after app starts.
 - [ ] Real output devices refresh on connect, disconnect, and default-device change.
-- [ ] Helper processes coalesce into stable parent app identities.
-- [ ] Obvious Apple/system daemons stay hidden.
-- [ ] Discovery errors show useful status without crashing popup.
-- [ ] Mock mode still works.
-- [ ] `swift test` and `swift build` pass.
+- [x] Helper processes coalesce into stable parent app identities.
+- [x] Obvious Apple/system daemons stay hidden.
+- [x] Discovery errors show useful status without crashing popup.
+- [x] Mock mode still works.
+- [x] `swift test` and `swift build` pass.
+
+**Remaining:** `CoreAudioDiscoveryEventSource`, `AudioBackendUpdatePublishing`, `startBackendObservation()`, default-first device sort.
 
 **Parallelizable:** UI copy/docs can run parallel. CoreAudio listener work should stay single-threaded.
 
 ## Phase 1: Permissions And Safety Shell
 
 **Goal:** Add first-launch permission flow for Screen & System Audio Recording and safe fallback states.
+
+**Status:** In progress (~20%).
 
 **Acceptance criteria:**
 
@@ -71,21 +90,25 @@ Do not parallelize two tasks that both edit tap lifecycle, route switching, or D
 - [ ] Permission state is reflected in popup and settings.
 - [ ] Tests cover permission-state mapping and store status.
 
+**Done:** Debug app bundle with `Resources/EQMacRep-Info.plist` and `Scripts/build-debug-app.sh`.
+
 **Parallelizable:** UI banner/settings copy can run parallel with permission service after service interface is agreed.
 
 ## Phase 2: Process Tap Lifecycle Foundation
 
 **Goal:** Create, start, stop, and tear down process taps without changing audio yet.
 
+**Status:** Complete (implementation merged ahead into Phases 3–4).
+
 **Acceptance criteria:**
 
-- [ ] Tap manager creates one tap per eligible app.
-- [ ] Tap manager skips ignored apps.
-- [ ] Tap manager filters unsupported apps safely.
-- [ ] Stop order is explicit and tested.
-- [ ] App termination tears down all taps.
-- [ ] Device switch or app disappearance tears down stale taps.
-- [ ] No real gain, mute, boost, EQ, or routing applied yet.
+- [x] Tap manager creates one tap per eligible app.
+- [x] Tap manager skips ignored apps.
+- [x] Tap manager filters unsupported apps safely (macOS 14.2 guard).
+- [x] Stop order is explicit and tested.
+- [x] App termination tears down all taps.
+- [ ] Device switch or app disappearance tears down stale taps (manual `refresh()` only; no live listeners).
+- [ ] No real gain, mute, boost, EQ, or routing applied yet (skipped — full IOProc path shipped with Phase 3).
 - [ ] Manual test confirms system audio returns to normal after quit.
 
 **Parallelizable:** None for tap lifecycle internals. Docs/manual test checklist can run parallel.
@@ -94,15 +117,17 @@ Do not parallelize two tasks that both edit tap lifecycle, route switching, or D
 
 **Goal:** Make existing volume, mute, and boost controls affect real app audio on one output path.
 
+**Status:** Complete in code; manual audio verify pending.
+
 **Acceptance criteria:**
 
-- [ ] `setVolume` changes real audio level.
-- [ ] `setMuted` silences and restores real audio.
-- [ ] `setBoost` supports configured boost levels up to 4x.
-- [ ] Gain is smoothed enough to avoid obvious clicks.
-- [ ] Gain staging prevents extreme clipping where practical.
-- [ ] Persisted state is applied when app starts playing.
-- [ ] Ignored app returns to normal macOS audio path.
+- [x] `setVolume` changes real audio level.
+- [x] `setMuted` silences and restores real audio.
+- [x] `setBoost` supports configured boost levels up to 4x.
+- [x] Gain is smoothed enough to avoid obvious clicks.
+- [x] Gain staging prevents extreme clipping where practical.
+- [x] Persisted state is applied when app starts playing.
+- [x] Ignored app returns to normal macOS audio path.
 - [ ] Manual test covers Music/Safari/browser helper app.
 
 **Parallelizable:** Popup icon/slider polish can run parallel after command semantics are stable.
@@ -111,15 +136,19 @@ Do not parallelize two tasks that both edit tap lifecycle, route switching, or D
 
 **Goal:** Apply stored EQ curves to real tapped app audio.
 
+**Status:** Complete in code; manual audio verify and dynamic sample rate pending.
+
 **Acceptance criteria:**
 
-- [ ] 10-band EQ runs in realtime on audio render path.
-- [ ] EQ bypass/reset works.
-- [ ] Gain range settings apply to live processing.
-- [ ] EQ changes update without rebuilding whole app state.
-- [ ] DSP code avoids allocations on realtime path.
-- [ ] Tests cover coefficient generation and curve mapping.
+- [x] 10-band EQ runs in realtime on audio render path.
+- [x] EQ bypass/reset works.
+- [x] Gain range settings apply to live processing.
+- [x] EQ changes update without rebuilding whole app state.
+- [x] DSP code avoids allocations on realtime path.
+- [x] Tests cover coefficient generation and curve mapping.
 - [ ] Manual test confirms audible EQ change and no obvious crackle.
+
+**Remaining:** Read aggregate stream sample rate instead of hardcoded 48 kHz in `CoreAudioTapIOController`.
 
 **Parallelizable:** Preset UI can start only after EQ model and DSP API are stable.
 
@@ -127,9 +156,11 @@ Do not parallelize two tasks that both edit tap lifecycle, route switching, or D
 
 **Goal:** Route each tapped app to one selected output device, with follow-default as baseline.
 
+**Status:** Not started (~5%). `DeviceRoute` exists in persistence only.
+
 **Acceptance criteria:**
 
-- [ ] App route can follow default output device.
+- [x] App route can follow default output device.
 - [ ] App route can select one specific output device.
 - [ ] Device changes are reflected in route validity.
 - [ ] Missing selected device falls back safely.
@@ -159,6 +190,8 @@ Do not parallelize two tasks that both edit tap lifecycle, route switching, or D
 
 **Goal:** Bring core UI closer to FineTune usability before advanced audio features.
 
+**Status:** In progress (~30%).
+
 **Acceptance criteria:**
 
 - [ ] Settings has General, Audio, Shortcuts, Updates, About tabs.
@@ -167,7 +200,9 @@ Do not parallelize two tasks that both edit tap lifecycle, route switching, or D
 - [ ] Scroll-wheel volume works on sliders.
 - [ ] App/device names have truncation and tooltips.
 - [ ] Edit mode supports hide/ignore and reorder.
-- [ ] Theme and popup size apply live.
+- [x] Theme and popup size apply live.
+
+**Done:** Appearance/density customization, main window, EQ panel, pin/ignore controls, single-form settings with backend picker.
 
 **Parallelizable:** Yes. Mostly independent from CoreAudio if models are stable.
 

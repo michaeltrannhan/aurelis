@@ -31,9 +31,18 @@ final class CoreAudioDeviceDiscovery {
         let records = devices.compactMap { makeDeviceRecord(objectID: $0) }
 
         return (
-            devices: records.compactMap { Self.mapDeviceRecord($0, defaultDeviceID: defaultDeviceID) },
+            devices: Self.sortedSnapshots(records.compactMap { Self.mapDeviceRecord($0, defaultDeviceID: defaultDeviceID) }),
             defaultOutputDeviceUID: Self.defaultOutputUID(records: records, defaultDeviceID: defaultDeviceID)
         )
+    }
+
+    /// Orders device snapshots default-output first, then case-insensitively by
+    /// name, so the list stays stable across refreshes and the default is obvious.
+    static func sortedSnapshots(_ snapshots: [AudioDeviceSnapshot]) -> [AudioDeviceSnapshot] {
+        snapshots.sorted { lhs, rhs in
+            if lhs.isDefault != rhs.isDefault { return lhs.isDefault && !rhs.isDefault }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
     }
 
     static func mapDeviceRecord(_ record: DeviceRecord, defaultDeviceID: AudioObjectID?) -> AudioDeviceSnapshot? {

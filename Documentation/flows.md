@@ -4,7 +4,7 @@
 
 FineTune launches as a menu-bar app, creates long-lived app services, requests Screen & System Audio Recording permission, discovers CoreAudio apps and devices, creates process taps, applies persisted per-app settings, and renders controls in a menu-bar popup.
 
-EQMacRep keeps that shape with a mock backend for tests and a CoreAudio backend for real discovery. The current CoreAudio path creates private process taps for active apps and applies volume, mute, and boost on a follow-default output path. Realtime EQ and explicit routing are still later phases.
+EQMacRep keeps that shape with a mock backend for tests and a CoreAudio backend for real discovery. The current CoreAudio path creates private process taps for active apps, applies volume, mute, boost, and realtime 10-band EQ on a follow-default output path, and tears down taps on ignore/reset/quit. Live HAL discovery listeners, permission gating, explicit per-app routing, and stability hardening are still in progress.
 
 ## Launch Flow
 
@@ -13,7 +13,7 @@ EQMacRep keeps that shape with a mock backend for tests and a CoreAudio backend 
 3. `AudioBackendFactory` creates either `MockAudioBackend` or `CoreAudioDiscoveryBackend`.
 4. It creates an `AudioControlStore`, loading JSON settings or defaults.
 5. The menu-bar extra opens `MenuBarRootView`.
-6. The popup calls `refresh()`, which reconciles backend apps with persisted settings.
+6. The popup calls `refresh()`, which reconciles backend apps with persisted settings. Discovery currently refreshes on popup open and manual refresh only; live HAL listeners are planned in Phase 0.
 
 ## Discovery Flow
 
@@ -44,13 +44,13 @@ CoreAudio Discovery mode:
 
 Pinned apps stay visible when inactive. Ignored apps are hidden and any active CoreAudio tap for that app is torn down.
 
-In CoreAudio Discovery mode, `setVolume`, `setMuted`, and `setBoost` update realtime gain state for the active tap controller. `setEQ` still persists only until the realtime EQ phase. If tap setup fails, refresh still keeps discovered rows visible and surfaces a tap setup error in the status text.
+In CoreAudio Discovery mode, `setVolume`, `setMuted`, `setBoost`, and `setEQ` update realtime state for the active tap controller. If tap setup fails, refresh still keeps discovered rows visible and surfaces a tap setup error in the status text.
 
 ## EQ Flow
 
 EQMacRep stores a 10-band `EQCurve` per app. Gains are normalized to exactly 10 bands and clamped to the selected range: 6 dB, 12 dB, or 18 dB.
 
-Later, a realtime EQ processor can consume the same `EQCurve` values when a process tap is active.
+The CoreAudio tap IO path applies the app's `EQCurve` through a stereo biquad cascade before volume, mute, boost, ramp, and limiter processing. Flat EQ curves bypass the biquad stage while still preserving the same persisted settings model.
 
 ## Persistence Flow
 
@@ -65,6 +65,10 @@ Backend mode is also stored in `AppCustomization`. Changing it in Settings repla
 ## Routing Flow
 
 The current CoreAudio path follows the default output device when creating per-app aggregate devices. Explicit per-app routing through `DeviceRoute`, multi-output, and device-switch recovery belong to later phases.
+
+## Permission Flow
+
+Real process taps require macOS 14.2 or newer, Screen & System Audio Recording permission, and an app bundle with `NSAudioCaptureUsageDescription`. The debug bundle path exists (`Scripts/build-debug-app.sh`), but permission-state detection, popup/settings banner UI, and tap-creation gating are still planned in Phase 1. Until then, taps may be attempted without a permission check.
 
 ## Debug App Bundle Flow
 

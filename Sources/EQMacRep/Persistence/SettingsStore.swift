@@ -8,19 +8,22 @@ struct PersistedSettings: Codable, Equatable {
     var appSettings: [AudioAppIdentity: AppAudioSettings]
     var pinnedAppIDs: Set<AudioAppIdentity>
     var ignoredAppIDs: Set<AudioAppIdentity>
+    var appDisplayOrder: [AudioAppIdentity]
 
     init(
         version: Int = currentVersion,
         customization: AppCustomization = AppCustomization(),
         appSettings: [AudioAppIdentity: AppAudioSettings] = [:],
         pinnedAppIDs: Set<AudioAppIdentity> = [],
-        ignoredAppIDs: Set<AudioAppIdentity> = []
+        ignoredAppIDs: Set<AudioAppIdentity> = [],
+        appDisplayOrder: [AudioAppIdentity] = []
     ) {
         self.version = version
         self.customization = customization
         self.appSettings = appSettings
         self.pinnedAppIDs = pinnedAppIDs
         self.ignoredAppIDs = ignoredAppIDs
+        self.appDisplayOrder = appDisplayOrder
     }
 
     enum CodingKeys: String, CodingKey {
@@ -29,6 +32,7 @@ struct PersistedSettings: Codable, Equatable {
         case appSettings
         case pinnedAppIDs
         case ignoredAppIDs
+        case appDisplayOrder
     }
 
     init(from decoder: Decoder) throws {
@@ -45,6 +49,7 @@ struct PersistedSettings: Codable, Equatable {
         appSettings = try values.decodeIfPresent([AudioAppIdentity: AppAudioSettings].self, forKey: .appSettings) ?? [:]
         pinnedAppIDs = try values.decodeIfPresent(Set<AudioAppIdentity>.self, forKey: .pinnedAppIDs) ?? []
         ignoredAppIDs = try values.decodeIfPresent(Set<AudioAppIdentity>.self, forKey: .ignoredAppIDs) ?? []
+        appDisplayOrder = try values.decodeIfPresent([AudioAppIdentity].self, forKey: .appDisplayOrder) ?? []
     }
 }
 

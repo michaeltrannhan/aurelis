@@ -120,7 +120,8 @@ final class AudioControlStoreTests: XCTestCase {
         ])
         let store = try AudioControlStore(
             settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()),
-            backend: backend
+            backend: backend,
+            permissionClient: grantedClient()
         )
 
         try store.refresh()
@@ -139,7 +140,8 @@ final class AudioControlStoreTests: XCTestCase {
         backend.syncError = NSError(domain: "EQMacRepTests", code: 17)
         let store = try AudioControlStore(
             settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()),
-            backend: backend
+            backend: backend,
+            permissionClient: grantedClient()
         )
 
         try store.refresh()
@@ -148,9 +150,167 @@ final class AudioControlStoreTests: XCTestCase {
         XCTAssertTrue(store.statusMessage.contains("Tap setup error"))
     }
 
-    private func makeStore(backend: MockAudioBackend) throws -> AudioControlStore {
+    func testBackendUpdateEventRefreshesSnapshots() async throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let safari = AudioAppIdentity(rawValue: "com.example.Safari")
+        let backend = EventingBackend(snapshots: [
+            AudioBackendSnapshot(apps: [
+                AudioAppSnapshot(identity: music, displayName: "Music")
+            ]),
+            AudioBackendSnapshot(apps: [
+                AudioAppSnapshot(identity: music, displayName: "Music"),
+                AudioAppSnapshot(identity: safari, displayName: "Safari")
+            ])
+        ])
+        let store = try AudioControlStore(
+            settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()),
+            backend: backend
+        )
+
+        try store.refresh()
+        XCTAssertEqual(store.displayRows.map(\.identity), [music])
+
+        store.startBackendObservation(debounceNanoseconds: 1_000_000)
+        backend.emitUpdate()
+        try await Task.sleep(nanoseconds: 60_000_000)
+
+        XCTAssertEqual(store.displayRows.map(\.identity), [music, safari])
+        store.stopBackendObservation()
+    }
+
+    func testBackendObservationDebouncesEventBursts() async throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let backend = EventingBackend(
+            repeatingSnapshot: AudioBackendSnapshot(apps: [
+                AudioAppSnapshot(identity: music, displayName: "Music")
+            ])
+        )
+        let store = try AudioControlStore(
+            settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()),
+            backend: backend
+        )
+        try store.refresh()
+        let baselineFetches = backend.fetchCount
+
+        store.startBackendObservation(debounceNanoseconds: 40_000_000)
+        for _ in 0..<10 { backend.emitUpdate() }
+        try await Task.sleep(nanoseconds: 120_000_000)
+        store.stopBackendObservation()
+
+        // A burst of 10 events should collapse into far fewer refreshes.
+        XCTAssertLessThan(backend.fetchCount - baselineFetches, 10)
+        XCTAssertGreaterThanOrEqual(backend.fetchCount - baselineFetches, 1)
+    }
+
+    func testPermissionRefreshUpdatesPublishedStateAndStatus() throws {
+        let client = FakePermissionClient(state: AudioCapturePermissionState(
+            screenCapture: .denied,
+            audioUsageDescription: .present
+        ))
+        let store = try makeStore(backend: MockAudioBackend(), permissionClient: client)
+
+        store.refreshPermissionState()
+
+        XCTAssertEqual(store.permissionState.summary, "Screen & System Audio Recording denied")
+        XCTAssertEqual(store.statusMessage, "Screen & System Audio Recording denied")
+    }
+
+    func testDeniedPermissionGatesTapSynchronization() throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let backend = TapSynchronizingMockBackend(apps: [
+            AudioAppSnapshot(identity: music, displayName: "Music")
+        ])
+        let client = FakePermissionClient(state: AudioCapturePermissionState(
+            screenCapture: .denied,
+            audioUsageDescription: .present
+        ))
+        let store = try AudioControlStore(
+            settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()),
+            backend: backend,
+            permissionClient: client
+        )
+
+        try store.refresh()
+
+        // Taps must not be created; teardown-all is called instead as the safe path.
+        XCTAssertTrue(backend.synchronizedActiveIDs.isEmpty)
+        XCTAssertGreaterThanOrEqual(backend.tearDownAllCount, 1)
+    }
+
+    func testRouteMutationPersistsAndNotifiesBackend() throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let backend = MockAudioBackend(apps: [
+            AudioAppSnapshot(identity: music, displayName: "Music", bundleIdentifier: music.rawValue)
+        ])
+        let store = try makeStore(backend: backend)
+        try store.refresh()
+
+        try store.setRoute(.selectedDevice("built-in-output"), for: music)
+
+        let saved = try store.settingsStore.load()
+        XCTAssertEqual(saved.appSettings[music]?.route, .selectedDevice("built-in-output"))
+        XCTAssertEqual(backend.commands.last, .setRoute(music, .selectedDevice("built-in-output")))
+    }
+
+    func testIgnoringAppStopsActiveTapAndKeepsSettings() throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let backend = MockAudioBackend(apps: [
+            AudioAppSnapshot(identity: music, displayName: "Music", bundleIdentifier: music.rawValue)
+        ])
+        let store = try makeStore(backend: backend)
+        try store.refresh()
+        try store.setVolume(0.4, for: music)
+
+        try store.ignore(music)
+
+        XCTAssertTrue(store.settings.ignoredAppIDs.contains(music))
+        XCTAssertEqual(store.settings.appSettings[music]?.volume, 0.4)
+    }
+
+    func testAppDisplayOrderMergesNewAppsAtEnd() throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let safari = AudioAppIdentity(rawValue: "com.example.Safari")
+        let browser = AudioAppIdentity(rawValue: "com.example.Browser")
+        let backend = MockAudioBackend(apps: [
+            AudioAppSnapshot(identity: music, displayName: "Music"),
+            AudioAppSnapshot(identity: safari, displayName: "Safari")
+        ])
+        let store = try makeStore(backend: backend)
+        try store.refresh()
+        try store.moveApp(safari, before: music)
+
+        backend.snapshot.apps.append(AudioAppSnapshot(identity: browser, displayName: "Browser"))
+        try store.refresh()
+
+        XCTAssertEqual(store.displayRows.map(\.identity), [safari, music, browser])
+    }
+
+    func testMissingSelectedRouteStillDisplaysStoredRoute() throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let backend = MockAudioBackend(
+            apps: [AudioAppSnapshot(identity: music, displayName: "Music", bundleIdentifier: music.rawValue)],
+            devices: [AudioDeviceSnapshot(id: "built-in-output", name: "MacBook Speakers", isDefault: true)]
+        )
+        let store = try makeStore(backend: backend)
+        try store.refresh()
+        try store.setRoute(.selectedDevice("usb"), for: music)
+        try store.refresh()
+
+        XCTAssertEqual(store.displayRows[0].settings.route, .selectedDevice("usb"))
+    }
+
+    private func makeStore(
+        backend: MockAudioBackend,
+        permissionClient: any AudioCapturePermissionClient = FakePermissionClient(
+            state: AudioCapturePermissionState(screenCapture: .granted, audioUsageDescription: .present)
+        )
+    ) throws -> AudioControlStore {
         let store = SettingsStore(settingsURL: uniqueSettingsURL())
-        return try AudioControlStore(settingsStore: store, backend: backend)
+        return try AudioControlStore(settingsStore: store, backend: backend, permissionClient: permissionClient)
+    }
+
+    private func grantedClient() -> FakePermissionClient {
+        FakePermissionClient(state: AudioCapturePermissionState(screenCapture: .granted, audioUsageDescription: .present))
     }
 
     private func uniqueSettingsURL() -> URL {
@@ -160,8 +320,50 @@ final class AudioControlStoreTests: XCTestCase {
     }
 }
 
-private final class TapSynchronizingMockBackend: AudioBackend, AudioBackendTapSynchronizing {
-    var snapshot: AudioBackendSnapshot
+private struct FakePermissionClient: AudioCapturePermissionClient {
+    var state: AudioCapturePermissionState
+
+    func currentState() -> AudioCapturePermissionState { state }
+    func requestScreenCaptureAccess() -> AudioCapturePermissionState { state }
+    func openPrivacySettings() {}
+}
+
+private final class EventingBackend: AudioBackend, AudioBackendUpdatePublishing {
+    private var snapshots: [AudioBackendSnapshot]
+    private let repeatingSnapshot: AudioBackendSnapshot?
+    private(set) var fetchCount = 0
+    private var continuation: AsyncStream<Void>.Continuation?
+
+    private lazy var stream: AsyncStream<Void> = AsyncStream { continuation in
+        self.continuation = continuation
+    }
+
+    init(snapshots: [AudioBackendSnapshot]) {
+        self.snapshots = snapshots
+        self.repeatingSnapshot = nil
+    }
+
+    init(repeatingSnapshot: AudioBackendSnapshot) {
+        self.snapshots = []
+        self.repeatingSnapshot = repeatingSnapshot
+    }
+
+    var updateEvents: AsyncStream<Void> { stream }
+
+    func emitUpdate() {
+        continuation?.yield(())
+    }
+
+    func fetchSnapshot() throws -> AudioBackendSnapshot {
+        fetchCount += 1
+        if let repeatingSnapshot { return repeatingSnapshot }
+        return snapshots.isEmpty ? AudioBackendSnapshot() : snapshots.removeFirst()
+    }
+
+    func apply(_ command: AudioBackendCommand) throws {}
+}
+
+private final class TapSynchronizingMockBackend: AudioBackend, AudioBackendTapSynchronizing {    var snapshot: AudioBackendSnapshot
     var syncError: Error?
     private(set) var synchronizedActiveIDs: Set<AudioAppIdentity> = []
     private(set) var synchronizedIgnoredIDs: Set<AudioAppIdentity> = []

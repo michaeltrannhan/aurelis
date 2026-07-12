@@ -2,6 +2,16 @@ import AudioToolbox
 import CoreAudio
 import Foundation
 
+/// The active-tap engine seam the manager depends on. `CoreAudioTapIOController`
+/// is the production implementation; tests inject a fake to verify route-driven
+/// rebuild order without touching CoreAudio.
+protocol CoreAudioActiveTapControlling: AnyObject {
+    var outputDeviceUID: String { get }
+    func start() throws -> CoreAudioTapSession
+    func updateGainState(_ state: CoreAudioRealtimeGainState)
+    func stop()
+}
+
 final class SystemCoreAudioActiveTapOperations: CoreAudioActiveTapOperating {
     func stopDevice(_ deviceID: AudioObjectID, ioProcID: AudioDeviceIOProcID?) -> OSStatus {
         AudioDeviceStop(deviceID, ioProcID)
@@ -26,7 +36,7 @@ final class SystemCoreAudioActiveTapOperations: CoreAudioActiveTapOperating {
 
 final class CoreAudioTapIOController {
     private let target: CoreAudioTapTarget
-    private let outputDeviceUID: String
+    let outputDeviceUID: String
     private let operations: CoreAudioActiveTapOperating
     private let queue = DispatchQueue(label: "EQMacRep.CoreAudioTapIOController", qos: .userInitiated)
     private var resources = CoreAudioTapResources(
@@ -37,6 +47,7 @@ final class CoreAudioTapIOController {
 
     private var gainState: CoreAudioRealtimeGainState
     private var ramp: CoreAudioGainRamp
+    private let eqProcessor: CoreAudioGraphicEQProcessor
 
     init(
         target: CoreAudioTapTarget,
@@ -48,6 +59,7 @@ final class CoreAudioTapIOController {
         self.outputDeviceUID = outputDeviceUID
         self.gainState = initialGainState
         self.ramp = CoreAudioGainRamp(currentGain: initialGainState.targetGain, coefficient: 0.0007)
+        self.eqProcessor = CoreAudioGraphicEQProcessor(sampleRate: 48000, curve: initialGainState.eq)
         self.operations = operations
     }
 
@@ -82,6 +94,7 @@ final class CoreAudioTapIOController {
             throw CoreAudioTapError.createFailed(identity: target.identity, status: status)
         }
         resources.aggregateDeviceID = aggregateID
+        CoreAudioAggregateCrashGuard.trackDevice(aggregateID)
 
         var ioProcID: AudioDeviceIOProcID?
         status = AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, queue) { [weak self] _, inputData, _, outputData, _ in
@@ -108,6 +121,7 @@ final class CoreAudioTapIOController {
 
     func updateGainState(_ state: CoreAudioRealtimeGainState) {
         gainState = state
+        eqProcessor.updateCurve(state.eq)
     }
 
     func stop() {
@@ -130,9 +144,19 @@ final class CoreAudioTapIOController {
         }
 
         let sampleCount = Int(min(input.mDataByteSize, output.mDataByteSize)) / MemoryLayout<Float>.size
+        let frameCount = sampleCount / 2
+        let eqInputData: UnsafePointer<Float>
+
+        if frameCount > 0 {
+            eqProcessor.process(input: inputData, output: outputData, frameCount: frameCount)
+            eqInputData = UnsafePointer(outputData)
+        } else {
+            eqInputData = UnsafePointer(inputData)
+        }
+
         var localRamp = ramp
         CoreAudioRealtimeGainProcessor.process(
-            input: inputData,
+            input: eqInputData,
             output: outputData,
             sampleCount: sampleCount,
             targetGain: gainState.targetGain,
@@ -141,3 +165,5 @@ final class CoreAudioTapIOController {
         ramp = localRamp
     }
 }
+
+extension CoreAudioTapIOController: CoreAudioActiveTapControlling {}

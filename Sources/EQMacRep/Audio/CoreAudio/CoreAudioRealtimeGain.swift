@@ -4,11 +4,13 @@ struct CoreAudioRealtimeGainState: Equatable {
     var volume: Float
     var boost: BoostLevel
     var isMuted: Bool
+    var eq: EQCurve
 
-    init(volume: Double, boost: BoostLevel, isMuted: Bool) {
+    init(volume: Double, boost: BoostLevel, isMuted: Bool, eq: EQCurve = EQCurve()) {
         self.volume = Float(AppCustomization.clampedVolume(volume, fallback: 1))
         self.boost = boost
         self.isMuted = isMuted
+        self.eq = eq
     }
 
     var targetGain: Float {

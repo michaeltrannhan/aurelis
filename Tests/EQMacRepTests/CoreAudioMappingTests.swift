@@ -171,6 +171,40 @@ final class CoreAudioMappingTests: XCTestCase {
         XCTAssertEqual(targets[0].processObjectIDs, [10, 11])
     }
 
+    func testDeviceSnapshotsSortDefaultFirstThenName() {
+        let headphones = AudioDeviceSnapshot(id: "headphones", name: "Headphones", isDefault: false)
+        let speakers = AudioDeviceSnapshot(id: "speakers", name: "MacBook Speakers", isDefault: true)
+        let display = AudioDeviceSnapshot(id: "display", name: "Studio Display", isDefault: false)
+
+        let sorted = CoreAudioDeviceDiscovery.sortedSnapshots([headphones, speakers, display])
+
+        XCTAssertEqual(sorted.map(\.id), ["speakers", "headphones", "display"])
+    }
+
+    func testCoalescingPrefersNonHelperName() {
+        let identity = AudioAppIdentity(rawValue: "com.example.Browser")
+        let helper = AudioAppSnapshot(
+            identity: identity,
+            displayName: "Browser Helper",
+            bundleIdentifier: identity.rawValue
+        )
+        let renderer = AudioAppSnapshot(
+            identity: identity,
+            displayName: "Browser Renderer",
+            bundleIdentifier: identity.rawValue
+        )
+        let app = AudioAppSnapshot(
+            identity: identity,
+            displayName: "Browser",
+            bundleIdentifier: identity.rawValue
+        )
+
+        let snapshots = CoreAudioProcessDiscovery.coalescedSnapshots([helper, renderer, app])
+
+        XCTAssertEqual(snapshots.count, 1)
+        XCTAssertEqual(snapshots[0].displayName, "Browser")
+    }
+
     func testDefaultOutputUIDComesFromDefaultDeviceRecord() {
         let record = CoreAudioDeviceDiscovery.DeviceRecord(
             objectID: 42,

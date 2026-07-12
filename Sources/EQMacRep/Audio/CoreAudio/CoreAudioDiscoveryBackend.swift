@@ -4,17 +4,27 @@ final class CoreAudioDiscoveryBackend: AudioBackend {
     private let processDiscovery: CoreAudioProcessDiscovery
     private let deviceDiscovery: CoreAudioDeviceDiscovery
     private let tapManager: CoreAudioTapManaging
+    private let eventSource: CoreAudioDiscoveryEventSource
     private var tapTargetsByIdentity: [AudioAppIdentity: CoreAudioTapTarget] = [:]
     private(set) var pendingCommands: [AudioBackendCommand] = []
 
     init(
         processDiscovery: CoreAudioProcessDiscovery = CoreAudioProcessDiscovery(),
         deviceDiscovery: CoreAudioDeviceDiscovery = CoreAudioDeviceDiscovery(),
-        tapManager: CoreAudioTapManaging = CoreAudioProcessTapManager()
+        tapManager: CoreAudioTapManaging = CoreAudioProcessTapManager(),
+        eventSource: CoreAudioDiscoveryEventSource = CoreAudioDiscoveryEventSource(),
+        runStartupRecovery: Bool = false
     ) {
         self.processDiscovery = processDiscovery
         self.deviceDiscovery = deviceDiscovery
         self.tapManager = tapManager
+        self.eventSource = eventSource
+        if runStartupRecovery {
+            // Real app path only: install the crash guard and clear any aggregate
+            // devices orphaned by a previous crash. Never runs under unit tests.
+            CoreAudioAggregateCrashGuard.install()
+            CoreAudioOrphanedAggregateCleanup.destroyOrphans()
+        }
     }
 
     func fetchSnapshot() throws -> AudioBackendSnapshot {
@@ -23,6 +33,12 @@ final class CoreAudioDiscoveryBackend: AudioBackend {
         tapTargetsByIdentity = Dictionary(uniqueKeysWithValues: targets.map { ($0.identity, $0) })
         if let processTapManager = tapManager as? CoreAudioProcessTapManager {
             processTapManager.defaultOutputDeviceUID = deviceState.defaultOutputDeviceUID
+        }
+        if let routeManager = tapManager as? CoreAudioRouteControlling {
+            routeManager.setAvailableOutputUIDs(
+                deviceState.devices.map(\.id),
+                defaultOutputUID: deviceState.devices.first(where: \.isDefault)?.id ?? deviceState.defaultOutputDeviceUID
+            )
         }
 
         return AudioBackendSnapshot(
@@ -47,8 +63,10 @@ final class CoreAudioDiscoveryBackend: AudioBackend {
             (tapManager as? CoreAudioRealtimeTapControlling)?.setMuted(muted, for: identity)
         case let .setBoost(identity, boost):
             (tapManager as? CoreAudioRealtimeTapControlling)?.setBoost(boost, for: identity)
-        case .setEQ:
-            pendingCommands.append(command)
+        case let .setEQ(identity, eq):
+            (tapManager as? CoreAudioRealtimeTapControlling)?.setEQ(eq, for: identity)
+        case let .setRoute(identity, route):
+            (tapManager as? CoreAudioRouteControlling)?.setRoute(identity, route)
         }
     }
 
@@ -57,9 +75,25 @@ final class CoreAudioDiscoveryBackend: AudioBackend {
     }
 }
 
+extension CoreAudioDiscoveryBackend: AudioBackendUpdatePublishing {
+    var updateEvents: AsyncStream<Void> {
+        eventSource.events
+    }
+}
+
 extension CoreAudioDiscoveryBackend: AudioBackendStatusProviding {
     func statusMessage(appCount: Int, deviceCount: Int) -> String {
-        "CoreAudio active: \(appCount) app\(appCount == 1 ? "" : "s"), \(deviceCount) device\(deviceCount == 1 ? "" : "s"). Volume/mute/boost enabled; EQ pending."
+        var message = "CoreAudio active: \(appCount) app\(appCount == 1 ? "" : "s"), \(deviceCount) device\(deviceCount == 1 ? "" : "s")."
+        if let reporter = tapManager as? CoreAudioTapHealthReporting {
+            let health = reporter.health
+            message += " \(health.activeAppCount) active tap\(health.activeAppCount == 1 ? "" : "s")."
+            if health.issueCount > 0 {
+                message += " \(health.issueCount) issue\(health.issueCount == 1 ? "" : "s")."
+            }
+        } else {
+            message += " Volume/mute/boost/EQ enabled."
+        }
+        return message
     }
 }
 

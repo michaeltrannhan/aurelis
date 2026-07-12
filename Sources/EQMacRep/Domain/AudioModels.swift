@@ -66,9 +66,21 @@ enum BoostLevel: Double, CaseIterable, Codable, Identifiable {
     }
 }
 
-enum DeviceRoute: Codable, Equatable {
+enum DeviceRoute: Codable, Equatable, Hashable {
     case followDefault
     case selectedDevice(String)
+
+    /// User-facing label resolved against the currently available devices.
+    /// A selected device that is no longer present reads as "Missing Device".
+    func label(devices: [AudioDeviceSnapshot]) -> String {
+        switch self {
+        case .followDefault:
+            let defaultName = devices.first(where: \.isDefault)?.name ?? "System Output"
+            return "Follow Default (\(defaultName))"
+        case let .selectedDevice(deviceID):
+            return devices.first(where: { $0.id == deviceID })?.name ?? "Missing Device"
+        }
+    }
 }
 
 struct AppAudioSettings: Codable, Equatable {

@@ -75,6 +75,15 @@ struct PopupContentLayoutModel {
     static let eqHintHeight = 34.0
     static let rowSpacing = 8.0
     static let sectionSpacing = 10.0
+    /// Height reserved by the output-volume section above the scroll view.
+    /// Computed from the device count: header + per-row + padding.
+    static func outputVolumeSectionHeight(deviceCount: Int) -> Double {
+        let safeCount = max(deviceCount, 0)
+        let headerHeight = 22.0
+        let rowHeight = 32.0
+        let verticalPadding = 8.0
+        return headerHeight + Double(safeCount) * rowHeight + verticalPadding
+    }
 
     static func contentHeight(
         dimensions: PopupDimensions,
@@ -82,11 +91,12 @@ struct PopupContentLayoutModel {
         includesPermissionBanner: Bool,
         includesIssueBanner: Bool,
         includesExpandedEQ: Bool,
-        availableScreenHeight: Double
+        availableScreenHeight: Double,
+        deviceCount: Int = 1
     ) -> Double {
         let safeRowCount = max(rowCount, 0)
         let safeScreenHeight = availableScreenHeight.isFinite ? availableScreenHeight : 700
-        let screenLimit = max(minimumContentHeight, safeScreenHeight - popupChromeHeight)
+        let screenLimit = max(minimumContentHeight, safeScreenHeight - popupChromeHeight - outputVolumeSectionHeight(deviceCount: deviceCount))
         var sections: [Double] = []
 
         if includesPermissionBanner { sections.append(permissionBannerHeight) }

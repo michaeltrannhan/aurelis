@@ -5,6 +5,7 @@ final class CoreAudioDiscoveryBackend: AudioBackend {
     private let deviceDiscovery: CoreAudioDeviceDiscovery
     private let tapManager: CoreAudioTapManaging
     private let eventSource: CoreAudioDiscoveryEventSource
+    private let outputVolumeController: CoreAudioOutputVolumeController
     private var tapTargetsByIdentity: [AudioAppIdentity: CoreAudioTapTarget] = [:]
     private(set) var pendingCommands: [AudioBackendCommand] = []
 
@@ -13,12 +14,14 @@ final class CoreAudioDiscoveryBackend: AudioBackend {
         deviceDiscovery: CoreAudioDeviceDiscovery = CoreAudioDeviceDiscovery(),
         tapManager: CoreAudioTapManaging = CoreAudioProcessTapManager(),
         eventSource: CoreAudioDiscoveryEventSource = CoreAudioDiscoveryEventSource(),
+        outputVolumeController: CoreAudioOutputVolumeController = CoreAudioOutputVolumeController(),
         runStartupRecovery: Bool = false
     ) {
         self.processDiscovery = processDiscovery
         self.deviceDiscovery = deviceDiscovery
         self.tapManager = tapManager
         self.eventSource = eventSource
+        self.outputVolumeController = outputVolumeController
         if runStartupRecovery {
             // Real app path only: install the crash guard and clear any aggregate
             // devices orphaned by a previous crash. Never runs under unit tests.
@@ -110,5 +113,39 @@ extension CoreAudioDiscoveryBackend: AudioBackendTapSynchronizing {
 
     func tearDownAllTaps() throws {
         try tapManager.tearDownAll()
+    }
+}
+
+extension CoreAudioDiscoveryBackend: AudioBackendOutputVolumeControlling {
+    func readOutputVolume() throws -> OutputVolumeState {
+        try outputVolumeController.readOutputVolume()
+    }
+
+    func readOutputVolume(forUID uid: String) throws -> OutputVolumeState {
+        try outputVolumeController.readOutputVolume(forUID: uid)
+    }
+
+    func setOutputVolume(_ volume: Double) throws {
+        try outputVolumeController.setOutputVolume(volume)
+    }
+
+    func setOutputVolume(_ volume: Double, forUID uid: String) throws {
+        try outputVolumeController.setOutputVolume(volume, forUID: uid)
+    }
+
+    func setOutputMuted(_ muted: Bool) throws {
+        try outputVolumeController.setOutputMuted(muted)
+    }
+
+    func setOutputMuted(_ muted: Bool, forUID uid: String) throws {
+        try outputVolumeController.setOutputMuted(muted, forUID: uid)
+    }
+
+    func startObservingOutputVolume(_ onChange: @escaping @Sendable () -> Void) {
+        outputVolumeController.startObserving(onChange)
+    }
+
+    func stopObservingOutputVolume() {
+        outputVolumeController.stopObserving()
     }
 }

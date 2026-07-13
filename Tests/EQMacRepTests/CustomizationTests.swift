@@ -114,7 +114,10 @@ final class CustomizationTests: XCTestCase {
         )
 
         XCTAssertEqual(manyRows, dimensions.maxContentHeight)
-        XCTAssertEqual(shortScreenWithEQ, 308)
+        // The output-volume section above the scroll view reserves
+        // header(22) + 1 row(32) + padding(8) = 62pt of chrome; the
+        // short-screen limit drops with it.
+        XCTAssertEqual(shortScreenWithEQ, 246)
     }
 
     func testScrollWheelStepClampsVolume() {

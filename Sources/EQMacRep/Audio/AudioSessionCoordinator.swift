@@ -41,9 +41,44 @@ final class AudioSessionCoordinator {
         try (backend as? AudioBackendTapSynchronizing)?.tearDownTap(for: identity)
     }
 
+    func readOutputVolume() throws -> OutputVolumeState {
+        try (backend as? AudioBackendOutputVolumeControlling)?.readOutputVolume()
+            ?? OutputVolumeState()
+    }
+
+    func readOutputVolume(forUID uid: String) throws -> OutputVolumeState {
+        try (backend as? AudioBackendOutputVolumeControlling)?.readOutputVolume(forUID: uid)
+            ?? OutputVolumeState()
+    }
+
+    func setOutputVolume(_ volume: Double) throws {
+        try (backend as? AudioBackendOutputVolumeControlling)?.setOutputVolume(volume)
+    }
+
+    func setOutputVolume(_ volume: Double, forUID uid: String) throws {
+        try (backend as? AudioBackendOutputVolumeControlling)?.setOutputVolume(volume, forUID: uid)
+    }
+
+    func setOutputMuted(_ muted: Bool) throws {
+        try (backend as? AudioBackendOutputVolumeControlling)?.setOutputMuted(muted)
+    }
+
+    func setOutputMuted(_ muted: Bool, forUID uid: String) throws {
+        try (backend as? AudioBackendOutputVolumeControlling)?.setOutputMuted(muted, forUID: uid)
+    }
+
+    func startOutputVolumeObservation(_ onChange: @escaping @Sendable () -> Void) {
+        (backend as? AudioBackendOutputVolumeControlling)?.startObservingOutputVolume(onChange)
+    }
+
+    func stopOutputVolumeObservation() {
+        (backend as? AudioBackendOutputVolumeControlling)?.stopObservingOutputVolume()
+    }
+
     func switchBackend(to mode: BackendMode) throws {
         let wasObserving = isObserving
         stopObservation()
+        stopOutputVolumeObservation()
         try (backend as? AudioBackendTapSynchronizing)?.tearDownAllTaps()
         backend = backendFactory(mode)
         if wasObserving { /* Store restarts with its existing handler after refresh. */ }
@@ -79,6 +114,7 @@ final class AudioSessionCoordinator {
 
     func shutdown() throws {
         stopObservation()
+        stopOutputVolumeObservation()
         try (backend as? AudioBackendTapSynchronizing)?.tearDownAllTaps()
     }
 }

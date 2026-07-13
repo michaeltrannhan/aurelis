@@ -67,6 +67,8 @@ struct MainWindowView: View {
     private var mixerRows: some View {
         ScrollView {
             LazyVStack(spacing: 4) {
+                OutputVolumeSection(store: store, layout: .desktop)
+                    .padding(.horizontal, 12).padding(.bottom, 8)
                 sectionHeader
                 ForEach(store.displayRows) { row in
                     VStack(spacing: 0) {

@@ -5,6 +5,12 @@ final class MockAudioBackend: AudioBackend {
     private(set) var commands: [AudioBackendCommand] = []
     var fetchError: Error?
     var applyError: Error?
+    var outputVolume: Double = 0.75
+    var outputMuted: Bool = false
+    /// Per-device UID volume/mute state for `AudioBackendOutputVolumeControlling`.
+    /// Entries not present here fall back to the default `outputVolume`/`outputMuted`.
+    var perDeviceVolume: [String: Double] = [:]
+    var perDeviceMuted: [String: Bool] = [:]
 
     init(
         apps: [AudioAppSnapshot] = MockAudioBackend.defaultApps,
@@ -51,4 +57,46 @@ final class MockAudioBackend: AudioBackend {
         AudioDeviceSnapshot(id: "default-output", name: "MacBook Speakers", isDefault: true),
         AudioDeviceSnapshot(id: "studio-display", name: "Studio Display")
     ]
+}
+
+extension MockAudioBackend: AudioBackendOutputVolumeControlling {
+    private func deviceName(forUID uid: String) -> String? {
+        snapshot.devices.first(where: { $0.id == uid })?.name
+    }
+
+    func readOutputVolume() throws -> OutputVolumeState {
+        OutputVolumeState(volume: outputVolume, isMuted: outputMuted, deviceName: "MacBook Speakers")
+    }
+
+    func readOutputVolume(forUID uid: String) throws -> OutputVolumeState {
+        OutputVolumeState(
+            volume: perDeviceVolume[uid] ?? outputVolume,
+            isMuted: perDeviceMuted[uid] ?? outputMuted,
+            deviceName: deviceName(forUID: uid)
+        )
+    }
+
+    func setOutputVolume(_ volume: Double) throws {
+        outputVolume = min(max(volume, 0), 1)
+    }
+
+    func setOutputVolume(_ volume: Double, forUID uid: String) throws {
+        perDeviceVolume[uid] = min(max(volume, 0), 1)
+    }
+
+    func setOutputMuted(_ muted: Bool) throws {
+        outputMuted = muted
+    }
+
+    func setOutputMuted(_ muted: Bool, forUID uid: String) throws {
+        perDeviceMuted[uid] = muted
+    }
+
+    func startObservingOutputVolume(_ onChange: @escaping @Sendable () -> Void) {
+        // No-op for mock backends.
+    }
+
+    func stopObservingOutputVolume() {
+        // No-op for mock backends.
+    }
 }

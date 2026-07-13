@@ -38,6 +38,8 @@ struct MenuBarRootView: View {
             header
             Divider()
 
+            OutputVolumeSection(store: store, layout: .compact)
+
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
                     if !store.permissionState.allowsProcessTaps {
@@ -162,7 +164,8 @@ struct MenuBarRootView: View {
             includesPermissionBanner: !store.permissionState.allowsProcessTaps,
             includesIssueBanner: store.issues.last != nil,
             includesExpandedEQ: hasExpandedEQ,
-            availableScreenHeight: Double(availableScreenHeight)
+            availableScreenHeight: Double(availableScreenHeight),
+            deviceCount: store.devices.count
         ))
     }
 

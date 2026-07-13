@@ -19,6 +19,12 @@ final class AudioControlStore: ObservableObject {
     @Published private(set) var operationState: AudioOperationState = .idle
     @Published private(set) var issues: [AudioIssue] = []
     @Published private(set) var permissionState: AudioCapturePermissionState = .unknown
+    @Published private(set) var outputVolumeState: OutputVolumeState = .init()
+    /// Per-device output volume state keyed by device UID. Refreshed alongside
+    /// the system default and after any HAL volume/mute notification. Drives
+    /// the top-level device volume list so each selected output source can be
+    /// adjusted independently.
+    @Published private(set) var deviceVolumeStates: [String: OutputVolumeState] = [:]
     private var activeContinuousControls: Set<ContinuousControl> = []
     private var continuousBaselines: [ContinuousControl: AppAudioSettings?] = [:]
     private var continuousTasks: [ContinuousControl: Task<Void, Never>] = [:]
@@ -65,6 +71,8 @@ final class AudioControlStore: ObservableObject {
             mergeAppDisplayOrder()
             let restoreError = restoreBackendStateCapturingError()
             let tapError = synchronizeBackendTapsCapturingError()
+            refreshOutputVolumeState()
+            refreshDeviceVolumeStates()
             try persist()
             dismissIssue(id: "refresh")
 
@@ -117,6 +125,12 @@ final class AudioControlStore: ObservableObject {
         session.startObservation(debounceNanoseconds: debounceNanoseconds) { [weak self] in
             self?.refreshIntent()
         }
+        session.startOutputVolumeObservation { [weak self] in
+            Task { @MainActor in
+                self?.refreshOutputVolumeState()
+                self?.refreshDeviceVolumeStates()
+            }
+        }
     }
 
     func stopBackendObservation() {
@@ -157,6 +171,75 @@ final class AudioControlStore: ObservableObject {
 
     func refreshIntent() {
         do { try refresh() } catch { }
+    }
+
+    func setOutputVolumeIntent(_ volume: Double) {
+        let clamped = min(max(volume.isFinite ? volume : outputVolumeState.volume, 0), 1)
+        do {
+            try session.setOutputVolume(clamped)
+            outputVolumeState.volume = clamped
+        } catch {
+            reportMutationFailure(error, id: "output-volume")
+        }
+    }
+
+    func setOutputMutedIntent(_ muted: Bool) {
+        do {
+            try session.setOutputMuted(muted)
+            outputVolumeState.isMuted = muted
+        } catch {
+            reportMutationFailure(error, id: "output-mute")
+        }
+    }
+
+    func toggleOutputMuteIntent() {
+        setOutputMutedIntent(!outputVolumeState.isMuted)
+    }
+
+    /// Sets volume for a specific output device by UID. The slider binds here.
+    func setDeviceVolumeIntent(_ volume: Double, for deviceUID: String) {
+        let clamped = min(max(volume.isFinite ? volume : (deviceVolumeStates[deviceUID]?.volume ?? 1), 0), 1)
+        do {
+            try session.setOutputVolume(clamped, forUID: deviceUID)
+            deviceVolumeStates[deviceUID]?.volume = clamped
+        } catch {
+            reportMutationFailure(error, id: "device-volume-\(deviceUID)")
+        }
+    }
+
+    /// Sets mute for a specific output device by UID.
+    func setDeviceMutedIntent(_ muted: Bool, for deviceUID: String) {
+        do {
+            try session.setOutputMuted(muted, forUID: deviceUID)
+            deviceVolumeStates[deviceUID]?.isMuted = muted
+        } catch {
+            reportMutationFailure(error, id: "device-mute-\(deviceUID)")
+        }
+    }
+
+    func toggleDeviceMuteIntent(for deviceUID: String) {
+        let isMuted = deviceVolumeStates[deviceUID]?.isMuted ?? false
+        setDeviceMutedIntent(!isMuted, for: deviceUID)
+    }
+
+    private func refreshOutputVolumeState() {
+        do {
+            outputVolumeState = try session.readOutputVolume()
+        } catch {
+            // Some devices (optical, aggregated) don't expose a hardware
+            // volume scalar; leave the previous state in place rather than
+            // clearing the slider.
+        }
+    }
+
+    private func refreshDeviceVolumeStates() {
+        var states: [String: OutputVolumeState] = [:]
+        for device in devices {
+            states[device.id] = (try? session.readOutputVolume(forUID: device.id))
+                ?? deviceVolumeStates[device.id]
+                ?? OutputVolumeState(deviceName: device.name)
+        }
+        deviceVolumeStates = states
     }
 
     func setVolumeIntent(_ volume: Double, for identity: AudioAppIdentity) {

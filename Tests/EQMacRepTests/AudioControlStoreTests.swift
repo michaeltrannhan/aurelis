@@ -569,6 +569,98 @@ final class AudioControlStoreTests: XCTestCase {
         return try AudioControlStore(settingsStore: store, backend: backend, permissionClient: permissionClient)
     }
 
+    func testRefreshReadsOutputVolumeFromBackend() throws {
+        let backend = MockAudioBackend()
+        backend.outputVolume = 0.4
+        backend.outputMuted = true
+        let store = try makeStore(backend: backend)
+
+        try store.refresh()
+
+        XCTAssertEqual(store.outputVolumeState.volume, 0.4, accuracy: 0.001)
+        XCTAssertTrue(store.outputVolumeState.isMuted)
+        XCTAssertEqual(store.outputVolumeState.deviceName, "MacBook Speakers")
+    }
+
+    func testSetOutputVolumeIntentAppliesAndClamps() throws {
+        let backend = MockAudioBackend()
+        let store = try makeStore(backend: backend)
+        try store.refresh()
+
+        store.setOutputVolumeIntent(0.55)
+        XCTAssertEqual(backend.outputVolume, 0.55, accuracy: 0.001)
+        XCTAssertEqual(store.outputVolumeState.volume, 0.55, accuracy: 0.001)
+
+        store.setOutputVolumeIntent(1.4)
+        XCTAssertEqual(backend.outputVolume, 1, accuracy: 0.001)
+        store.setOutputVolumeIntent(-0.2)
+        XCTAssertEqual(backend.outputVolume, 0, accuracy: 0.001)
+    }
+
+    func testToggleOutputMuteIntentFlipsMute() throws {
+        let backend = MockAudioBackend()
+        let store = try makeStore(backend: backend)
+        try store.refresh()
+        XCTAssertFalse(store.outputVolumeState.isMuted)
+
+        store.toggleOutputMuteIntent()
+        XCTAssertTrue(backend.outputMuted)
+        XCTAssertTrue(store.outputVolumeState.isMuted)
+
+        store.toggleOutputMuteIntent()
+        XCTAssertFalse(backend.outputMuted)
+        XCTAssertFalse(store.outputVolumeState.isMuted)
+    }
+
+    func testRefreshReadsDeviceVolumeStatesForAllDevices() throws {
+        let usb = AudioDeviceSnapshot(id: "usb", name: "USB DAC")
+        let hdmi = AudioDeviceSnapshot(id: "hdmi", name: "HDMI")
+        let backend = MockAudioBackend(devices: [usb, hdmi])
+        backend.perDeviceVolume = ["usb": 0.4, "hdmi": 0.8]
+        backend.perDeviceMuted = ["usb": false, "hdmi": true]
+        let store = try makeStore(backend: backend)
+
+        try store.refresh()
+
+        XCTAssertEqual(store.deviceVolumeStates["usb"]?.volume ?? -1, 0.4, accuracy: 0.001)
+        XCTAssertEqual(store.deviceVolumeStates["hdmi"]?.volume ?? -1, 0.8, accuracy: 0.001)
+        XCTAssertFalse(store.deviceVolumeStates["usb"]?.isMuted ?? true)
+        XCTAssertTrue(store.deviceVolumeStates["hdmi"]?.isMuted ?? false)
+        XCTAssertEqual(store.deviceVolumeStates["usb"]?.deviceName, "USB DAC")
+    }
+
+    func testSetDeviceVolumeIntentAppliesPerDeviceAndClamps() throws {
+        let usb = AudioDeviceSnapshot(id: "usb", name: "USB DAC")
+        let backend = MockAudioBackend(devices: [usb])
+        let store = try makeStore(backend: backend)
+        try store.refresh()
+
+        store.setDeviceVolumeIntent(0.55, for: "usb")
+        XCTAssertEqual(backend.perDeviceVolume["usb"] ?? -1, 0.55, accuracy: 0.001)
+        XCTAssertEqual(store.deviceVolumeStates["usb"]?.volume ?? -1, 0.55, accuracy: 0.001)
+
+        store.setDeviceVolumeIntent(1.5, for: "usb")
+        XCTAssertEqual(backend.perDeviceVolume["usb"] ?? -1, 1, accuracy: 0.001)
+        store.setDeviceVolumeIntent(-0.3, for: "usb")
+        XCTAssertEqual(backend.perDeviceVolume["usb"] ?? -1, 0, accuracy: 0.001)
+    }
+
+    func testToggleDeviceMuteIntentFlipsPerDeviceMute() throws {
+        let usb = AudioDeviceSnapshot(id: "usb", name: "USB DAC")
+        let backend = MockAudioBackend(devices: [usb])
+        let store = try makeStore(backend: backend)
+        try store.refresh()
+        XCTAssertFalse(store.deviceVolumeStates["usb"]?.isMuted ?? true)
+
+        store.toggleDeviceMuteIntent(for: "usb")
+        XCTAssertTrue(backend.perDeviceMuted["usb"] ?? false)
+        XCTAssertTrue(store.deviceVolumeStates["usb"]?.isMuted ?? false)
+
+        store.toggleDeviceMuteIntent(for: "usb")
+        XCTAssertFalse(backend.perDeviceMuted["usb"] ?? true)
+        XCTAssertFalse(store.deviceVolumeStates["usb"]?.isMuted ?? true)
+    }
+
     private func grantedClient() -> FakePermissionClient {
         FakePermissionClient(state: AudioCapturePermissionState(screenCapture: .granted, audioUsageDescription: .present))
     }

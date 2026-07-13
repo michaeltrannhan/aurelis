@@ -21,6 +21,12 @@ enum CoreAudioAggregateDeviceBuilder {
     ) -> [String: Any] {
         precondition(!outputDeviceUIDs.isEmpty, "An aggregate device needs at least one output")
         let clockDeviceUID = outputDeviceUIDs[0]
+        // Stacked aggregates mirror the same processed stream to every
+        // subdevice. Non-stacked concatenates channels into one wider device,
+        // which does NOT mirror audio to all outputs. Multi-output mirroring
+        // requires stacked=true (matching FineTune's approach). Single output
+        // uses stacked=false so all channels stay addressable.
+        let isStacked = outputDeviceUIDs.count > 1
 
         return [
             kAudioAggregateDeviceNameKey: "EQMacRep-\(appName)",
@@ -28,9 +34,7 @@ enum CoreAudioAggregateDeviceBuilder {
             kAudioAggregateDeviceMainSubDeviceKey: clockDeviceUID,
             kAudioAggregateDeviceClockDeviceKey: clockDeviceUID,
             kAudioAggregateDeviceIsPrivateKey: true,
-            // Non-stacked aggregates ask HAL to feed the same output stream to
-            // every subdevice instead of concatenating their channels.
-            kAudioAggregateDeviceIsStackedKey: false,
+            kAudioAggregateDeviceIsStackedKey: isStacked,
             kAudioAggregateDeviceTapAutoStartKey: true,
             kAudioAggregateDeviceSubDeviceListKey: outputDeviceUIDs.enumerated().map { index, uid in
                 [

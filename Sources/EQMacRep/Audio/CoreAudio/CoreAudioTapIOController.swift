@@ -77,11 +77,13 @@ final class CoreAudioTapIOController: @unchecked Sendable {
         guard #available(macOS 14.2, *) else {
             throw CoreAudioTapError.unsupportedOS
         }
+        // Read each output's current nominal rate for a DSP coefficient
+        // fallback. HAL reconciles differing rates inside the aggregate (the
+        // clock device sets the aggregate rate); we do NOT validate or align
+        // rates upfront — matching FineTune's approach. The aggregate's own
+        // nominal rate is read after creation and used for EQ/ramp coefficients.
         let outputDevices = try outputDeviceUIDs.map(Self.outputDeviceInfo)
-        let physicalSampleRates = outputDevices.map(\.nominalSampleRate)
-        guard let physicalSampleRate = Self.compatibleNominalSampleRate(physicalSampleRates) else {
-            throw CoreAudioTapStartFailure.incompatibleSampleRates(physicalSampleRates)
-        }
+        let physicalSampleRate = outputDevices.first?.nominalSampleRate ?? 48000
 
         let tapDescription = CATapDescription(stereoMixdownOfProcesses: target.processObjectIDs)
         tapDescription.name = "EQMacRep \(target.displayName)"
@@ -271,16 +273,6 @@ final class CoreAudioTapIOController: @unchecked Sendable {
         )
     }
 
-    static func compatibleNominalSampleRate(_ sampleRates: [Double]) -> Double? {
-        guard let first = sampleRates.first,
-              first.isFinite,
-              first > 0,
-              sampleRates.allSatisfy({ $0.isFinite && $0 > 0 && abs($0 - first) < 0.5 }) else {
-            return nil
-        }
-        return first
-    }
-
     static func inactiveRequestedUIDs(requested: [String], active: [String]) -> [String] {
         let activeSet = Set(active.compactMap(Self.normalizedUID))
         var seen = Set<String>()
@@ -296,6 +288,14 @@ final class CoreAudioTapIOController: @unchecked Sendable {
     }
 
     private static func outputDeviceInfo(for uid: String) throws -> OutputDeviceInfo {
+        let objectID = try deviceObjectID(forUID: uid)
+        guard let nominalSampleRate = nominalSampleRate(for: objectID) else {
+            throw CoreAudioTapStartFailure.deviceUnavailable
+        }
+        return OutputDeviceInfo(uid: uid, nominalSampleRate: nominalSampleRate)
+    }
+
+    private static func deviceObjectID(forUID uid: String) throws -> AudioObjectID {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -314,12 +314,10 @@ final class CoreAudioTapIOController: @unchecked Sendable {
                 &objectID
             )
         }
-        guard status == noErr,
-              objectID != AudioObjectID(kAudioObjectUnknown),
-              let nominalSampleRate = nominalSampleRate(for: objectID) else {
+        guard status == noErr, objectID != AudioObjectID(kAudioObjectUnknown) else {
             throw CoreAudioTapStartFailure.deviceUnavailable
         }
-        return OutputDeviceInfo(uid: uid, nominalSampleRate: nominalSampleRate)
+        return objectID
     }
 }
 

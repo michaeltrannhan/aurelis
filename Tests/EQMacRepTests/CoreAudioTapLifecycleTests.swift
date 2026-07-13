@@ -62,16 +62,6 @@ final class CoreAudioTapLifecycleTests: XCTestCase {
         XCTAssertEqual(controller.outputDeviceUIDs, ["usb", "hdmi"])
     }
 
-    func testMultiOutputRequiresMatchingFiniteNominalSampleRates() {
-        XCTAssertEqual(
-            CoreAudioTapIOController.compatibleNominalSampleRate([48_000, 48_000]),
-            48_000
-        )
-        XCTAssertNil(CoreAudioTapIOController.compatibleNominalSampleRate([44_100, 48_000]))
-        XCTAssertNil(CoreAudioTapIOController.compatibleNominalSampleRate([48_000, .nan]))
-        XCTAssertNil(CoreAudioTapIOController.compatibleNominalSampleRate([]))
-    }
-
     func testActiveAggregateSubdevicesAreComparedByNormalizedUID() {
         XCTAssertEqual(
             CoreAudioTapIOController.inactiveRequestedUIDs(

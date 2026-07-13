@@ -4,7 +4,6 @@ import Foundation
 /// Why a tap failed to start, in terms the manager can act on.
 enum CoreAudioTapStartFailure: LocalizedError, Equatable {
     case deviceUnavailable
-    case incompatibleSampleRates([Double])
     case inactiveOutputDevices([String])
     case permissionDenied
     case unsupportedProcess
@@ -37,9 +36,6 @@ enum CoreAudioTapFailurePolicy {
         switch failure {
         case .deviceUnavailable:
             return .recoverable("Output device unavailable")
-        case let .incompatibleSampleRates(rates):
-            let summary = rates.map { String(format: "%.0f Hz", $0) }.joined(separator: ", ")
-            return .recoverable("Selected outputs use incompatible sample rates: \(summary)")
         case let .inactiveOutputDevices(uids):
             return .recoverable("Core Audio could not activate output devices: \(uids.joined(separator: ", "))")
         case .permissionDenied:

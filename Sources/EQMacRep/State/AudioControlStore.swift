@@ -22,6 +22,10 @@ final class AudioControlStore: ObservableObject {
     private var activeContinuousControls: Set<ContinuousControl> = []
     private var continuousBaselines: [ContinuousControl: AppAudioSettings?] = [:]
     private var continuousTasks: [ContinuousControl: Task<Void, Never>] = [:]
+    /// Identities whose persisted state has been seeded into the current backend.
+    /// Seeding happens before tap reconciliation so a newly-created controller
+    /// starts on the stored route and DSP state instead of using defaults.
+    private var restoredBackendIdentities: Set<AudioAppIdentity> = []
 
     var statusMessage: String { operationState.message }
 
@@ -59,18 +63,31 @@ final class AudioControlStore: ObservableObject {
                 ensureSettings(for: app)
             }
             mergeAppDisplayOrder()
+            let restoreError = restoreBackendStateCapturingError()
             let tapError = synchronizeBackendTapsCapturingError()
             try persist()
             dismissIssue(id: "refresh")
+
+            if let restoreError {
+                let message = "Audio settings restore error: \(restoreError.localizedDescription)"
+                operationState = .degraded(message)
+                reportIssue(id: "backend-restore", message: message, recovery: .retry)
+            } else {
+                dismissIssue(id: "backend-restore")
+            }
+
             if let tapError {
                 let message = "Tap setup error: \(tapError.localizedDescription)"
                 operationState = .degraded(message)
                 reportIssue(id: "tap-synchronization", message: message, recovery: .retry)
-            } else if let message = session.statusMessage(appCount: appSnapshots.count, deviceCount: devices.count) {
+            } else if restoreError == nil,
+                      let message = session.statusMessage(appCount: appSnapshots.count, deviceCount: devices.count) {
                 operationState = .ready(message)
                 dismissIssue(id: "tap-synchronization")
-            } else {
+            } else if restoreError == nil {
                 operationState = .ready("Loaded \(appSnapshots.count) app\(appSnapshots.count == 1 ? "" : "s")")
+                dismissIssue(id: "tap-synchronization")
+            } else {
                 dismissIssue(id: "tap-synchronization")
             }
         } catch {
@@ -317,10 +334,11 @@ final class AudioControlStore: ObservableObject {
         let previous = settings
         ensureSettings(for: identity)
         guard let baseline = settings.appSettings[identity] else { return }
-        settings.appSettings[identity]?.route = route
+        let normalizedRoute = route.normalized
+        settings.appSettings[identity]?.route = normalizedRoute
         try applyPersistedMutation(
-            .setRoute(identity, route),
-            compensatingWith: .setRoute(identity, baseline.route),
+            .setRoute(identity, normalizedRoute),
+            compensatingWith: .setRoute(identity, baseline.route.normalized),
             restoring: previous,
             issueID: "route-\(identity.rawValue)",
             app: identity
@@ -374,6 +392,7 @@ final class AudioControlStore: ObservableObject {
             defer { if wasObserving { startBackendObservation() } }
             do {
                 try session.switchBackend(to: customization.backendMode)
+                restoredBackendIdentities.removeAll()
             } catch {
                 settings = previousSettings
                 rebuildDisplayRows()
@@ -396,6 +415,7 @@ final class AudioControlStore: ObservableObject {
         defer { if wasObserving { startBackendObservation() } }
         let defaultSettings = PersistedSettings()
         try session.switchBackend(to: defaultSettings.customization.backendMode)
+        restoredBackendIdentities.removeAll()
         settings = defaultSettings
         appSnapshots = []
         devices = []
@@ -420,6 +440,9 @@ final class AudioControlStore: ObservableObject {
             )
         } else {
             settings.appSettings[app.identity]?.displayName = app.displayName
+            if let route = settings.appSettings[app.identity]?.route {
+                settings.appSettings[app.identity]?.route = route.normalized
+            }
         }
     }
 
@@ -520,6 +543,39 @@ final class AudioControlStore: ObservableObject {
             reportMutationFailure(persistenceError, id: issueID, app: app)
             throw persistenceError
         }
+    }
+
+    /// Replays non-default persisted state exactly once per discovered app and
+    /// backend lifetime. The tap manager records route/gain intent even when no
+    /// controller exists yet, then consumes it while constructing the controller.
+    private func restoreBackendStateCapturingError() -> Error? {
+        var firstError: Error?
+        for app in appSnapshots where !restoredBackendIdentities.contains(app.identity) {
+            guard let appSettings = settings.appSettings[app.identity] else { continue }
+            do {
+                for command in backendRestoreCommands(for: app.identity, settings: appSettings) {
+                    try session.apply(command)
+                }
+                restoredBackendIdentities.insert(app.identity)
+            } catch {
+                if firstError == nil { firstError = error }
+            }
+        }
+        return firstError
+    }
+
+    private func backendRestoreCommands(
+        for identity: AudioAppIdentity,
+        settings appSettings: AppAudioSettings
+    ) -> [AudioBackendCommand] {
+        var commands: [AudioBackendCommand] = []
+        let route = appSettings.route.normalized
+        if route != .followDefault { commands.append(.setRoute(identity, route)) }
+        if appSettings.volume != 1 { commands.append(.setVolume(identity, appSettings.volume)) }
+        if appSettings.isMuted { commands.append(.setMuted(identity, true)) }
+        if appSettings.boost != .x1 { commands.append(.setBoost(identity, appSettings.boost)) }
+        if appSettings.eq.gains.contains(where: { $0 != 0 }) { commands.append(.setEQ(identity, appSettings.eq)) }
+        return commands
     }
 
     private func synchronizeBackendTaps() throws {

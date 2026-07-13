@@ -69,6 +69,21 @@ enum BoostLevel: Double, CaseIterable, Codable, Identifiable {
 enum DeviceRoute: Codable, Equatable, Hashable {
     case followDefault
     case selectedDevice(String)
+    case multiOutput([String])
+
+    /// Canonicalizes stored route intent without changing the user's output
+    /// priority. Multi-output order is significant because the first device is
+    /// used as the aggregate's main/clock device.
+    var normalized: DeviceRoute {
+        switch self {
+        case let .multiOutput(deviceIDs):
+            var seen = Set<String>()
+            let orderedUniqueIDs = deviceIDs.filter { !$0.isEmpty && seen.insert($0).inserted }
+            return orderedUniqueIDs.isEmpty ? .followDefault : .multiOutput(orderedUniqueIDs)
+        case .followDefault, .selectedDevice:
+            return self
+        }
+    }
 
     /// User-facing label resolved against the currently available devices.
     /// A selected device that is no longer present reads as "Missing Device".
@@ -79,6 +94,11 @@ enum DeviceRoute: Codable, Equatable, Hashable {
             return "Follow Default (\(defaultName))"
         case let .selectedDevice(deviceID):
             return devices.first(where: { $0.id == deviceID })?.name ?? "Missing Device"
+        case .multiOutput:
+            guard case let .multiOutput(deviceIDs) = normalized else {
+                return DeviceRoute.followDefault.label(devices: devices)
+            }
+            return "Multi-Output (\(deviceIDs.count) \(deviceIDs.count == 1 ? "device" : "devices"))"
         }
     }
 }
@@ -104,7 +124,7 @@ struct AppAudioSettings: Codable, Equatable {
         self.isMuted = isMuted
         self.boost = boost
         self.eq = eq
-        self.route = route
+        self.route = route.normalized
     }
 
     mutating func setVolume(_ newVolume: Double) {

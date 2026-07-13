@@ -28,7 +28,12 @@ final class SettingsStoreTests: XCTestCase {
             volumeStep: .twoPercent,
             showInactiveApps: false
         )
-        settings.appSettings[music] = AppAudioSettings(displayName: "Music", volume: 0.4, boost: .x2)
+        settings.appSettings[music] = AppAudioSettings(
+            displayName: "Music",
+            volume: 0.4,
+            boost: .x2,
+            route: .multiOutput(["usb", "hdmi"])
+        )
         settings.pinnedAppIDs = [music]
         settings.ignoredAppIDs = [chat]
 

@@ -30,14 +30,13 @@ final class CoreAudioDiscoveryBackend: AudioBackend {
     func fetchSnapshot() throws -> AudioBackendSnapshot {
         let targets = try processDiscovery.discoverTapTargets()
         let deviceState = try deviceDiscovery.discoverOutputDeviceState()
+        eventSource.refreshDeviceListeners()
         tapTargetsByIdentity = Dictionary(uniqueKeysWithValues: targets.map { ($0.identity, $0) })
-        if let processTapManager = tapManager as? CoreAudioProcessTapManager {
-            processTapManager.defaultOutputDeviceUID = deviceState.defaultOutputDeviceUID
-        }
         if let routeManager = tapManager as? CoreAudioRouteControlling {
             routeManager.setAvailableOutputUIDs(
                 deviceState.devices.map(\.id),
-                defaultOutputUID: deviceState.devices.first(where: \.isDefault)?.id ?? deviceState.defaultOutputDeviceUID
+                defaultOutputUIDs: deviceState.defaultOutputDeviceUIDs,
+                nominalSampleRatesByUID: deviceState.nominalSampleRatesByUID
             )
         }
 
@@ -66,7 +65,7 @@ final class CoreAudioDiscoveryBackend: AudioBackend {
         case let .setEQ(identity, eq):
             (tapManager as? CoreAudioRealtimeTapControlling)?.setEQ(eq, for: identity)
         case let .setRoute(identity, route):
-            (tapManager as? CoreAudioRouteControlling)?.setRoute(identity, route)
+            try (tapManager as? CoreAudioRouteControlling)?.setRoute(identity, route)
         }
     }
 

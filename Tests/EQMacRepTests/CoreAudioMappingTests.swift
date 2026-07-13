@@ -40,6 +40,37 @@ final class CoreAudioMappingTests: XCTestCase {
         XCTAssertNil(CoreAudioDeviceDiscovery.mapDeviceRecord(inputOnly, defaultDeviceID: nil))
     }
 
+    func testDeviceMappingSkipsUIDlessAndEQMacRepAggregateDevices() {
+        let uidless = CoreAudioDeviceDiscovery.DeviceRecord(
+            objectID: 9,
+            uid: nil,
+            name: "Unknown Output",
+            hasOutputStreams: true,
+            isHidden: false
+        )
+        let ownAggregate = CoreAudioDeviceDiscovery.DeviceRecord(
+            objectID: 10,
+            uid: "EQMacRep-tap-uuid",
+            name: "EQMacRep-Music",
+            hasOutputStreams: true,
+            isHidden: false,
+            transportType: kAudioDeviceTransportTypeAggregate
+        )
+        let userAggregate = CoreAudioDeviceDiscovery.DeviceRecord(
+            objectID: 11,
+            uid: "user-multi-output",
+            name: "Living Room Multi-Output",
+            hasOutputStreams: true,
+            isHidden: false,
+            transportType: kAudioDeviceTransportTypeAggregate
+        )
+
+        XCTAssertNil(CoreAudioDeviceDiscovery.mapDeviceRecord(uidless, defaultDeviceID: nil))
+        XCTAssertNil(CoreAudioDeviceDiscovery.mapDeviceRecord(ownAggregate, defaultDeviceID: nil))
+        XCTAssertNil(CoreAudioDeviceDiscovery.mapDeviceRecord(userAggregate, defaultDeviceID: nil))
+        XCTAssertNil(CoreAudioDeviceDiscovery.defaultOutputUID(records: [userAggregate], defaultDeviceID: 11))
+    }
+
     func testProcessMappingUsesBundleIdentifierAsStableIdentity() {
         let record = CoreAudioProcessDiscovery.ProcessRecord(
             processObjectID: 100,
@@ -215,5 +246,121 @@ final class CoreAudioMappingTests: XCTestCase {
         )
 
         XCTAssertEqual(CoreAudioDeviceDiscovery.defaultOutputUID(records: [record], defaultDeviceID: 42), "built-in-output")
+    }
+
+    func testAggregateDefaultExpandsToOrderedRouteablePhysicalOutputs() {
+        let usb = CoreAudioDeviceDiscovery.DeviceRecord(
+            objectID: 1,
+            uid: "usb",
+            name: "USB Interface",
+            hasOutputStreams: true,
+            isHidden: false
+        )
+        let hdmi = CoreAudioDeviceDiscovery.DeviceRecord(
+            objectID: 2,
+            uid: "hdmi",
+            name: "Display",
+            hasOutputStreams: true,
+            isHidden: false
+        )
+        let hidden = CoreAudioDeviceDiscovery.DeviceRecord(
+            objectID: 3,
+            uid: "hidden",
+            name: "Hidden",
+            hasOutputStreams: true,
+            isHidden: true
+        )
+        let inputOnly = CoreAudioDeviceDiscovery.DeviceRecord(
+            objectID: 4,
+            uid: "input",
+            name: "Microphone",
+            hasOutputStreams: false,
+            isHidden: false
+        )
+        let nestedAggregate = CoreAudioDeviceDiscovery.DeviceRecord(
+            objectID: 5,
+            uid: "nested",
+            name: "Nested Aggregate",
+            hasOutputStreams: true,
+            isHidden: false,
+            transportType: kAudioDeviceTransportTypeAggregate
+        )
+        let systemDefault = CoreAudioDeviceDiscovery.DeviceRecord(
+            objectID: 10,
+            uid: "user-multi-output",
+            name: "Living Room Multi-Output",
+            hasOutputStreams: true,
+            isHidden: false,
+            transportType: kAudioDeviceTransportTypeAggregate,
+            aggregateSubdeviceUIDs: [" usb ", "missing", "hdmi", "usb", "", "hidden", "input", "nested"],
+            aggregateActiveSubdeviceUIDs: ["usb", "hdmi"]
+        )
+
+        XCTAssertEqual(
+            CoreAudioDeviceDiscovery.defaultOutputUIDs(
+                records: [systemDefault, hidden, nestedAggregate, hdmi, inputOnly, usb],
+                defaultDeviceID: 10
+            ),
+            ["usb", "hdmi"]
+        )
+        XCTAssertEqual(
+            CoreAudioDeviceDiscovery.defaultOutputUID(
+                records: [systemDefault, usb, hdmi],
+                defaultDeviceID: 10
+            ),
+            "usb"
+        )
+    }
+
+    func testAggregateDefaultWithoutPhysicalOutputsIsUnavailable() {
+        let systemDefault = CoreAudioDeviceDiscovery.DeviceRecord(
+            objectID: 10,
+            uid: "user-multi-output",
+            name: "Living Room Multi-Output",
+            hasOutputStreams: true,
+            isHidden: false,
+            transportType: kAudioDeviceTransportTypeAggregate,
+            aggregateSubdeviceUIDs: ["missing"]
+        )
+
+        XCTAssertEqual(
+            CoreAudioDeviceDiscovery.defaultOutputUIDs(records: [systemDefault], defaultDeviceID: 10),
+            []
+        )
+    }
+
+    func testAggregateDefaultOmitsPresentButInactiveConstituents() {
+        let usb = CoreAudioDeviceDiscovery.DeviceRecord(
+            objectID: 1,
+            uid: "usb",
+            name: "USB Interface",
+            hasOutputStreams: true,
+            isHidden: false
+        )
+        let hdmi = CoreAudioDeviceDiscovery.DeviceRecord(
+            objectID: 2,
+            uid: "hdmi",
+            name: "Display",
+            hasOutputStreams: true,
+            isHidden: false
+        )
+        let systemDefault = CoreAudioDeviceDiscovery.DeviceRecord(
+            objectID: 10,
+            uid: "user-multi-output",
+            name: "Living Room Multi-Output",
+            hasOutputStreams: true,
+            isHidden: false,
+            transportType: kAudioDeviceTransportTypeAggregate,
+            aggregateSubdeviceUIDs: ["usb", "hdmi"],
+            aggregateActiveSubdeviceUIDs: ["hdmi"]
+        )
+
+        XCTAssertEqual(
+            CoreAudioDeviceDiscovery.defaultOutputUIDs(
+                records: [systemDefault, usb, hdmi],
+                defaultDeviceID: 10
+            ),
+            ["hdmi"]
+        )
     }
 }

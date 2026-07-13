@@ -1,6 +1,6 @@
 # EQMacRep
 
-EQMacRep is a macOS SwiftUI menu-bar audio controller inspired by FineTune. Phases 0–8 are implemented in code, including CoreAudio discovery and process taps, per-app volume/mute/boost/EQ/routing, global controls, typed recovery state, first-run guidance, and versioned JSON persistence.
+EQMacRep is a macOS SwiftUI menu-bar audio controller inspired by FineTune. Phases 0–8 and 10 are implemented in code, including CoreAudio discovery and process taps, per-app volume/mute/boost/EQ, single- and multi-device routing, global controls, typed recovery state, first-run guidance, and versioned JSON persistence.
 
 ## Build
 
@@ -39,6 +39,7 @@ because its designated requirement changes whenever the executable is rebuilt.
 - Menu-bar popup app named EQMacRep.
 - CoreAudio active output app and output device discovery.
 - Per-app volume, mute, boost, pin, ignore, and 10-band EQ state.
+- Per-app follow-default, single-output, and ordered multi-output routing through private CoreAudio aggregate devices, with active-device and matching-sample-rate validation.
 - Early per-app volume, mute, and boost processing through private CoreAudio process taps.
 - Customizable appearance, popup density, default new-app volume, EQ gain range, volume step, and inactive app visibility.
 - JSON settings under Application Support by default.
@@ -47,9 +48,8 @@ because its designated requirement changes whenever the executable is rebuilt.
 
 ## Remaining Release Gates and Later Phases
 
-1. Complete the real-hardware permission, audio, routing, device-disconnect, media-key, and soak matrix.
-2. Remove the remaining fixed 48 kHz EQ assumption and finish continuous-control coalescing.
-3. After the daily-use gate: presets/AutoEQ, input controls, multi-output, diagnostics, signing, notarization, and updates.
+1. Complete the real-hardware permission, audio, multi-output, device-disconnect, media-key, latency, and soak matrix.
+2. After the daily-use gate: presets/AutoEQ, input controls, diagnostics, signing, notarization, and updates.
 
 ## License
 

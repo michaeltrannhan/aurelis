@@ -4,6 +4,8 @@
 
 **Goal:** Let one tapped app play through multiple selected output devices.
 
+**Status (2026-07-13):** Implemented in code. The route model, resolver, aggregate builder, controller lifecycle, staged picker, persistence replay, default-aggregate expansion, sample-rate/active-device validation, dynamic rate observation, route-failure rollback/backoff, and automated coverage are complete. Real two-device playback and heterogeneous-device latency/disconnect testing remain manual verification gates.
+
 **Architecture:** Extend the Phase 5 route model from one output UID to a normalized list of output UIDs. The tap manager resolves routes to one or more devices, builds a private aggregate containing all selected output subdevices plus the process tap, and rebuilds controllers outside the realtime callback when the resolved device set changes.
 
 **Tech Stack:** Swift 6, CoreAudio aggregate devices, Phase 3 tap IO controller, Phase 5 route resolver, XCTest.
@@ -36,7 +38,7 @@ Phase 10 intentionally uses destructive rebuild switching. Crossfade polish rema
 - Modify: `Sources/EQMacRep/Domain/AudioModels.swift`
 - Test: `Tests/EQMacRepTests/CustomizationTests.swift`
 
-- [ ] **Step 1: Write route normalization test**
+- [x] **Step 1: Write route normalization test**
 
 Add:
 
@@ -47,7 +49,7 @@ func testMultiOutputRouteNormalizesDuplicatesAndEmptySelection() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run:
 
@@ -57,7 +59,7 @@ swift test --filter CustomizationTests/testMultiOutputRouteNormalizesDuplicatesA
 
 Expected: compile failure for missing route case.
 
-- [ ] **Step 3: Add route case**
+- [x] **Step 3: Add route case**
 
 Add:
 
@@ -80,7 +82,7 @@ var normalized: DeviceRoute {
 }
 ```
 
-- [ ] **Step 4: Run model tests**
+- [x] **Step 4: Run model tests**
 
 Run:
 
@@ -96,7 +98,7 @@ Expected: PASS.
 - Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioRouteResolver.swift`
 - Test: `Tests/EQMacRepTests/CoreAudioRouteResolverTests.swift`
 
-- [ ] **Step 1: Write resolver tests**
+- [x] **Step 1: Write resolver tests**
 
 Add:
 
@@ -120,7 +122,7 @@ func testMultiOutputFallsBackWhenAllSelectedDevicesAreMissing() {
 }
 ```
 
-- [ ] **Step 2: Run resolver tests to verify they fail**
+- [x] **Step 2: Run resolver tests to verify they fail**
 
 Run:
 
@@ -130,7 +132,7 @@ swift test --filter CoreAudioRouteResolverTests
 
 Expected: compile failure for missing multi-output resolution.
 
-- [ ] **Step 3: Extend resolved route**
+- [x] **Step 3: Extend resolved route**
 
 Add:
 
@@ -154,11 +156,11 @@ var outputDeviceUIDs: [String] {
 }
 ```
 
-- [ ] **Step 4: Implement multi-output branch**
+- [x] **Step 4: Implement multi-output branch**
 
 For `.multiOutput`, keep available selected UIDs in stored order. Return `.fallbackMany([default])` when no selected UID is available and default exists.
 
-- [ ] **Step 5: Run resolver tests**
+- [x] **Step 5: Run resolver tests**
 
 Run:
 
@@ -174,7 +176,7 @@ Expected: PASS.
 - Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioAggregateDeviceBuilder.swift`
 - Test: `Tests/EQMacRepTests/CoreAudioAggregateDeviceBuilderTests.swift`
 
-- [ ] **Step 1: Write builder test**
+- [x] **Step 1: Write builder test**
 
 Add:
 
@@ -196,7 +198,7 @@ func testMultiOutputAggregateIncludesAllSubdevices() {
 }
 ```
 
-- [ ] **Step 2: Run builder test to verify it fails**
+- [x] **Step 2: Run builder test to verify it fails**
 
 Run:
 
@@ -206,7 +208,7 @@ swift test --filter CoreAudioAggregateDeviceBuilderTests/testMultiOutputAggregat
 
 Expected: compile failure for missing builder method.
 
-- [ ] **Step 3: Implement builder**
+- [x] **Step 3: Implement builder**
 
 Add:
 
@@ -220,7 +222,7 @@ static func multiOutputDescription(
 
 Use first UID as `kAudioAggregateDeviceMainSubDeviceKey` and `kAudioAggregateDeviceClockDeviceKey`. Add every UID to `kAudioAggregateDeviceSubDeviceListKey`. Use drift compensation `false` for the clock device and `true` for additional devices.
 
-- [ ] **Step 4: Run builder tests**
+- [x] **Step 4: Run builder tests**
 
 Run:
 
@@ -237,7 +239,7 @@ Expected: PASS.
 - Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapIOController.swift`
 - Test: `Tests/EQMacRepTests/CoreAudioTapLifecycleTests.swift`
 
-- [ ] **Step 1: Write lifecycle test**
+- [x] **Step 1: Write lifecycle test**
 
 Add:
 
@@ -256,7 +258,7 @@ func testMultiOutputRouteRebuildsWhenResolvedDeviceSetChanges() {
 }
 ```
 
-- [ ] **Step 2: Run lifecycle test to verify it fails**
+- [x] **Step 2: Run lifecycle test to verify it fails**
 
 Run:
 
@@ -266,7 +268,7 @@ swift test --filter CoreAudioTapLifecycleTests/testMultiOutputRouteRebuildsWhenR
 
 Expected: compile failure for controller factory UID-list support.
 
-- [ ] **Step 3: Update controller init**
+- [x] **Step 3: Update controller init**
 
 Change controller route input from single `outputDeviceUID` to:
 
@@ -276,7 +278,7 @@ let outputDeviceUIDs: [String]
 
 Keep single-device callers passing `[uid]`.
 
-- [ ] **Step 4: Update manager cache**
+- [x] **Step 4: Update manager cache**
 
 Replace:
 
@@ -292,7 +294,7 @@ resolvedOutputUIDsByIdentity: [AudioAppIdentity: [String]]
 
 Compare arrays for deterministic rebuild decisions.
 
-- [ ] **Step 5: Run lifecycle tests**
+- [x] **Step 5: Run lifecycle tests**
 
 Run:
 
@@ -309,7 +311,7 @@ Expected: PASS.
 - Modify: `Sources/EQMacRep/Views/AppRowView.swift`
 - Test: `Tests/EQMacRepTests/CustomizationTests.swift`
 
-- [ ] **Step 1: Write picker state test**
+- [x] **Step 1: Write picker state test**
 
 Add:
 
@@ -324,7 +326,7 @@ func testMultiOutputPickerStateTogglesDevices() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run:
 
@@ -334,7 +336,7 @@ swift test --filter CustomizationTests/testMultiOutputPickerStateTogglesDevices
 
 Expected: compile failure for missing picker state.
 
-- [ ] **Step 3: Implement state and picker**
+- [x] **Step 3: Implement state and picker**
 
 Add:
 
@@ -353,7 +355,7 @@ The UI shows:
 - Multi-Output
 - checklist of available devices when Multi-Output is active
 
-- [ ] **Step 4: Run UI tests and build**
+- [x] **Step 4: Run UI tests and build**
 
 Run:
 
@@ -370,7 +372,7 @@ Expected: PASS and build succeeds.
 - Modify: `Documentation/flows.md`
 - Modify: `Documentation/phase-tracker.md`
 
-- [ ] **Step 1: Update docs**
+- [x] **Step 1: Update docs**
 
 Document:
 
@@ -380,7 +382,7 @@ Document:
 - drift-compensation rule
 - fallback when selected outputs disappear
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
 Run:
 
@@ -394,7 +396,7 @@ swift test --filter CustomizationTests
 
 Expected: PASS.
 
-- [ ] **Step 3: Run full suite and build**
+- [x] **Step 3: Run full suite and build**
 
 Run:
 
@@ -418,6 +420,7 @@ Manual checks:
 
 - Route one playing app to two output devices.
 - Confirm both devices play the app.
+- If the picker reports incompatible rates, align both devices to the same nominal sample rate in Audio MIDI Setup and retry.
 - Confirm another app can stay on follow-default.
 - Disconnect one selected output and confirm remaining output or default fallback works.
 - Remove multi-output route and confirm old aggregate is destroyed.

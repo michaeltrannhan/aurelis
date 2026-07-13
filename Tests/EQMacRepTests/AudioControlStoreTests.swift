@@ -252,6 +252,96 @@ final class AudioControlStoreTests: XCTestCase {
         XCTAssertEqual(backend.commands.last, .setRoute(music, .selectedDevice("built-in-output")))
     }
 
+    func testRefreshRestoresPersistedMultiOutputStateBeforeTapSynchronization() throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        var eq = EQCurve()
+        eq.setGain(4, at: 2)
+        var restoredSettings = AppAudioSettings(
+            displayName: "Music",
+            volume: 0.35,
+            isMuted: true,
+            boost: .x3,
+            eq: eq
+        )
+        // Simulate an older/non-normalized saved payload. Restoration should send
+        // canonical route intent to the backend before it creates any tap.
+        restoredSettings.route = .multiOutput(["usb", "usb", "hdmi"])
+
+        let settingsStore = SettingsStore(settingsURL: uniqueSettingsURL())
+        try settingsStore.save(PersistedSettings(appSettings: [music: restoredSettings]))
+        let backend = RestoreOrderingBackend(apps: [
+            AudioAppSnapshot(identity: music, displayName: "Music")
+        ])
+        let store = try AudioControlStore(
+            settingsStore: settingsStore,
+            backend: backend,
+            permissionClient: grantedClient()
+        )
+
+        try store.refresh()
+
+        XCTAssertEqual(
+            backend.events,
+            [
+                .command(.setRoute(music, .multiOutput(["usb", "hdmi"]))),
+                .command(.setVolume(music, 0.35)),
+                .command(.setMuted(music, true)),
+                .command(.setBoost(music, .x3)),
+                .command(.setEQ(music, eq)),
+                .synchronize
+            ]
+        )
+
+        try store.refresh()
+        XCTAssertEqual(backend.events.filter { if case .command = $0 { true } else { false } }.count, 5)
+        XCTAssertEqual(backend.events.last, .synchronize)
+    }
+
+    func testBackendSwitchReplaysPersistedStateBeforeNewBackendSynchronization() throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        var eq = EQCurve()
+        eq.setGain(-3, at: 4)
+        let restoredSettings = AppAudioSettings(
+            displayName: "Music",
+            volume: 0.4,
+            isMuted: true,
+            boost: .x2,
+            eq: eq,
+            route: .multiOutput(["usb", "hdmi"])
+        )
+        let settingsStore = SettingsStore(settingsURL: uniqueSettingsURL())
+        try settingsStore.save(PersistedSettings(appSettings: [music: restoredSettings]))
+        let firstBackend = RestoreOrderingBackend(apps: [
+            AudioAppSnapshot(identity: music, displayName: "Music")
+        ])
+        let replacementBackend = RestoreOrderingBackend(apps: [
+            AudioAppSnapshot(identity: music, displayName: "Music")
+        ])
+        let store = try AudioControlStore(
+            settingsStore: settingsStore,
+            backend: firstBackend,
+            backendFactory: { _ in replacementBackend },
+            permissionClient: grantedClient()
+        )
+        try store.refresh()
+
+        var customization = store.settings.customization
+        customization.backendMode = .mock
+        try store.applyCustomization(customization)
+
+        XCTAssertEqual(
+            replacementBackend.events,
+            [
+                .command(.setRoute(music, .multiOutput(["usb", "hdmi"]))),
+                .command(.setVolume(music, 0.4)),
+                .command(.setMuted(music, true)),
+                .command(.setBoost(music, .x2)),
+                .command(.setEQ(music, eq)),
+                .synchronize
+            ]
+        )
+    }
+
     func testIgnoringAppStopsActiveTapAndKeepsSettings() throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let backend = MockAudioBackend(apps: [
@@ -391,6 +481,9 @@ final class AudioControlStoreTests: XCTestCase {
         XCTAssertEqual(
             backend.commands,
             [
+                .setVolume(music, baseline.volume),
+                .setBoost(music, baseline.boost),
+                .setEQ(music, baseline.eq),
                 .setVolume(music, 0.2),
                 .setVolume(music, baseline.volume),
                 .setMuted(music, true),
@@ -425,7 +518,10 @@ final class AudioControlStoreTests: XCTestCase {
         changedEQ.setGain(-6, at: 1)
         store.setEQGainIntent(-6, band: 1, for: music)
 
-        XCTAssertEqual(backend.commands, [.setEQ(music, changedEQ), .setEQ(music, baselineEQ)])
+        XCTAssertEqual(
+            backend.commands,
+            [.setEQ(music, baselineEQ), .setEQ(music, changedEQ), .setEQ(music, baselineEQ)]
+        )
         XCTAssertEqual(store.displayRows.first?.settings.eq, baselineEQ)
         XCTAssertEqual(store.issues.last?.id, "eq-\(music.rawValue)")
         XCTAssertEqual(store.issues.last?.affectedApp, music)
@@ -585,4 +681,31 @@ private final class TapSynchronizingMockBackend: AudioBackend, AudioBackendTapSy
         tearDownAllCount += 1
         if let tearDownAllError { throw tearDownAllError }
     }
+}
+
+private enum RestoreBackendEvent: Equatable {
+    case command(AudioBackendCommand)
+    case synchronize
+}
+
+private final class RestoreOrderingBackend: AudioBackend, AudioBackendTapSynchronizing {
+    let snapshot: AudioBackendSnapshot
+    private(set) var events: [RestoreBackendEvent] = []
+
+    init(apps: [AudioAppSnapshot]) {
+        snapshot = AudioBackendSnapshot(apps: apps)
+    }
+
+    func fetchSnapshot() throws -> AudioBackendSnapshot { snapshot }
+
+    func apply(_ command: AudioBackendCommand) throws {
+        events.append(.command(command))
+    }
+
+    func synchronizeTaps(activeAppIDs: Set<AudioAppIdentity>, ignoredAppIDs: Set<AudioAppIdentity>) throws {
+        events.append(.synchronize)
+    }
+
+    func tearDownTap(for identity: AudioAppIdentity) throws {}
+    func tearDownAllTaps() throws {}
 }

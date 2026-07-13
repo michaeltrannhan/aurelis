@@ -4,7 +4,7 @@
 
 FineTune launches as a menu-bar app, creates long-lived app services, requests Screen & System Audio Recording permission, discovers CoreAudio apps and devices, creates process taps, applies persisted per-app settings, and renders controls in a menu-bar popup.
 
-EQMacRep keeps that shape with a mock backend for tests and a CoreAudio backend for real discovery. The current CoreAudio path creates private process taps for active apps, applies volume, mute, boost, realtime 10-band EQ, and explicit single-device routing, and tears down taps on ignore/reset/quit. Live HAL listeners, permission gating, and stability hardening are implemented; real-hardware verification remains required.
+EQMacRep keeps that shape with a mock backend for tests and a CoreAudio backend for real discovery. The current CoreAudio path creates private process taps for active apps, applies volume, mute, boost, realtime 10-band EQ, and explicit single- or multi-device routing, and tears down taps on ignore/reset/quit. Live HAL listeners, permission gating, and stability hardening are implemented; real-hardware verification remains required.
 
 ## Launch Flow
 
@@ -13,7 +13,7 @@ EQMacRep keeps that shape with a mock backend for tests and a CoreAudio backend 
 3. `AudioBackendFactory` creates either `MockAudioBackend` or `CoreAudioDiscoveryBackend`, owned by `AudioSessionCoordinator`.
 4. It creates an `AudioControlStore`, loading JSON settings or defaults through `AudioSettingsRepository`; capture permission is owned by `AudioPermissionCoordinator`.
 5. The menu-bar extra opens `MenuBarRootView`.
-6. The popup calls `refresh()`, which reconciles backend apps with persisted settings. Discovery currently refreshes on popup open and manual refresh only; live HAL listeners are planned in Phase 0.
+6. The popup calls `refresh()`, which reconciles backend apps with persisted settings. Live HAL listeners debounce process/device/default-output changes into subsequent refreshes.
 
 ## Discovery Flow
 
@@ -31,15 +31,16 @@ CoreAudio Discovery mode:
 4. EQMacRep's own process and obvious CoreAudio/system daemons are filtered out.
 5. The backend emits the same snapshot shape used by the mock backend and caches tap targets by app identity.
 6. `CoreAudioDeviceDiscovery` reads HAL device-list and default-output properties.
-7. Devices without output streams and hidden devices are filtered out.
-8. The default output UID is passed to the tap manager for follow-default output.
+7. Devices without output streams or stable UIDs, hidden devices, and aggregate devices are filtered out so an EQMacRep aggregate cannot be selected recursively.
+8. When the system default is itself a user Aggregate/Multi-Output Device, discovery expands its ordered active physical subdevice UIDs. EQMacRep-owned and nested aggregates are never routed recursively.
+9. Default output UIDs and physical nominal sample rates are passed to the tap manager for follow-default routing and live topology validation.
 
 ## App State Flow
 
 1. UI actions send nonthrowing intents to `AudioControlStore`.
-2. The store updates `PersistedSettings`.
-3. The store saves versioned JSON through `AudioSettingsRepository` and `SettingsStore`; continuous volume/EQ gestures debounce intermediate work and flush their final value when editing ends.
-4. The store forwards supported commands to the backend.
+2. The store updates `PersistedSettings` and forwards the matching command to the backend.
+3. Once the backend accepts the command, the store saves versioned JSON through `AudioSettingsRepository` and `SettingsStore`; continuous volume/EQ gestures debounce intermediate work and flush their final value when editing ends.
+4. If backend application or persistence fails, the store restores the previous route/control value and publishes an issue.
 5. `displayRows` is rebuilt from snapshots plus pinned/ignored state.
 
 Pinned apps stay visible when inactive. Ignored apps are hidden and any active CoreAudio tap for that app is torn down.
@@ -56,6 +57,8 @@ The CoreAudio tap IO path applies the app's `EQCurve` through a stereo biquad ca
 
 `SettingsStore` reads and writes a versioned `PersistedSettings` JSON document. Missing files load defaults. Malformed files also load defaults so the app remains usable; the next successful save writes valid JSON to the configured settings path.
 
+On the first refresh for each discovered app, non-default persisted route and DSP state are replayed into the backend before tap synchronization. A restored tap therefore starts on its saved outputs instead of briefly starting on the system default.
+
 ## Customization Flow
 
 `SettingsView` edits `AppCustomization`. Changing EQ range reclamps existing app EQ curves. Popup density changes row sizing and width. Default new-app volume affects apps first seen after the change.
@@ -64,7 +67,13 @@ Backend mode is also stored in `AppCustomization`. Debug builds can switch it; p
 
 ## Routing Flow
 
-The current CoreAudio path supports follow-default and explicit per-app single-device routing. Multi-output remains deferred.
+Each app can follow the system default, select one output UID, or store an ordered multi-output UID list. Route normalization removes duplicates while preserving order; the first available selected device is the aggregate's main/clock device.
+
+For multi-output, `CoreAudioProcessTapManager` resolves the stored list against currently available devices and creates one private, non-stacked aggregate containing the process tap and every resolved output. Core Audio mirrors the same processed stream to each subdevice. Drift compensation is disabled for the clock device and enabled for each follower. Before muting the source app, the controller verifies that every output has the same finite nominal sample rate; after aggregate creation it verifies active membership by device UID. An incompatible or inactive set fails with a visible route issue instead of silently playing through only some devices.
+
+The controller reads the aggregate's nominal sample rate before starting IO, observes subsequent rate changes, and serializes EQ/gain updates with the Core Audio render queue. HAL listeners also observe physical nominal-rate and aggregate-composition changes. The manager includes sample rates in its resolved topology signature, so a rate change safely rebuilds and revalidates an otherwise unchanged UID set.
+
+Route-set changes rebuild the controller outside the realtime callback. Missing or inactive members are skipped while remaining selected devices continue; if all selected devices disappear, routing falls back to the current default. A failed user-initiated rebuild keeps the previous controller and route active and publishes an issue. Automatic failures use bounded backoff and retry after topology changes; selecting a route is an immediate explicit retry. The picker stages checklist edits and applies them together to avoid rebuilding once per click.
 
 ## Permission Flow
 

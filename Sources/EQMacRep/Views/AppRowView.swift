@@ -25,13 +25,7 @@ struct AppRowView: View {
     var volumeStep: Double = 0.05
     var layout: Layout = .desktop
 
-    /// The selected device UID when it is no longer in the available list, so the
-    /// picker can keep showing a "Missing Device" row for it.
-    private var missingSelectedID: String? {
-        guard case let .selectedDevice(id) = row.settings.route,
-              !devices.contains(where: { $0.id == id }) else { return nil }
-        return id
-    }
+    @State private var isOutputPickerPresented = false
 
     private var volumePercentage: Int {
         Int((row.settings.volume * 100).rounded())
@@ -47,15 +41,18 @@ struct AppRowView: View {
         return row.isActive ? .green : .secondary
     }
 
+    private var routeSummary: MultiOutputRouteSummary {
+        MultiOutputRoutePickerModel.summary(for: row.settings.route, devices: devices)
+    }
+
+    private var routeDetailLabel: String {
+        routeSummary.detail
+    }
+
     /// The full route label is useful in the desktop mixer, but the menu-bar row
     /// should name the actual destination without repeating "Follow Default".
     private var compactRouteLabel: String {
-        switch row.settings.route {
-        case .followDefault:
-            return devices.first(where: \.isDefault)?.name ?? "System Output"
-        case .selectedDevice:
-            return row.settings.route.label(devices: devices)
-        }
+        routeSummary.title
     }
 
     var body: some View {
@@ -72,7 +69,7 @@ struct AppRowView: View {
             appIcon.frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.displayName).font(.body.weight(.medium)).lineLimit(1)
-                Text(row.settings.route.label(devices: devices))
+                Text(routeDetailLabel)
                     .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
             }
             .frame(minWidth: 150, maxWidth: .infinity, alignment: .leading)
@@ -96,7 +93,7 @@ struct AppRowView: View {
 
             boostMenu(compact: false)
 
-            outputMenu()
+            outputPickerButton()
 
             Button(action: onSelect) {
                 Image(systemName: isSelected ? "xmark" : "slider.vertical.3")
@@ -134,11 +131,9 @@ struct AppRowView: View {
         }
     }
 
-    private func outputMenu(compact: Bool = false) -> some View {
-        Menu {
-            Button("Follow Default") { onRoute(.followDefault) }
-            ForEach(devices) { device in Button(device.name) { onRoute(.selectedDevice(device.id)) } }
-            if missingSelectedID != nil { Button("Missing Device") {}.disabled(true) }
+    private func outputPickerButton(compact: Bool = false) -> some View {
+        Button {
+            isOutputPickerPresented.toggle()
         } label: {
             if compact {
                 HStack(spacing: 3) {
@@ -146,6 +141,12 @@ struct AppRowView: View {
                     Text(compactRouteLabel)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                    if routeSummary.missingCount > 0 {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(.orange)
+                            .accessibilityHidden(true)
+                    }
                     Image(systemName: "chevron.down")
                         .font(.system(size: 7, weight: .bold))
                         .foregroundStyle(.tertiary)
@@ -157,14 +158,40 @@ struct AppRowView: View {
                 Image(systemName: "headphones")
                     .foregroundStyle(.secondary)
                     .frame(width: 28, height: 28)
+                    .overlay(alignment: .topTrailing) {
+                        HStack(spacing: 1) {
+                            if routeSummary.isMultiOutput {
+                                Text("\(routeSummary.selectedCount)")
+                                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Color.white)
+                                    .padding(.horizontal, 4)
+                                    .frame(minHeight: 12)
+                                    .background(Color.accentColor, in: Capsule())
+                            }
+                            if routeSummary.missingCount > 0 {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                        .offset(x: 6, y: -3)
+                        .accessibilityHidden(true)
+                    }
             }
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
         .fixedSize(horizontal: !compact, vertical: true)
-        .accessibilityLabel("Output device")
-        .accessibilityValue(compactRouteLabel)
-        .help("Output: \(row.settings.route.label(devices: devices))")
+        .accessibilityLabel("Output route")
+        .accessibilityValue(routeSummary.accessibilityValue)
+        .help("Output: \(routeDetailLabel)")
+        .popover(isPresented: $isOutputPickerPresented, arrowEdge: .bottom) {
+            MultiOutputRoutePicker(
+                route: row.settings.route,
+                devices: devices,
+                onApply: onRoute,
+                onDismiss: { isOutputPickerPresented = false }
+            )
+        }
     }
 
     private func boostMenu(compact: Bool) -> some View {
@@ -257,7 +284,7 @@ struct AppRowView: View {
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                             .accessibilityHidden(true)
-                        outputMenu(compact: true)
+                        outputPickerButton(compact: true)
                             .layoutPriority(-1)
                     }
                 }

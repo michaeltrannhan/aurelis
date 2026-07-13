@@ -25,8 +25,10 @@ struct CoreAudioTapResources {
         ioProcID = nil
 
         if aggregate != AudioObjectID(kAudioObjectUnknown) {
-            CoreAudioAggregateCrashGuard.untrackDevice(aggregate)
-            _ = operations.destroyAggregateDevice(aggregate)
+            let status = operations.destroyAggregateDevice(aggregate)
+            if status == noErr {
+                CoreAudioAggregateCrashGuard.untrackDevice(aggregate)
+            }
         }
         aggregateDeviceID = AudioObjectID(kAudioObjectUnknown)
 

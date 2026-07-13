@@ -17,6 +17,25 @@ final class CoreAudioTapFailurePolicyTests: XCTestCase {
         )
     }
 
+    func testIncompatibleSampleRatesExplainTheSelectedRates() {
+        let failure = CoreAudioTapStartFailure.incompatibleSampleRates([44_100, 48_000])
+        XCTAssertEqual(
+            CoreAudioTapFailurePolicy.classify(failure),
+            .recoverable("Selected outputs use incompatible sample rates: 44100 Hz, 48000 Hz")
+        )
+        XCTAssertEqual(
+            failure.localizedDescription,
+            "Selected outputs use incompatible sample rates: 44100 Hz, 48000 Hz"
+        )
+    }
+
+    func testInactiveOutputsNameTheDeviceUIDs() {
+        XCTAssertEqual(
+            CoreAudioTapFailurePolicy.classify(.inactiveOutputDevices(["usb", "hdmi"])),
+            .recoverable("Core Audio could not activate output devices: usb, hdmi")
+        )
+    }
+
     func testUnsupportedAppCanBeIgnored() {
         XCTAssertEqual(
             CoreAudioTapFailurePolicy.classify(.unsupportedProcess),

@@ -41,12 +41,12 @@ Advanced parity after minimum viable parity:
 
 - hotkeys/HUD — done in code (Phase 8); Accessibility-grant verify pending
 - input device controls
-- multi-device output
+- multi-device output — done in code; real two-device verify pending
 - AutoEQ/presets
 - loudness/DDC/device inspector
 - automation/distribution
 
-**MVP status:** code-complete for Phases 0–8. Daily-use stabilization is in progress (`swift test`: 114 tests, 0 failures on 2026-07-12).
+**MVP status:** code-complete for Phases 0–8 and Phase 10. Daily-use stabilization is in progress (`swift test`: 168 tests, 0 failures on 2026-07-13).
 Not yet manually verified on real audio hardware — that is the remaining gate.
 
 ### Daily-use stabilization (2026-07-12)
@@ -56,7 +56,16 @@ Not yet manually verified on real audio hardware — that is the remaining gate.
 - Added a settings repository boundary, explicit termination flush, settings v3 migration, first-run guidance, atomic EQ reset, ignored-app restoration, reset confirmation, main-window routing parity, and popup keyboard volume adjustment.
 - Production builds no longer expose the mock/backend selector.
 - `AudioSessionCoordinator` now owns backend lifecycle, observation, switching, and tap synchronization; `AudioPermissionCoordinator` owns capture-permission mapping/actions. Volume and EQ gestures coalesce intermediate backend commands and JSON writes, then flush on release.
-- Still pending from the daily-use plan: Accessibility integration in the permission coordinator, real app icons, popup filtering/reorder UI, EQ bypass/visual editor, dynamic stream sample rate, diagnostics export, UI tests, and the manual hardware matrix.
+- Still pending from the daily-use plan: Accessibility integration in the permission coordinator, real app icons, popup filtering/reorder UI, EQ bypass/visual editor, diagnostics export, UI tests, and the manual hardware matrix.
+
+### Phase 10 implementation (2026-07-13)
+
+- Added normalized ordered `.multiOutput([deviceUID])` routes, resolver fallback for partially/all-missing selections, and persistence round trips.
+- The tap controller now creates one private non-stacked aggregate containing every resolved output; the first output is main/clock and followers use drift compensation.
+- Controller caches/rebuild decisions use ordered UID and nominal-rate topology signatures; route rebuild failures preserve the previous route/controller, use retry backoff, and stay outside the realtime callback.
+- Persisted non-default route/DSP state is replayed before initial tap synchronization and again after backend replacement. Aggregate sample-rate changes update EQ/gain-ramp coefficients on the render queue.
+- Added matching-rate and active-subdevice validation, system-default aggregate expansion, a staged per-app checklist popover, priority/count/missing indicators, aggregate/UID-less discovery filtering, and focused backend/store/UI coverage.
+- Automated verification: `swift test` passes 168 tests. Real two-device playback, heterogeneous-device latency, and disconnect/reconnect remain manual gates.
 
 ## Phase Table
 
@@ -72,7 +81,7 @@ Not yet manually verified on real audio hardware — that is the remaining gate.
 | 7 | Popup And Settings Parity | Complete (code) | Phase 1 service contracts | Track B | Core UI parity complete |
 | 8 | Media Keys, Hotkeys, HUD, And Menu Bar Icon | Complete (code; grant/key verify pending) | Phase 3 target-selection contract | Track B | External controls work without opening popup |
 | 9 | Input Device Control | Planned | Phase 0 device model expansion | Track C | Input devices discovered and controllable where supported |
-| 10 | Multi-Device Output | Planned | Phase 5 | Track A/C | One app can play through multiple outputs |
+| 10 | Multi-Device Output | Complete (code; 2-device/latency verify pending) | Phase 5 | Track A/C | One app can play through multiple outputs |
 | 11 | EQ Presets And AutoEQ | Planned | Phase 4 | Track B | Presets and AutoEQ profiles update live EQ |
 | 12 | Loudness And Device Volume Enhancements | Planned | Phase 4, Phase 5 | Track C | Loudness, alert volume, software volume, DDC scoped and safe |
 | 13 | Device Inspector, Automation, And Distribution | Planned | Phase 6 public command model | Track D | Release-quality inspector, automation, signing/update path |
@@ -81,7 +90,7 @@ Not yet manually verified on real audio hardware — that is the remaining gate.
 
 - Phases 2–4 were implemented ahead of Phases 0–1. Phase 2's tap-only boundary was skipped: the current tap manager creates full IOProc/aggregate controllers (Phase 3 scope).
 - Phases 3–4 pass automated tests (`swift test`, 46 tests). Manual audio verification via `.build/EQMacRep.app` is still outstanding.
-- Phase 4 uses a hardcoded 48 kHz EQ sample rate in `CoreAudioTapIOController`; dynamic stream sample rate is still TODO.
+- Phase 4 originally used a hardcoded 48 kHz EQ sample rate; Phase 10 now reads and observes the aggregate's nominal rate and rebuilds when physical rate signatures change.
 - Phase 7 has partial UI work (appearance, density, main window, EQ panel) but not tabbed settings or keyboard/scroll-wheel parity.
 
 ### Implementation notes (2026-07-07 session — COMPILED + TESTS GREEN)
@@ -179,7 +188,7 @@ Phase 8 hotkeys/HUD and Phase 11 presets may start after their contracts are sta
 - Phase 7: Popup And Settings Parity — **in progress**
 - Phase 8: Media Keys, Hotkeys, HUD, And Menu Bar Icon
 - Phase 9: Input Device Control
-- Phase 10: Multi-Device Output
+- Phase 10: Multi-Device Output — **complete in code; manual verify pending**
 - Phase 11: EQ Presets And AutoEQ
 
 Run as parallel tracks only with disjoint file ownership.
@@ -200,7 +209,7 @@ These should not block minimum viable parity.
 5. Phase 7: Popup And Settings Parity — settings tabs, keyboard nav, scroll-wheel volume
 6. Phase 8: Media Keys, Hotkeys, HUD, And Menu Bar Icon
 7. Phase 9: Input Device Control
-8. Phase 10: Multi-Device Output
+8. Phase 10: Multi-Device Output — code complete; manual hardware verify pending
 9. Phase 11: EQ Presets And AutoEQ
 10. Phase 12: Loudness And Device Volume Enhancements
 11. Phase 13: Device Inspector, Automation, And Distribution

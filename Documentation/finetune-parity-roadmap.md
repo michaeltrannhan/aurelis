@@ -35,12 +35,13 @@ Last audited: 2026-07-08. See `Documentation/phase-tracker.md` for active phase 
 - [x] Stability/recovery hardening (orphan cleanup, crash guard, retry cap, health) — Phase 6
 - [x] Settings tabs + keyboard nav + scroll-wheel volume + reorder — Phase 7
 - [x] Media keys, global hotkeys, HUD, dynamic menu-bar icon — Phase 8
+- [x] Ordered per-app multi-output routing with private aggregate devices — Phase 10
 - [ ] Manual audio/hardware verification for all of the above (owned by user)
-- [ ] Input devices, multi-output, presets/AutoEQ, loudness/DDC, inspector — Phases 9–12
+- [ ] Input devices, presets/AutoEQ, loudness/DDC, inspector — Phases 9, 11–12
 - [ ] Packaging (signing, notarization, updater) — Phase 13
 
-All Phase 0–8 code builds and passes `swift test` (104 tests, 0 failures) as of
-2026-07-08. Remaining items need real hardware, permission grants, or an Apple
+All Phase 0–8 and Phase 10 code builds and passes `swift test` (168 tests, 0 failures) as of
+2026-07-13. Remaining items need real hardware, permission grants, or an Apple
 Developer certificate.
 
 ## Parallelization Model
@@ -136,7 +137,7 @@ Do not parallelize two tasks that both edit tap lifecycle, route switching, or D
 
 **Goal:** Apply stored EQ curves to real tapped app audio.
 
-**Status:** Complete in code; manual audio verify and dynamic sample rate pending.
+**Status:** Complete in code; manual audio verify pending. Aggregate nominal sample rate is applied before IO starts and observed for live coefficient updates.
 
 **Acceptance criteria:**
 
@@ -148,24 +149,22 @@ Do not parallelize two tasks that both edit tap lifecycle, route switching, or D
 - [x] Tests cover coefficient generation and curve mapping.
 - [ ] Manual test confirms audible EQ change and no obvious crackle.
 
-**Remaining:** Read aggregate stream sample rate instead of hardcoded 48 kHz in `CoreAudioTapIOController`.
-
 **Parallelizable:** Preset UI can start only after EQ model and DSP API are stable.
 
 ## Phase 5: Single-Device Routing
 
 **Goal:** Route each tapped app to one selected output device, with follow-default as baseline.
 
-**Status:** Not started (~5%). `DeviceRoute` exists in persistence only.
+**Status:** Complete in code; second-device manual verification pending.
 
 **Acceptance criteria:**
 
 - [x] App route can follow default output device.
-- [ ] App route can select one specific output device.
-- [ ] Device changes are reflected in route validity.
-- [ ] Missing selected device falls back safely.
-- [ ] Switching route has safe teardown/rebuild order.
-- [ ] UI clearly shows selected route per app.
+- [x] App route can select one specific output device.
+- [x] Device changes are reflected in route validity.
+- [x] Missing selected device falls back safely.
+- [x] Switching route has safe teardown/rebuild order.
+- [x] UI clearly shows selected route per app.
 - [ ] Manual test confirms two apps can target different devices.
 
 **Parallelizable:** Device picker UI can run parallel after route model is agreed.
@@ -241,14 +240,16 @@ Do not parallelize two tasks that both edit tap lifecycle, route switching, or D
 
 **Goal:** Support routing one app to multiple output devices.
 
+**Status:** Complete in code; real two-device and heterogeneous-latency verification pending.
+
 **Acceptance criteria:**
 
-- [ ] Multi-output route mode exists per app.
-- [ ] User can select multiple output devices.
-- [ ] Aggregate device creation and teardown are deterministic.
-- [ ] Device drift/sync problems are handled or surfaced.
-- [ ] Multi-output badge appears in app row.
-- [ ] Single-device route still works.
+- [x] Multi-output route mode exists per app.
+- [x] User can select multiple output devices.
+- [x] Aggregate device creation and teardown are deterministic.
+- [x] Device drift/sync problems are handled or surfaced.
+- [x] Multi-output badge appears in app row.
+- [x] Single-device route still works.
 - [ ] Manual test confirms one app plays on two devices.
 
 **Parallelizable:** UI picker can run parallel after aggregate manager API is agreed. Backend internals should stay single-owner.

@@ -18,8 +18,12 @@ protocol CoreAudioRealtimeTapControlling: AnyObject {
 /// Route control seam the backend uses to feed the available device list and
 /// per-app route selection into the tap manager.
 protocol CoreAudioRouteControlling: AnyObject {
-    func setAvailableOutputUIDs(_ outputUIDs: [String], defaultOutputUID: String?)
-    func setRoute(_ identity: AudioAppIdentity, _ route: DeviceRoute)
+    func setAvailableOutputUIDs(
+        _ outputUIDs: [String],
+        defaultOutputUIDs: [String],
+        nominalSampleRatesByUID: [String: Double]
+    )
+    func setRoute(_ identity: AudioAppIdentity, _ route: DeviceRoute) throws
 }
 
 /// Health-reporting seam so the backend can surface active-tap and issue counts.
@@ -35,6 +39,7 @@ protocol CoreAudioTapOperating: AnyObject {
 enum CoreAudioTapError: LocalizedError {
     case unsupportedOS
     case createFailed(identity: AudioAppIdentity, status: OSStatus)
+    case setupFailed(identity: AudioAppIdentity, operation: String, status: OSStatus)
     case destroyFailed(tapObjectID: AudioObjectID, status: OSStatus)
 
     var errorDescription: String? {
@@ -43,6 +48,8 @@ enum CoreAudioTapError: LocalizedError {
             return "CoreAudio process taps require macOS 14.2 or newer"
         case let .createFailed(identity, status):
             return "Failed to create process tap for \(identity.rawValue): \(status)"
+        case let .setupFailed(identity, operation, status):
+            return "\(operation) failed for \(identity.rawValue): \(status)"
         case let .destroyFailed(tapObjectID, status):
             return "Failed to destroy process tap \(tapObjectID): \(status)"
         }
@@ -86,30 +93,50 @@ final class SystemCoreAudioTapOperations: CoreAudioTapOperating {
 }
 
 final class CoreAudioProcessTapManager: CoreAudioTapManaging, CoreAudioRouteControlling, CoreAudioTapHealthReporting {
-    var defaultOutputDeviceUID: String?
+    private struct OutputConfiguration: Equatable {
+        var outputUIDs: [String]
+        var nominalSampleRatesByUID: [String: Double]
+    }
+
+    var defaultOutputDeviceUIDs: [String] = []
+    var defaultOutputDeviceUID: String? {
+        get { defaultOutputDeviceUIDs.first }
+        set { defaultOutputDeviceUIDs = newValue.map { [$0] } ?? [] }
+    }
 
     private let operations: CoreAudioTapOperating
-    private let controllerFactory: (CoreAudioTapTarget, String, CoreAudioRealtimeGainState) throws -> CoreAudioActiveTapControlling
+    private let controllerFactory: (CoreAudioTapTarget, [String], CoreAudioRealtimeGainState) throws -> CoreAudioActiveTapControlling
     private var sessionsByIdentity: [AudioAppIdentity: CoreAudioTapSession] = [:]
     private var controllersByIdentity: [AudioAppIdentity: CoreAudioActiveTapControlling] = [:]
     private var gainStatesByIdentity: [AudioAppIdentity: CoreAudioRealtimeGainState] = [:]
     private var targetsByIdentity: [AudioAppIdentity: CoreAudioTapTarget] = [:]
     private var routesByIdentity: [AudioAppIdentity: DeviceRoute] = [:]
-    private var resolvedOutputUIDByIdentity: [AudioAppIdentity: String] = [:]
+    private var outputConfigurationsByIdentity: [AudioAppIdentity: OutputConfiguration] = [:]
     private var availableOutputUIDs: [String] = []
+    private var nominalSampleRatesByUID: [String: Double] = [:]
     private let maxStartAttempts: Int
     private var attemptsByIdentity: [AudioAppIdentity: Int] = [:]
     private var failuresByIdentity: [AudioAppIdentity: CoreAudioTapFailureDecision] = [:]
+    private var failedAutomaticConfigurationsByIdentity: [AudioAppIdentity: OutputConfiguration] = [:]
+    private var automaticRetryAfterByIdentity: [AudioAppIdentity: Date] = [:]
+    private var automaticRetryCountsByIdentity: [AudioAppIdentity: Int] = [:]
+    private var automaticRetryWorkItemsByIdentity: [AudioAppIdentity: DispatchWorkItem] = [:]
+    private let automaticRetryCooldown: TimeInterval
+    private let now: () -> Date
 
     init(
         operations: CoreAudioTapOperating = SystemCoreAudioTapOperations(),
         maxStartAttempts: Int = 3,
-        controllerFactory: @escaping (CoreAudioTapTarget, String, CoreAudioRealtimeGainState) throws -> CoreAudioActiveTapControlling = {
-            CoreAudioTapIOController(target: $0, outputDeviceUID: $1, initialGainState: $2)
+        automaticRetryCooldown: TimeInterval = 1,
+        now: @escaping () -> Date = Date.init,
+        controllerFactory: @escaping (CoreAudioTapTarget, [String], CoreAudioRealtimeGainState) throws -> CoreAudioActiveTapControlling = {
+            CoreAudioTapIOController(target: $0, outputDeviceUIDs: $1, initialGainState: $2)
         }
     ) {
         self.operations = operations
         self.maxStartAttempts = max(maxStartAttempts, 1)
+        self.automaticRetryCooldown = max(automaticRetryCooldown, 0)
+        self.now = now
         self.controllerFactory = controllerFactory
     }
 
@@ -152,7 +179,7 @@ final class CoreAudioProcessTapManager: CoreAudioTapManaging, CoreAudioRouteCont
                 let session = try createSession(for: target)
                 sessionsByIdentity[target.identity] = session
                 attemptsByIdentity[target.identity] = 0
-                failuresByIdentity.removeValue(forKey: target.identity)
+                updateRouteAvailabilityHealth(for: target.identity)
             } catch {
                 attemptsByIdentity[target.identity, default: 0] += 1
                 failuresByIdentity[target.identity] = classifyFailure(error)
@@ -161,10 +188,14 @@ final class CoreAudioProcessTapManager: CoreAudioTapManaging, CoreAudioRouteCont
     }
 
     func tearDown(identity: AudioAppIdentity) throws {
-        resolvedOutputUIDByIdentity.removeValue(forKey: identity)
+        outputConfigurationsByIdentity.removeValue(forKey: identity)
         targetsByIdentity.removeValue(forKey: identity)
         attemptsByIdentity.removeValue(forKey: identity)
         failuresByIdentity.removeValue(forKey: identity)
+        failedAutomaticConfigurationsByIdentity.removeValue(forKey: identity)
+        automaticRetryAfterByIdentity.removeValue(forKey: identity)
+        automaticRetryCountsByIdentity.removeValue(forKey: identity)
+        automaticRetryWorkItemsByIdentity.removeValue(forKey: identity)?.cancel()
         guard let session = sessionsByIdentity.removeValue(forKey: identity) else { return }
         if let controller = controllersByIdentity.removeValue(forKey: identity) {
             controller.stop()
@@ -187,9 +218,14 @@ final class CoreAudioProcessTapManager: CoreAudioTapManaging, CoreAudioRouteCont
         }
         controllersByIdentity.removeAll()
         sessionsByIdentity.removeAll()
-        resolvedOutputUIDByIdentity.removeAll()
+        outputConfigurationsByIdentity.removeAll()
         attemptsByIdentity.removeAll()
         failuresByIdentity.removeAll()
+        failedAutomaticConfigurationsByIdentity.removeAll()
+        automaticRetryAfterByIdentity.removeAll()
+        automaticRetryCountsByIdentity.removeAll()
+        for workItem in automaticRetryWorkItemsByIdentity.values { workItem.cancel() }
+        automaticRetryWorkItemsByIdentity.removeAll()
         targetsByIdentity.removeAll()
     }
 
@@ -203,6 +239,8 @@ final class CoreAudioProcessTapManager: CoreAudioTapManaging, CoreAudioRouteCont
                 return .unsupported("App cannot be tapped")
             case let .createFailed(_, status):
                 return CoreAudioTapFailurePolicy.classify(.osStatus(status, operation: "Tap create"))
+            case let .setupFailed(_, operation, status):
+                return CoreAudioTapFailurePolicy.classify(.osStatus(status, operation: operation))
             case let .destroyFailed(_, status):
                 return CoreAudioTapFailurePolicy.classify(.osStatus(status, operation: "Tap destroy"))
             }
@@ -217,64 +255,240 @@ final class CoreAudioProcessTapManager: CoreAudioTapManaging, CoreAudioRouteCont
     // MARK: Routing
 
     /// Updates the set of available output devices and the current default, then
-    /// rebuilds only the controllers whose resolved output UID changed (e.g. a
-    /// followed default flipped, or a selected device disappeared).
-    func setAvailableOutputUIDs(_ outputUIDs: [String], defaultOutputUID: String?) {
+    /// rebuilds only controllers whose resolved UID/rate configuration changed
+    /// (e.g. a followed default flipped, a device disappeared, or its rate moved).
+    func setAvailableOutputUIDs(
+        _ outputUIDs: [String],
+        defaultOutputUIDs: [String],
+        nominalSampleRatesByUID: [String: Double]
+    ) {
+        let topologyChanged = availableOutputUIDs != outputUIDs
+            || defaultOutputDeviceUIDs != defaultOutputUIDs
+            || self.nominalSampleRatesByUID != nominalSampleRatesByUID
         availableOutputUIDs = outputUIDs
-        defaultOutputDeviceUID = defaultOutputUID
+        defaultOutputDeviceUIDs = defaultOutputUIDs
+        self.nominalSampleRatesByUID = nominalSampleRatesByUID
+        if topologyChanged {
+            for identity in targetsByIdentity.keys where sessionsByIdentity[identity] == nil {
+                attemptsByIdentity[identity] = 0
+            }
+        }
         for identity in Array(sessionsByIdentity.keys) {
-            rebuildControllerIfResolvedRouteChanged(identity)
+            let attemptedConfiguration = resolvedOutputConfiguration(for: identity)
+            let isCoolingDown = failedAutomaticConfigurationsByIdentity[identity] == attemptedConfiguration
+                && automaticRetryAfterByIdentity[identity, default: .distantPast] > now()
+            guard !isCoolingDown else {
+                continue
+            }
+            do {
+                if controllersByIdentity[identity] == nil {
+                    try replaceTapOnlySessionIfOutputBecameAvailable(identity)
+                } else {
+                    try rebuildControllerIfResolvedRouteChanged(identity)
+                }
+                failedAutomaticConfigurationsByIdentity.removeValue(forKey: identity)
+                automaticRetryAfterByIdentity.removeValue(forKey: identity)
+                automaticRetryCountsByIdentity.removeValue(forKey: identity)
+                automaticRetryWorkItemsByIdentity.removeValue(forKey: identity)?.cancel()
+                updateRouteAvailabilityHealth(for: identity)
+            } catch {
+                recordAutomaticFailure(error, configuration: attemptedConfiguration, for: identity)
+            }
         }
     }
 
-    /// Sets the per-app route and rebuilds that one controller if its resolved
-    /// output UID changed. Rebuild happens outside the realtime callback.
-    func setRoute(_ identity: AudioAppIdentity, _ route: DeviceRoute) {
-        routesByIdentity[identity] = route
-        rebuildControllerIfResolvedRouteChanged(identity)
+    func setAvailableOutputUIDs(_ outputUIDs: [String], defaultOutputUIDs: [String]) {
+        setAvailableOutputUIDs(
+            outputUIDs,
+            defaultOutputUIDs: defaultOutputUIDs,
+            nominalSampleRatesByUID: [:]
+        )
     }
 
-    func resolvedOutputUID(for identity: AudioAppIdentity) -> String? {
+    /// Source-compatible convenience for callers with an ordinary single
+    /// system-default output.
+    func setAvailableOutputUIDs(_ outputUIDs: [String], defaultOutputUID: String?) {
+        setAvailableOutputUIDs(
+            outputUIDs,
+            defaultOutputUIDs: defaultOutputUID.map { [$0] } ?? [],
+            nominalSampleRatesByUID: [:]
+        )
+    }
+
+    /// Sets the per-app route and rebuilds that one controller if its ordered
+    /// output UID list changed. Rebuild happens outside the realtime callback.
+    func setRoute(_ identity: AudioAppIdentity, _ route: DeviceRoute) throws {
+        let previousRoute = routesByIdentity[identity]
+        routesByIdentity[identity] = route.normalized
+        // Applying a route is an explicit retry, even when the same automatic
+        // topology signature previously failed.
+        failedAutomaticConfigurationsByIdentity.removeValue(forKey: identity)
+        automaticRetryAfterByIdentity.removeValue(forKey: identity)
+        automaticRetryCountsByIdentity.removeValue(forKey: identity)
+        automaticRetryWorkItemsByIdentity.removeValue(forKey: identity)?.cancel()
+        attemptsByIdentity[identity] = 0
+        do {
+            if controllersByIdentity[identity] == nil {
+                try replaceTapOnlySessionIfOutputBecameAvailable(identity)
+            } else {
+                try rebuildControllerIfResolvedRouteChanged(identity)
+            }
+            updateRouteAvailabilityHealth(for: identity)
+        } catch {
+            routesByIdentity[identity] = previousRoute
+            failuresByIdentity[identity] = classifyFailure(error)
+            throw error
+        }
+    }
+
+    func resolvedOutputUIDs(for identity: AudioAppIdentity) -> [String] {
         let resolver = CoreAudioRouteResolver(
             availableOutputUIDs: availableOutputUIDs,
-            defaultOutputUID: defaultOutputDeviceUID
+            defaultOutputUIDs: defaultOutputDeviceUIDs
         )
-        return resolver.resolve(routesByIdentity[identity] ?? .followDefault).outputDeviceUID
+        return resolver.resolve(routesByIdentity[identity] ?? .followDefault).outputDeviceUIDs
     }
 
-    private func rebuildControllerIfResolvedRouteChanged(_ identity: AudioAppIdentity) {
+    private func resolvedOutputConfiguration(for identity: AudioAppIdentity) -> OutputConfiguration {
+        let outputUIDs = resolvedOutputUIDs(for: identity)
+        var resolvedRates: [String: Double] = [:]
+        for uid in outputUIDs {
+            if let sampleRate = nominalSampleRatesByUID[uid] {
+                resolvedRates[uid] = sampleRate
+            }
+        }
+        return OutputConfiguration(outputUIDs: outputUIDs, nominalSampleRatesByUID: resolvedRates)
+    }
+
+    /// Compatibility helper for consumers that only need the clock/main output.
+    func resolvedOutputUID(for identity: AudioAppIdentity) -> String? {
+        resolvedOutputUIDs(for: identity).first
+    }
+
+    private func rebuildControllerIfResolvedRouteChanged(_ identity: AudioAppIdentity) throws {
         guard let target = targetsByIdentity[identity],
               controllersByIdentity[identity] != nil else { return }
-        let newUID = resolvedOutputUID(for: identity)
-        guard newUID != resolvedOutputUIDByIdentity[identity] else { return }
-        guard let newUID else { return }
+        let newConfiguration = resolvedOutputConfiguration(for: identity)
+        let newUIDs = newConfiguration.outputUIDs
+        guard newConfiguration != outputConfigurationsByIdentity[identity] else { return }
+        guard !newUIDs.isEmpty else { throw CoreAudioTapStartFailure.deviceUnavailable }
 
         // Deterministic switch: build+start the new controller, then stop the old.
         let gainState = gainStatesByIdentity[identity] ?? CoreAudioRealtimeGainState(volume: 1, boost: .x1, isMuted: false)
-        guard let controller = try? controllerFactory(target, newUID, gainState),
-              let session = try? controller.start() else {
-            return
-        }
+        let controller = try controllerFactory(target, newUIDs, gainState)
+        let session = try controller.start()
         let old = controllersByIdentity[identity]
         controllersByIdentity[identity] = controller
         sessionsByIdentity[identity] = session
-        resolvedOutputUIDByIdentity[identity] = newUID
+        outputConfigurationsByIdentity[identity] = newConfiguration
         old?.stop()
+    }
+
+    /// A target can initially have only an unmuted process tap when no route is
+    /// available. Promote that placeholder to a full controller as soon as an
+    /// output appears; otherwise the controller-only rebuild guard would leave it
+    /// permanently unrouted.
+    private func replaceTapOnlySessionIfOutputBecameAvailable(_ identity: AudioAppIdentity) throws {
+        guard controllersByIdentity[identity] == nil,
+              let target = targetsByIdentity[identity],
+              let oldSession = sessionsByIdentity[identity] else { return }
+        let outputDeviceUIDs = resolvedOutputUIDs(for: identity)
+        guard !outputDeviceUIDs.isEmpty else { return }
+
+        // Start the routed controller before removing the placeholder, so a
+        // failed promotion leaves the existing unmuted tap intact and retryable.
+        let gainState = gainStatesByIdentity[identity] ?? CoreAudioRealtimeGainState(volume: 1, boost: .x1, isMuted: false)
+        let controller = try controllerFactory(target, outputDeviceUIDs, gainState)
+        let session = try controller.start()
+        do {
+            try operations.destroyTap(oldSession.tapObjectID)
+        } catch {
+            controller.stop()
+            throw error
+        }
+
+        controllersByIdentity[identity] = controller
+        sessionsByIdentity[identity] = session
+        outputConfigurationsByIdentity[identity] = resolvedOutputConfiguration(for: identity)
+        attemptsByIdentity[identity] = 0
     }
 
     private func createSession(for target: CoreAudioTapTarget) throws -> CoreAudioTapSession {
         targetsByIdentity[target.identity] = target
-        let resolvedUID = resolvedOutputUID(for: target.identity) ?? defaultOutputDeviceUID
-        guard let outputDeviceUID = resolvedUID else {
+        let outputDeviceUIDs = resolvedOutputUIDs(for: target.identity)
+        guard !outputDeviceUIDs.isEmpty else {
             return try operations.createTap(for: target)
         }
 
         let gainState = gainStatesByIdentity[target.identity] ?? CoreAudioRealtimeGainState(volume: 1, boost: .x1, isMuted: false)
-        let controller = try controllerFactory(target, outputDeviceUID, gainState)
+        let controller = try controllerFactory(target, outputDeviceUIDs, gainState)
         let session = try controller.start()
         controllersByIdentity[target.identity] = controller
-        resolvedOutputUIDByIdentity[target.identity] = outputDeviceUID
+        outputConfigurationsByIdentity[target.identity] = resolvedOutputConfiguration(for: target.identity)
         return session
+    }
+
+    private func updateRouteAvailabilityHealth(for identity: AudioAppIdentity) {
+        if sessionsByIdentity[identity] != nil, controllersByIdentity[identity] == nil {
+            failuresByIdentity[identity] = CoreAudioTapFailurePolicy.classify(.deviceUnavailable)
+        } else {
+            failuresByIdentity.removeValue(forKey: identity)
+        }
+    }
+
+    private func recordAutomaticFailure(
+        _ error: Error,
+        configuration: OutputConfiguration,
+        for identity: AudioAppIdentity
+    ) {
+        if failedAutomaticConfigurationsByIdentity[identity] != configuration {
+            automaticRetryCountsByIdentity[identity] = 0
+        }
+        failedAutomaticConfigurationsByIdentity[identity] = configuration
+        let attempt = automaticRetryCountsByIdentity[identity, default: 0] + 1
+        automaticRetryCountsByIdentity[identity] = attempt
+        failuresByIdentity[identity] = classifyFailure(error)
+
+        automaticRetryWorkItemsByIdentity.removeValue(forKey: identity)?.cancel()
+        guard attempt < maxStartAttempts else {
+            // Keep this exact failed configuration suppressed after the cap.
+            // A topology/rate change bypasses the signature and explicit route
+            // application clears it immediately.
+            automaticRetryAfterByIdentity[identity] = .distantFuture
+            return
+        }
+
+        let delay = automaticRetryCooldown * pow(2, Double(attempt - 1))
+        automaticRetryAfterByIdentity[identity] = now().addingTimeInterval(delay)
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.performAutomaticRetry(for: identity, expectedConfiguration: configuration)
+        }
+        automaticRetryWorkItemsByIdentity[identity] = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    private func performAutomaticRetry(
+        for identity: AudioAppIdentity,
+        expectedConfiguration: OutputConfiguration
+    ) {
+        automaticRetryWorkItemsByIdentity.removeValue(forKey: identity)
+        guard sessionsByIdentity[identity] != nil,
+              failedAutomaticConfigurationsByIdentity[identity] == expectedConfiguration,
+              resolvedOutputConfiguration(for: identity) == expectedConfiguration else { return }
+
+        do {
+            if controllersByIdentity[identity] == nil {
+                try replaceTapOnlySessionIfOutputBecameAvailable(identity)
+            } else {
+                try rebuildControllerIfResolvedRouteChanged(identity)
+            }
+            failedAutomaticConfigurationsByIdentity.removeValue(forKey: identity)
+            automaticRetryAfterByIdentity.removeValue(forKey: identity)
+            automaticRetryCountsByIdentity.removeValue(forKey: identity)
+            updateRouteAvailabilityHealth(for: identity)
+        } catch {
+            recordAutomaticFailure(error, configuration: expectedConfiguration, for: identity)
+        }
     }
 }
 

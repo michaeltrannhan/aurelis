@@ -49,6 +49,22 @@ enum CoreAudioPropertyReader {
         return value != 0
     }
 
+    static func double(
+        objectID: AudioObjectID,
+        selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
+        element: AudioObjectPropertyElement = kAudioObjectPropertyElementMain
+    ) throws -> Double {
+        var address = propertyAddress(selector: selector, scope: scope, element: element)
+        var value: Float64 = 0
+        var size = UInt32(MemoryLayout<Float64>.size)
+        let status = AudioObjectGetPropertyData(objectID, &address, 0, nil, &size, &value)
+        guard status == noErr else {
+            throw CoreAudioDiscoveryError.propertyReadFailed(objectID: objectID, selector: selector, status: status)
+        }
+        return value
+    }
+
     static func array<T: FixedWidthInteger>(
         objectID: AudioObjectID,
         selector: AudioObjectPropertySelector,
@@ -90,6 +106,27 @@ enum CoreAudioPropertyReader {
             throw CoreAudioDiscoveryError.propertyReadFailed(objectID: objectID, selector: selector, status: status)
         }
         return value?.takeRetainedValue() as String? ?? ""
+    }
+
+    /// Reads a Core Audio property whose value is a retained `CFArray` of
+    /// `CFString` values, such as an aggregate device's ordered subdevice UIDs.
+    static func stringArray(
+        objectID: AudioObjectID,
+        selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
+        element: AudioObjectPropertyElement = kAudioObjectPropertyElementMain
+    ) throws -> [String] {
+        var address = propertyAddress(selector: selector, scope: scope, element: element)
+        var value: Unmanaged<CFArray>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFArray>?>.size)
+        let status = withUnsafeMutablePointer(to: &value) { pointer in
+            AudioObjectGetPropertyData(objectID, &address, 0, nil, &size, pointer)
+        }
+        guard status == noErr else {
+            throw CoreAudioDiscoveryError.propertyReadFailed(objectID: objectID, selector: selector, status: status)
+        }
+        guard let value else { return [] }
+        return (value.takeRetainedValue() as NSArray).compactMap { $0 as? String }
     }
 
     static func hasProperty(

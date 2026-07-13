@@ -47,6 +47,16 @@ final class CustomizationTests: XCTestCase {
         XCTAssertEqual(DeviceRoute.followDefault.label(devices: devices), "Follow Default (MacBook Speakers)")
         XCTAssertEqual(DeviceRoute.selectedDevice("usb").label(devices: devices), "USB DAC")
         XCTAssertEqual(DeviceRoute.selectedDevice("missing").label(devices: devices), "Missing Device")
+        XCTAssertEqual(DeviceRoute.multiOutput(["usb", "built-in-output"]).label(devices: devices), "Multi-Output (2 devices)")
+    }
+
+    func testMultiOutputRouteNormalizesDuplicatesAndEmptySelection() {
+        XCTAssertEqual(
+            DeviceRoute.multiOutput(["usb", "usb", "built-in", "usb"]).normalized,
+            .multiOutput(["usb", "built-in"])
+        )
+        XCTAssertEqual(DeviceRoute.multiOutput([]).normalized, .followDefault)
+        XCTAssertEqual(DeviceRoute.multiOutput(["", "usb", ""]).normalized, .multiOutput(["usb"]))
     }
 
     func testSettingsTabsExposeExpectedSections() {

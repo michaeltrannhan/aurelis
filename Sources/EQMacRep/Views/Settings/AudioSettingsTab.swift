@@ -6,25 +6,21 @@ struct AudioSettingsTab: View {
     var body: some View {
         Form {
             Section("Audio Engine") {
+#if DEBUG
                 Picker("Backend", selection: settingsCustomizationBinding(store: store, \.backendMode)) {
                     ForEach(BackendMode.allCases) { mode in
                         Text(mode.label).tag(mode)
                     }
                 }
+#else
+                LabeledContent("Backend", value: "CoreAudio")
+#endif
                 settingsHelper("CoreAudio Discovery lists real apps and output devices. Realtime controls require Screen & System Audio Recording permission.")
             }
 
             Section("Permissions") {
-                Label(store.permissionState.summary, systemImage: store.permissionState.allowsProcessTaps ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(store.permissionState.allowsProcessTaps ? .green : .orange)
-                HStack {
-                    Button("Request Screen & System Audio Recording") {
-                        store.requestAudioCapturePermission()
-                    }
-                    Button("Open Privacy Settings") {
-                        store.openAudioCapturePrivacySettings()
-                    }
-                }
+                PermissionStatusView(store: store)
+                    .listRowInsets(EdgeInsets())
                 settingsHelper("Process taps only run when this shows ready. Without permission, EQMacRep stays in discovery-only mode.")
             }
 

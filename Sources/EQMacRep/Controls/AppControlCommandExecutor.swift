@@ -44,10 +44,10 @@ struct AppControlStoreExecutor {
         let step = store.settings.customization.volumeStep.fraction
         let next = AppControlCommandExecutor.nextSettings(settings: current, action: action, step: step)
         if next.volume != current.volume {
-            try? store.setVolume(next.volume, for: identity)
+            store.setVolumeIntent(next.volume, for: identity)
         }
         if next.isMuted != current.isMuted {
-            try? store.setMuted(next.isMuted, for: identity)
+            store.setMutedIntent(next.isMuted, for: identity)
         }
     }
 }

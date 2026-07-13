@@ -12,7 +12,7 @@ func settingsCustomizationBinding<Value>(
         set: { newValue in
             var customization = store.settings.customization
             customization[keyPath: keyPath] = newValue
-            try? store.applyCustomization(customization)
+            store.applyCustomizationIntent(customization)
         }
     )
 }

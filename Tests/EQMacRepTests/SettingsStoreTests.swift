@@ -89,6 +89,67 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(settings.customization.backendMode, .coreAudioDiscovery)
     }
 
+    func testOlderSettingsDefaultOnboardingToIncomplete() throws {
+        let data = Data("{\"version\":2}".utf8)
+        let decoded = try JSONDecoder().decode(PersistedSettings.self, from: data)
+        XCTAssertEqual(decoded.version, PersistedSettings.currentVersion)
+        XCTAssertFalse(decoded.hasCompletedOnboarding)
+    }
+
+    func testEnforcedBackendModeNormalizesAndMigratesPersistedMockMode() throws {
+        let url = uniqueSettingsURL()
+        let unrestrictedStore = SettingsStore(settingsURL: url)
+        var settings = PersistedSettings()
+        settings.customization.backendMode = .mock
+        try unrestrictedStore.save(settings)
+
+        let productionStore = SettingsStore(
+            settingsURL: url,
+            enforcedBackendMode: .coreAudioDiscovery
+        )
+
+        XCTAssertEqual(try productionStore.load().customization.backendMode, .coreAudioDiscovery)
+        XCTAssertEqual(try unrestrictedStore.load().customization.backendMode, .coreAudioDiscovery)
+    }
+
+    func testEnforcedBackendModeAlsoNormalizesFutureSaves() throws {
+        let url = uniqueSettingsURL()
+        let productionStore = SettingsStore(
+            settingsURL: url,
+            enforcedBackendMode: .coreAudioDiscovery
+        )
+        var settings = PersistedSettings()
+        settings.customization.backendMode = .mock
+
+        try productionStore.save(settings)
+
+        XCTAssertEqual(
+            try SettingsStore(settingsURL: url).load().customization.backendMode,
+            .coreAudioDiscovery
+        )
+    }
+
+    @MainActor
+    func testRepositoryDebouncesToLatestSettingsAndFlushes() async throws {
+        let url = uniqueSettingsURL()
+        let repository = AudioSettingsRepository(store: SettingsStore(settingsURL: url))
+        var first = PersistedSettings()
+        first.hasCompletedOnboarding = false
+        var latest = first
+        latest.hasCompletedOnboarding = true
+
+        repository.scheduleSave(first, debounceNanoseconds: 80_000_000)
+        repository.scheduleSave(latest, debounceNanoseconds: 80_000_000)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        try await Task.sleep(nanoseconds: 120_000_000)
+        XCTAssertTrue(try repository.load().hasCompletedOnboarding)
+
+        latest.hasCompletedOnboarding = false
+        repository.scheduleSave(latest, debounceNanoseconds: 1_000_000_000)
+        try repository.flush()
+        XCTAssertFalse(try repository.load().hasCompletedOnboarding)
+    }
+
     private func uniqueSettingsURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("EQMacRepTests-\(UUID().uuidString)", isDirectory: true)

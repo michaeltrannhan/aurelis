@@ -1,6 +1,7 @@
 import XCTest
 @testable import EQMacRep
 
+@MainActor
 final class AudioCapturePermissionTests: XCTestCase {
     func testMissingUsageDescriptionBlocksTapAttempt() {
         let state = AudioCapturePermissionState(
@@ -42,6 +43,16 @@ final class AudioCapturePermissionTests: XCTestCase {
         XCTAssertEqual(state.summary, "Screen & System Audio Recording not requested")
     }
 
+    func testPendingRestartBlocksTapsWithRelaunchSummary() {
+        let state = AudioCapturePermissionState(
+            screenCapture: .pendingRestart,
+            audioUsageDescription: .present
+        )
+
+        XCTAssertFalse(state.allowsProcessTaps)
+        XCTAssertEqual(state.summary, "Relaunch EQMacRep to finish enabling audio capture")
+    }
+
     func testPrivacySettingsURLIsStable() {
         XCTAssertEqual(
             SystemAudioCapturePermissionClient.privacySettingsURL.absoluteString,
@@ -58,4 +69,56 @@ final class AudioCapturePermissionTests: XCTestCase {
         XCTAssertEqual(present.currentState().audioUsageDescription, .present)
         XCTAssertEqual(missing.currentState().audioUsageDescription, .missing)
     }
+
+    func testSystemClientClassifiesRejectedRequestAsDenied() {
+        let client = SystemAudioCapturePermissionClient(
+            infoDictionary: ["NSAudioCaptureUsageDescription": "Because taps."],
+            preflightScreenCaptureAccess: { false },
+            requestSystemScreenCaptureAccess: { false }
+        )
+
+        XCTAssertEqual(client.requestScreenCaptureAccess().screenCapture, .denied)
+    }
+
+    func testSystemClientClassifiesAcceptedInactiveGrantAsPendingRestart() {
+        let client = SystemAudioCapturePermissionClient(
+            infoDictionary: ["NSAudioCaptureUsageDescription": "Because taps."],
+            preflightScreenCaptureAccess: { false },
+            requestSystemScreenCaptureAccess: { true }
+        )
+
+        XCTAssertEqual(client.requestScreenCaptureAccess().screenCapture, .pendingRestart)
+    }
+
+    func testSystemClientClassifiesActiveGrantAsGranted() {
+        let client = SystemAudioCapturePermissionClient(
+            infoDictionary: ["NSAudioCaptureUsageDescription": "Because taps."],
+            preflightScreenCaptureAccess: { true },
+            requestSystemScreenCaptureAccess: { true }
+        )
+
+        XCTAssertEqual(client.requestScreenCaptureAccess().screenCapture, .granted)
+    }
+
+    func testCoordinatorKeepsDeniedStateAcrossAmbiguousPreflightRefresh() {
+        let client = RejectedPermissionClient()
+        let coordinator = AudioPermissionCoordinator(client: client)
+
+        XCTAssertEqual(coordinator.requestAudioCapture().screenCapture, .denied)
+        XCTAssertEqual(coordinator.refresh().screenCapture, .denied)
+        XCTAssertEqual(coordinator.requirements.first?.state, .denied)
+    }
+}
+
+private final class RejectedPermissionClient: AudioCapturePermissionClient {
+    func currentState() -> AudioCapturePermissionState {
+        .init(screenCapture: .notDetermined, audioUsageDescription: .present)
+    }
+
+    func requestScreenCaptureAccess() -> AudioCapturePermissionState {
+        .init(screenCapture: .denied, audioUsageDescription: .present)
+    }
+
+    func openPrivacySettings() {}
+    func relaunchApp() {}
 }

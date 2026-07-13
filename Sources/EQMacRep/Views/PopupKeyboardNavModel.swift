@@ -27,4 +27,30 @@ final class PopupKeyboardNavModel {
         }
         return orderedAppIDs[index - 1]
     }
+
+    /// Return acts on the current row, or on the first visible row when keyboard
+    /// navigation has not established a selection yet.
+    func returnActionTarget(for current: AudioAppIdentity?) -> AudioAppIdentity? {
+        if let current, orderedAppIDs.contains(current) {
+            return current
+        }
+        return orderedAppIDs.first
+    }
+}
+
+/// Chooses a stable target for the header's quick controls. An explicit popup
+/// selection wins; otherwise use the first active row in the persisted display
+/// order, then the first row. Live level changes must not retarget a click.
+enum PopupQuickActionTargetResolver {
+    static func resolve(
+        rows: [DisplayableAppRow],
+        selectedAppID: AudioAppIdentity?
+    ) -> AudioAppIdentity? {
+        if let selectedAppID,
+           rows.contains(where: { $0.identity == selectedAppID }) {
+            return selectedAppID
+        }
+        if let active = rows.first(where: \.isActive) { return active.identity }
+        return rows.first?.identity
+    }
 }

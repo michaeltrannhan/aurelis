@@ -299,6 +299,170 @@ final class AudioControlStoreTests: XCTestCase {
         XCTAssertEqual(store.displayRows[0].settings.route, .selectedDevice("usb"))
     }
 
+    func testFailedVolumeIntentRollsBackAndPublishesIssue() throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let backend = FailingApplyBackend(apps: [AudioAppSnapshot(identity: music, displayName: "Music")])
+        let store = try AudioControlStore(
+            settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()),
+            backend: backend,
+            permissionClient: grantedClient()
+        )
+        try store.refresh()
+
+        store.setVolumeIntent(0.25, for: music)
+
+        XCTAssertEqual(store.displayRows.first?.settings.volume, 1)
+        XCTAssertEqual(store.issues.last?.affectedApp, music)
+        XCTAssertEqual(store.issues.last?.severity, .error)
+    }
+
+    func testRefreshFailurePreservesLastSuccessfulRows() throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let backend = FailsAfterFirstFetchBackend(apps: [AudioAppSnapshot(identity: music, displayName: "Music")])
+        let store = try AudioControlStore(settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()), backend: backend)
+        try store.refresh()
+
+        store.refreshIntent()
+
+        XCTAssertEqual(store.displayRows.map(\.identity), [music])
+        if case .failed = store.operationState {} else { XCTFail("Expected failed operation state") }
+        XCTAssertEqual(store.issues.last?.recovery, .retry)
+    }
+
+    func testVolumeGestureCoalescesChangesAndFlushesFinalValue() throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let backend = MockAudioBackend(apps: [AudioAppSnapshot(identity: music, displayName: "Music")])
+        let store = try makeStore(backend: backend)
+        try store.refresh()
+
+        store.beginVolumeEditing(for: music)
+        for value in 1...20 { store.setVolumeIntent(Double(value) / 20, for: music) }
+        store.endVolumeEditing(for: music)
+
+        XCTAssertEqual(backend.commands, [.setVolume(music, 1)])
+        XCTAssertEqual(try store.settingsStore.load().appSettings[music]?.volume, 1)
+    }
+
+    func testEQGestureFlushAndAtomicResetEachSendOneCurve() throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let backend = MockAudioBackend(apps: [AudioAppSnapshot(identity: music, displayName: "Music")])
+        let store = try makeStore(backend: backend)
+        try store.refresh()
+
+        store.beginEQEditing(band: 0, for: music)
+        for value in 1...20 { store.setEQGainIntent(Double(value) / 2, band: 0, for: music) }
+        store.endEQEditing(band: 0, for: music)
+        XCTAssertEqual(backend.commands.count, 1)
+
+        store.resetEQIntent(for: music)
+        XCTAssertEqual(backend.commands.count, 2)
+        XCTAssertEqual(try store.settingsStore.load().appSettings[music]?.eq, EQCurve())
+    }
+
+    func testPersistenceFailureCompensatesBackendBeforeRollingBackDiscreteMutations() throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        var baselineEQ = EQCurve()
+        baselineEQ.setGain(4, at: 0)
+        let baseline = AppAudioSettings(
+            displayName: "Music",
+            volume: 0.7,
+            isMuted: false,
+            boost: .x2,
+            eq: baselineEQ,
+            route: .followDefault
+        )
+        let settingsURL = uniqueSettingsURL()
+        let settingsStore = SettingsStore(settingsURL: settingsURL)
+        try settingsStore.save(PersistedSettings(appSettings: [music: baseline]))
+        let backend = MockAudioBackend(apps: [AudioAppSnapshot(identity: music, displayName: "Music")])
+        let store = try AudioControlStore(settingsStore: settingsStore, backend: backend, permissionClient: grantedClient())
+        try store.refresh()
+        try blockPersistence(at: settingsURL)
+        defer { try? FileManager.default.removeItem(at: settingsURL.deletingLastPathComponent()) }
+
+        XCTAssertThrowsError(try store.setVolume(0.2, for: music))
+        XCTAssertThrowsError(try store.setMuted(true, for: music))
+        XCTAssertThrowsError(try store.setBoost(.x4, for: music))
+        XCTAssertThrowsError(try store.setRoute(.selectedDevice("usb"), for: music))
+        store.resetEQIntent(for: music)
+
+        var resetEQ = baselineEQ
+        resetEQ.reset()
+        XCTAssertEqual(
+            backend.commands,
+            [
+                .setVolume(music, 0.2),
+                .setVolume(music, baseline.volume),
+                .setMuted(music, true),
+                .setMuted(music, baseline.isMuted),
+                .setBoost(music, .x4),
+                .setBoost(music, baseline.boost),
+                .setRoute(music, .selectedDevice("usb")),
+                .setRoute(music, baseline.route),
+                .setEQ(music, resetEQ),
+                .setEQ(music, baseline.eq)
+            ]
+        )
+        XCTAssertEqual(store.settings.appSettings[music], baseline)
+        XCTAssertEqual(store.displayRows.first?.settings, baseline)
+    }
+
+    func testEQPersistenceFailureCompensatesAndPublishesIssue() throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        var baselineEQ = EQCurve()
+        baselineEQ.setGain(3, at: 0)
+        let baseline = AppAudioSettings(displayName: "Music", volume: 1, eq: baselineEQ)
+        let settingsURL = uniqueSettingsURL()
+        let settingsStore = SettingsStore(settingsURL: settingsURL)
+        try settingsStore.save(PersistedSettings(appSettings: [music: baseline]))
+        let backend = MockAudioBackend(apps: [AudioAppSnapshot(identity: music, displayName: "Music")])
+        let store = try AudioControlStore(settingsStore: settingsStore, backend: backend, permissionClient: grantedClient())
+        try store.refresh()
+        try blockPersistence(at: settingsURL)
+        defer { try? FileManager.default.removeItem(at: settingsURL.deletingLastPathComponent()) }
+
+        var changedEQ = baselineEQ
+        changedEQ.setGain(-6, at: 1)
+        store.setEQGainIntent(-6, band: 1, for: music)
+
+        XCTAssertEqual(backend.commands, [.setEQ(music, changedEQ), .setEQ(music, baselineEQ)])
+        XCTAssertEqual(store.displayRows.first?.settings.eq, baselineEQ)
+        XCTAssertEqual(store.issues.last?.id, "eq-\(music.rawValue)")
+        XCTAssertEqual(store.issues.last?.affectedApp, music)
+        XCTAssertEqual(store.issues.last?.severity, .error)
+        XCTAssertEqual(store.issues.last?.recovery, .retry)
+    }
+
+    func testResetKeepsSettingsWhenBackendTeardownFails() throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        var persisted = PersistedSettings(
+            appSettings: [music: AppAudioSettings(displayName: "Music", volume: 0.4)],
+            pinnedAppIDs: [music],
+            hasCompletedOnboarding: true
+        )
+        persisted.customization.backendMode = .mock
+        let settingsStore = SettingsStore(settingsURL: uniqueSettingsURL())
+        try settingsStore.save(persisted)
+        let backend = TapSynchronizingMockBackend(apps: [])
+        backend.tearDownAllError = NSError(domain: "Teardown", code: 23)
+        var requestedModes: [BackendMode] = []
+        let store = try AudioControlStore(
+            settingsStore: settingsStore,
+            backend: backend,
+            backendFactory: { mode in
+                requestedModes.append(mode)
+                return MockAudioBackend()
+            },
+            permissionClient: grantedClient()
+        )
+
+        XCTAssertThrowsError(try store.reset())
+
+        XCTAssertEqual(store.settings, persisted)
+        XCTAssertEqual(try settingsStore.load(), persisted)
+        XCTAssertTrue(requestedModes.isEmpty)
+    }
+
     private func makeStore(
         backend: MockAudioBackend,
         permissionClient: any AudioCapturePermissionClient = FakePermissionClient(
@@ -318,6 +482,31 @@ final class AudioControlStoreTests: XCTestCase {
             .appendingPathComponent("EQMacRepStoreTests-\(UUID().uuidString)", isDirectory: true)
             .appendingPathComponent("settings.json")
     }
+
+    private func blockPersistence(at settingsURL: URL) throws {
+        let settingsDirectory = settingsURL.deletingLastPathComponent()
+        try FileManager.default.removeItem(at: settingsDirectory)
+        try Data().write(to: settingsDirectory)
+    }
+}
+
+private final class FailingApplyBackend: AudioBackend {
+    let snapshot: AudioBackendSnapshot
+    init(apps: [AudioAppSnapshot]) { snapshot = AudioBackendSnapshot(apps: apps) }
+    func fetchSnapshot() throws -> AudioBackendSnapshot { snapshot }
+    func apply(_ command: AudioBackendCommand) throws { throw NSError(domain: "Apply", code: 1) }
+}
+
+private final class FailsAfterFirstFetchBackend: AudioBackend {
+    let snapshot: AudioBackendSnapshot
+    var fetches = 0
+    init(apps: [AudioAppSnapshot]) { snapshot = AudioBackendSnapshot(apps: apps) }
+    func fetchSnapshot() throws -> AudioBackendSnapshot {
+        fetches += 1
+        if fetches > 1 { throw NSError(domain: "Fetch", code: 2) }
+        return snapshot
+    }
+    func apply(_ command: AudioBackendCommand) throws {}
 }
 
 private struct FakePermissionClient: AudioCapturePermissionClient {
@@ -326,6 +515,7 @@ private struct FakePermissionClient: AudioCapturePermissionClient {
     func currentState() -> AudioCapturePermissionState { state }
     func requestScreenCaptureAccess() -> AudioCapturePermissionState { state }
     func openPrivacySettings() {}
+    func relaunchApp() {}
 }
 
 private final class EventingBackend: AudioBackend, AudioBackendUpdatePublishing {
@@ -365,6 +555,7 @@ private final class EventingBackend: AudioBackend, AudioBackendUpdatePublishing 
 
 private final class TapSynchronizingMockBackend: AudioBackend, AudioBackendTapSynchronizing {    var snapshot: AudioBackendSnapshot
     var syncError: Error?
+    var tearDownAllError: Error?
     private(set) var synchronizedActiveIDs: Set<AudioAppIdentity> = []
     private(set) var synchronizedIgnoredIDs: Set<AudioAppIdentity> = []
     private(set) var tornDownIDs: [AudioAppIdentity] = []
@@ -392,5 +583,6 @@ private final class TapSynchronizingMockBackend: AudioBackend, AudioBackendTapSy
 
     func tearDownAllTaps() throws {
         tearDownAllCount += 1
+        if let tearDownAllError { throw tearDownAllError }
     }
 }

@@ -6,11 +6,25 @@ struct EQMacRepApp: App {
     @StateObject private var controls = ExternalControlsCoordinator()
 
     init() {
-        let settingsStore = SettingsStore()
+        #if DEBUG
+        let enforcedBackendMode: BackendMode? = nil
+        #else
+        let enforcedBackendMode: BackendMode? = .coreAudioDiscovery
+        #endif
+        let settingsStore = SettingsStore(enforcedBackendMode: enforcedBackendMode)
         let settings = (try? settingsStore.load()) ?? PersistedSettings()
         let backend = AudioBackendFactory.makeBackend(mode: settings.customization.backendMode)
-        let controlStore = (try? AudioControlStore(settingsStore: settingsStore, backend: backend))
-            ?? (try! AudioControlStore(settingsStore: SettingsStore(settingsURL: FileManager.default.temporaryDirectory.appendingPathComponent("eqmacrep-fallback.json")), backend: MockAudioBackend()))
+        let controlStore: AudioControlStore
+        if let primaryStore = try? AudioControlStore(settingsStore: settingsStore, backend: backend) {
+            controlStore = primaryStore
+        } else {
+            let fallbackStore = SettingsStore(
+                settingsURL: FileManager.default.temporaryDirectory.appendingPathComponent("eqmacrep-fallback.json"),
+                enforcedBackendMode: enforcedBackendMode
+            )
+            let fallbackBackend = AudioBackendFactory.makeBackend(mode: enforcedBackendMode ?? .mock)
+            controlStore = try! AudioControlStore(settingsStore: fallbackStore, backend: fallbackBackend)
+        }
         _store = StateObject(wrappedValue: controlStore)
     }
 
@@ -26,7 +40,7 @@ struct EQMacRepApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("EQMacRep", id: "main") {
+        Window("EQMacRep", id: "main") {
             MainWindowView(store: store)
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                     store.shutdown()
@@ -40,7 +54,7 @@ struct EQMacRepApp: App {
                     store.refreshPermissionState()
                     store.startBackendObservation()
                     controls.attach(store: store)
-                    try? store.refresh()
+                    store.refreshIntent()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                     store.shutdown()

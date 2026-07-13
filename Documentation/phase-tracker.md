@@ -46,8 +46,17 @@ Advanced parity after minimum viable parity:
 - loudness/DDC/device inspector
 - automation/distribution
 
-**MVP status:** code-complete for Phases 0–8 (`swift test`: 104 tests, 0 failures).
+**MVP status:** code-complete for Phases 0–8. Daily-use stabilization is in progress (`swift test`: 114 tests, 0 failures on 2026-07-12).
 Not yet manually verified on real audio hardware — that is the remaining gate.
+
+### Daily-use stabilization (2026-07-12)
+
+- Added typed operation/issue/permission UI state and retained the last successful snapshot on refresh failure.
+- Added optimistic rollback and visible issues for failed volume, mute, boost, EQ, and routing commands; views now use nonthrowing facade intents.
+- Added a settings repository boundary, explicit termination flush, settings v3 migration, first-run guidance, atomic EQ reset, ignored-app restoration, reset confirmation, main-window routing parity, and popup keyboard volume adjustment.
+- Production builds no longer expose the mock/backend selector.
+- `AudioSessionCoordinator` now owns backend lifecycle, observation, switching, and tap synchronization; `AudioPermissionCoordinator` owns capture-permission mapping/actions. Volume and EQ gestures coalesce intermediate backend commands and JSON writes, then flush on release.
+- Still pending from the daily-use plan: Accessibility integration in the permission coordinator, real app icons, popup filtering/reorder UI, EQ bypass/visual editor, dynamic stream sample rate, diagnostics export, UI tests, and the manual hardware matrix.
 
 ## Phase Table
 

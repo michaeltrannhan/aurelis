@@ -15,6 +15,18 @@ final class CustomizationTests: XCTestCase {
         XCTAssertLessThan(PopupDensity.compact.dimensions.rowHeight, PopupDensity.spacious.dimensions.rowHeight)
     }
 
+    func testPopupDensityWidthsStayCompactAndEQUsable() {
+        XCTAssertEqual(PopupDensity.compact.collapsedWidth, 300)
+        XCTAssertEqual(PopupDensity.comfortable.collapsedWidth, 320)
+        XCTAssertEqual(PopupDensity.spacious.collapsedWidth, 340)
+        XCTAssertEqual(PopupDensity.compact.dimensions.width, 360)
+        XCTAssertEqual(PopupDensity.comfortable.dimensions.width, 400)
+        XCTAssertEqual(PopupDensity.spacious.dimensions.width, 440)
+        XCTAssertLessThan(PopupDensity.spacious.collapsedWidth, PopupDensity.compact.dimensions.width)
+        XCTAssertGreaterThanOrEqual(PopupDensity.compact.dimensions.width, 360)
+        XCTAssertLessThanOrEqual(PopupDensity.spacious.dimensions.width, 440)
+    }
+
     func testVolumeStepFractions() {
         XCTAssertEqual(VolumeStep.onePercent.fraction, 0.01, accuracy: 0.0001)
         XCTAssertEqual(VolumeStep.twoPercent.fraction, 0.02, accuracy: 0.0001)
@@ -46,6 +58,53 @@ final class CustomizationTests: XCTestCase {
     func testPopupDimensionsIncludeMaxContentHeight() {
         XCTAssertLessThan(PopupDensity.compact.dimensions.maxContentHeight, PopupDensity.spacious.dimensions.maxContentHeight)
         XCTAssertGreaterThan(PopupDensity.comfortable.dimensions.maxContentHeight, 300)
+    }
+
+    func testPopupContentHeightUsesIntrinsicRowAndExpandedEQSizes() {
+        let dimensions = PopupDensity.comfortable.dimensions
+        let collapsed = PopupContentLayoutModel.contentHeight(
+            dimensions: dimensions,
+            rowCount: 1,
+            includesPermissionBanner: false,
+            includesIssueBanner: false,
+            includesExpandedEQ: false,
+            availableScreenHeight: 700
+        )
+        let expanded = PopupContentLayoutModel.contentHeight(
+            dimensions: dimensions,
+            rowCount: 1,
+            includesPermissionBanner: false,
+            includesIssueBanner: false,
+            includesExpandedEQ: true,
+            availableScreenHeight: 700
+        )
+
+        XCTAssertEqual(collapsed, 122)
+        XCTAssertEqual(expanded, 374)
+        XCTAssertGreaterThan(expanded, collapsed)
+    }
+
+    func testPopupContentHeightHonorsDensityAndScreenLimits() {
+        let dimensions = PopupDensity.comfortable.dimensions
+        let manyRows = PopupContentLayoutModel.contentHeight(
+            dimensions: dimensions,
+            rowCount: 10,
+            includesPermissionBanner: false,
+            includesIssueBanner: false,
+            includesExpandedEQ: false,
+            availableScreenHeight: 700
+        )
+        let shortScreenWithEQ = PopupContentLayoutModel.contentHeight(
+            dimensions: dimensions,
+            rowCount: 1,
+            includesPermissionBanner: false,
+            includesIssueBanner: false,
+            includesExpandedEQ: true,
+            availableScreenHeight: 420
+        )
+
+        XCTAssertEqual(manyRows, dimensions.maxContentHeight)
+        XCTAssertEqual(shortScreenWithEQ, 308)
     }
 
     func testScrollWheelStepClampsVolume() {

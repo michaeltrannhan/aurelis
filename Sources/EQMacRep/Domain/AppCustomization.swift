@@ -38,15 +38,76 @@ enum PopupDensity: String, CaseIterable, Codable, Identifiable {
         }
     }
 
+    /// The resting popup only needs enough room for one compact mixer row.
+    /// Keep the wider dimensions below for the 10-band EQ, where horizontal
+    /// space materially improves usability.
+    var collapsedWidth: Double {
+        switch self {
+        case .compact: return 300
+        case .comfortable: return 320
+        case .spacious: return 340
+        }
+    }
+
     var dimensions: PopupDimensions {
         switch self {
         case .compact:
-            return PopupDimensions(width: 460, rowHeight: 56, contentPadding: 10, maxContentHeight: 420)
+            return PopupDimensions(width: 360, rowHeight: 72, contentPadding: 8, maxContentHeight: 380)
         case .comfortable:
-            return PopupDimensions(width: 560, rowHeight: 70, contentPadding: 14, maxContentHeight: 560)
+            return PopupDimensions(width: 400, rowHeight: 78, contentPadding: 10, maxContentHeight: 500)
         case .spacious:
-            return PopupDimensions(width: 640, rowHeight: 84, contentPadding: 18, maxContentHeight: 680)
+            return PopupDimensions(width: 440, rowHeight: 86, contentPadding: 12, maxContentHeight: 620)
         }
+    }
+}
+
+/// Pure sizing model for the menu-bar popup's scrollable content. These values
+/// reflect the compact row's intrinsic layout and the vertical 10-band EQ; using
+/// the nominal density row height alone underestimates both and clips expansions.
+struct PopupContentLayoutModel {
+    static let popupChromeHeight = 112.0
+    static let minimumContentHeight = 220.0
+    static let compactRowMinimumHeight = 72.0
+    static let permissionBannerHeight = 132.0
+    static let issueBannerHeight = 64.0
+    static let emptyStateHeight = 144.0
+    static let expandedEQHeight = 286.0
+    static let eqHintHeight = 34.0
+    static let rowSpacing = 8.0
+    static let sectionSpacing = 10.0
+
+    static func contentHeight(
+        dimensions: PopupDimensions,
+        rowCount: Int,
+        includesPermissionBanner: Bool,
+        includesIssueBanner: Bool,
+        includesExpandedEQ: Bool,
+        availableScreenHeight: Double
+    ) -> Double {
+        let safeRowCount = max(rowCount, 0)
+        let safeScreenHeight = availableScreenHeight.isFinite ? availableScreenHeight : 700
+        let screenLimit = max(minimumContentHeight, safeScreenHeight - popupChromeHeight)
+        var sections: [Double] = []
+
+        if includesPermissionBanner { sections.append(permissionBannerHeight) }
+        if includesIssueBanner { sections.append(issueBannerHeight) }
+
+        if safeRowCount == 0 {
+            sections.append(emptyStateHeight)
+        } else {
+            let rowHeight = max(dimensions.rowHeight, compactRowMinimumHeight)
+            sections.append(
+                (Double(safeRowCount) * rowHeight)
+                    + (Double(safeRowCount - 1) * rowSpacing)
+            )
+            sections.append(includesExpandedEQ ? expandedEQHeight : eqHintHeight)
+        }
+
+        let naturalHeight = sections.reduce(0, +)
+            + (Double(max(sections.count - 1, 0)) * sectionSpacing)
+        let densityLimit = dimensions.maxContentHeight
+            + (includesExpandedEQ ? expandedEQHeight : 0)
+        return min(screenLimit, min(naturalHeight, densityLimit))
     }
 }
 

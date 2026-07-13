@@ -4,6 +4,10 @@ import Foundation
 enum ScreenCapturePermissionStatus: Equatable {
     case notDetermined
     case granted
+    /// The system prompt has been answered (or Settings toggled), but macOS only
+    /// reports the grant to `CGPreflightScreenCaptureAccess()` after the app is
+    /// relaunched. Taps cannot run until then.
+    case pendingRestart
     case denied
 }
 
@@ -34,6 +38,8 @@ struct AudioCapturePermissionState: Equatable {
             return "Screen & System Audio Recording not requested"
         case .granted:
             return "Audio capture ready"
+        case .pendingRestart:
+            return "Relaunch EQMacRep to finish enabling audio capture"
         case .denied:
             return "Screen & System Audio Recording denied"
         }

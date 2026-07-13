@@ -1,7 +1,7 @@
 import Foundation
 
 struct PersistedSettings: Codable, Equatable {
-    static let currentVersion = 2
+    static let currentVersion = 3
 
     var version: Int
     var customization: AppCustomization
@@ -9,6 +9,7 @@ struct PersistedSettings: Codable, Equatable {
     var pinnedAppIDs: Set<AudioAppIdentity>
     var ignoredAppIDs: Set<AudioAppIdentity>
     var appDisplayOrder: [AudioAppIdentity]
+    var hasCompletedOnboarding: Bool
 
     init(
         version: Int = currentVersion,
@@ -16,7 +17,8 @@ struct PersistedSettings: Codable, Equatable {
         appSettings: [AudioAppIdentity: AppAudioSettings] = [:],
         pinnedAppIDs: Set<AudioAppIdentity> = [],
         ignoredAppIDs: Set<AudioAppIdentity> = [],
-        appDisplayOrder: [AudioAppIdentity] = []
+        appDisplayOrder: [AudioAppIdentity] = [],
+        hasCompletedOnboarding: Bool = false
     ) {
         self.version = version
         self.customization = customization
@@ -24,6 +26,7 @@ struct PersistedSettings: Codable, Equatable {
         self.pinnedAppIDs = pinnedAppIDs
         self.ignoredAppIDs = ignoredAppIDs
         self.appDisplayOrder = appDisplayOrder
+        self.hasCompletedOnboarding = hasCompletedOnboarding
     }
 
     enum CodingKeys: String, CodingKey {
@@ -33,6 +36,7 @@ struct PersistedSettings: Codable, Equatable {
         case pinnedAppIDs
         case ignoredAppIDs
         case appDisplayOrder
+        case hasCompletedOnboarding
     }
 
     init(from decoder: Decoder) throws {
@@ -50,26 +54,43 @@ struct PersistedSettings: Codable, Equatable {
         pinnedAppIDs = try values.decodeIfPresent(Set<AudioAppIdentity>.self, forKey: .pinnedAppIDs) ?? []
         ignoredAppIDs = try values.decodeIfPresent(Set<AudioAppIdentity>.self, forKey: .ignoredAppIDs) ?? []
         appDisplayOrder = try values.decodeIfPresent([AudioAppIdentity].self, forKey: .appDisplayOrder) ?? []
+        hasCompletedOnboarding = try values.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? false
     }
 }
 
 struct SettingsStore {
     let settingsURL: URL
+    /// When set, all loaded and saved settings use this backend. Production
+    /// launches use this to prevent a persisted debug-only mock selection from
+    /// becoming the hidden runtime backend.
+    let enforcedBackendMode: BackendMode?
 
-    init(settingsURL: URL = SettingsStore.defaultSettingsURL()) {
+    init(
+        settingsURL: URL = SettingsStore.defaultSettingsURL(),
+        enforcedBackendMode: BackendMode? = nil
+    ) {
         self.settingsURL = settingsURL
+        self.enforcedBackendMode = enforcedBackendMode
     }
 
     func load() throws -> PersistedSettings {
         guard FileManager.default.fileExists(atPath: settingsURL.path) else {
-            return PersistedSettings()
+            return enforcingBackendMode(in: PersistedSettings())
         }
 
         do {
             let data = try Data(contentsOf: settingsURL)
-            return try JSONDecoder().decode(PersistedSettings.self, from: data)
+            let decoded = try JSONDecoder().decode(PersistedSettings.self, from: data)
+            let normalized = enforcingBackendMode(in: decoded)
+            if normalized != decoded {
+                // Runtime safety does not depend on this best-effort migration:
+                // `load` already returns the normalized value and `save` also
+                // enforces it. A later successful save will repair the file.
+                try? save(normalized)
+            }
+            return normalized
         } catch {
-            return PersistedSettings()
+            return enforcingBackendMode(in: PersistedSettings())
         }
     }
 
@@ -80,7 +101,7 @@ struct SettingsStore {
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(settings)
+        let data = try encoder.encode(enforcingBackendMode(in: settings))
         try data.write(to: settingsURL, options: [.atomic])
     }
 
@@ -93,5 +114,15 @@ struct SettingsStore {
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("EQMacRep", isDirectory: true)
             .appendingPathComponent("settings.json")
+    }
+
+    private func enforcingBackendMode(in settings: PersistedSettings) -> PersistedSettings {
+        guard let enforcedBackendMode,
+              settings.customization.backendMode != enforcedBackendMode else {
+            return settings
+        }
+        var settings = settings
+        settings.customization.backendMode = enforcedBackendMode
+        return settings
     }
 }

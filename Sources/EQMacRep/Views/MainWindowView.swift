@@ -68,7 +68,8 @@ struct MainWindowView: View {
         ScrollView {
             LazyVStack(spacing: 4) {
                 OutputVolumeSection(store: store, layout: .desktop)
-                    .padding(.horizontal, 12).padding(.bottom, 8)
+                    .padding(.horizontal, 12).padding(.bottom, 6)
+                Divider().padding(.horizontal, 12)
                 sectionHeader
                 ForEach(store.displayRows) { row in
                     VStack(spacing: 0) {

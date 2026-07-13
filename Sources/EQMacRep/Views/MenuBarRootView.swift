@@ -25,14 +25,6 @@ struct MenuBarRootView: View {
             : store.settings.customization.popupDensity.collapsedWidth
     }
 
-    private var quickActionRow: DisplayableAppRow? {
-        guard let identity = PopupQuickActionTargetResolver.resolve(
-            rows: store.displayRows,
-            selectedAppID: selectedAppID
-        ) else { return nil }
-        return store.displayRows.first { $0.identity == identity }
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
@@ -190,10 +182,6 @@ struct MenuBarRootView: View {
         store.setVolumeIntent(row.settings.volume + delta, for: selectedAppID)
     }
 
-    private func adjustVolume(for row: DisplayableAppRow, by delta: Double) {
-        store.setVolumeIntent(row.settings.volume + delta, for: row.identity)
-    }
-
     private func select(_ identity: AudioAppIdentity) {
         if let selectedAppID {
             store.endContinuousEdits(for: selectedAppID)
@@ -211,21 +199,15 @@ struct MenuBarRootView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Text("EQMacRep")
-                    .font(.subheadline.weight(.semibold))
+        HStack(spacing: 6) {
+            Text("EQMacRep")
+                .font(.subheadline.weight(.semibold))
 
-                statusBadge
+            statusBadge
 
-                Spacer(minLength: 4)
+            Spacer(minLength: 4)
 
-                headerActions
-            }
-
-            if let quickActionRow {
-                quickActions(for: quickActionRow)
-            }
+            headerActions
         }
     }
 
@@ -253,91 +235,6 @@ struct MenuBarRootView: View {
         .help(store.statusMessage)
         .accessibilityLabel("Audio status")
         .accessibilityValue(store.statusMessage)
-    }
-
-    private func quickActions(for row: DisplayableAppRow) -> some View {
-        HStack(spacing: 4) {
-            Button {
-                select(row.identity)
-            } label: {
-                HStack(spacing: 5) {
-                    Circle()
-                        .fill(row.isActive ? Color.green : Color.secondary.opacity(0.6))
-                        .frame(width: 5, height: 5)
-                    Text(row.displayName)
-                        .font(.caption.weight(.medium))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help(selectedAppID == row.identity ? "Hide EQ for \(row.displayName)" : "Show EQ for \(row.displayName)")
-
-            Text("\(Int((row.settings.volume * 100).rounded()))%")
-                .font(.caption2.monospacedDigit().weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 32, alignment: .trailing)
-
-            quickActionButton(
-                systemName: "minus",
-                title: "Lower \(row.displayName) volume",
-                isDisabled: row.settings.volume <= 0
-            ) {
-                adjustVolume(for: row, by: -store.settings.customization.volumeStep.fraction)
-            }
-
-            quickActionButton(
-                systemName: row.settings.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
-                title: row.settings.isMuted ? "Unmute \(row.displayName)" : "Mute \(row.displayName)",
-                isActive: row.settings.isMuted
-            ) {
-                toggleMute(for: row.identity)
-            }
-
-            quickActionButton(
-                systemName: "plus",
-                title: "Raise \(row.displayName) volume",
-                isDisabled: row.settings.volume >= 1
-            ) {
-                adjustVolume(for: row, by: store.settings.customization.volumeStep.fraction)
-            }
-
-            quickActionButton(
-                systemName: "slider.vertical.3",
-                title: selectedAppID == row.identity ? "Hide EQ for \(row.displayName)" : "Show EQ for \(row.displayName)",
-                isActive: selectedAppID == row.identity
-            ) {
-                select(row.identity)
-            }
-        }
-        .padding(4)
-        .frame(height: 30)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func quickActionButton(
-        systemName: String,
-        title: String,
-        isActive: Bool = false,
-        isDisabled: Bool = false,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
-                .frame(width: 22, height: 22)
-                .background(
-                    isActive ? Color.accentColor.opacity(0.12) : Color.secondary.opacity(0.08),
-                    in: RoundedRectangle(cornerRadius: 5)
-                )
-        }
-        .buttonStyle(.borderless)
-        .disabled(isDisabled)
-        .help(title)
-        .accessibilityLabel(title)
     }
 
     private var headerActions: some View {

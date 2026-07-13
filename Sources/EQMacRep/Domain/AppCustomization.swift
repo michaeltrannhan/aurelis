@@ -76,13 +76,12 @@ struct PopupContentLayoutModel {
     static let rowSpacing = 8.0
     static let sectionSpacing = 10.0
     /// Height reserved by the output-volume section above the scroll view.
-    /// Computed from the device count: header + per-row + padding.
+    /// Computed from the device count: per-row + spacing.
     static func outputVolumeSectionHeight(deviceCount: Int) -> Double {
         let safeCount = max(deviceCount, 0)
-        let headerHeight = 22.0
-        let rowHeight = 32.0
-        let verticalPadding = 8.0
-        return headerHeight + Double(safeCount) * rowHeight + verticalPadding
+        let rowHeight = 28.0
+        let rowSpacing = 3.0
+        return Double(safeCount) * rowHeight + Double(max(safeCount - 1, 0)) * rowSpacing
     }
 
     static func contentHeight(

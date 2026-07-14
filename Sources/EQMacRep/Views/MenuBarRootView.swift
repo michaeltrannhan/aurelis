@@ -32,79 +32,73 @@ struct MenuBarRootView: View {
 
             OutputVolumeSection(store: store, layout: .compact)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    if !store.permissionState.allowsProcessTaps {
-                        permissionBanner
-                    }
+            VStack(alignment: .leading, spacing: 10) {
+                if !store.permissionState.allowsProcessTaps {
+                    permissionBanner
+                }
 
-                    if let issue = store.issues.last {
-                        issueBanner(issue)
-                    }
+                if let issue = store.issues.last {
+                    issueBanner(issue)
+                }
 
-                    if store.displayRows.isEmpty {
-                        ContentUnavailableView("No Apps", systemImage: "speaker.slash", description: Text("Refresh or enable inactive apps in Settings."))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: PopupContentLayoutModel.emptyStateHeight)
-                    } else {
-                        LazyVStack(spacing: 8) {
-                            ForEach(store.displayRows) { row in
-                                VStack(spacing: 8) {
-                                    AppRowView(
+                if store.displayRows.isEmpty {
+                    ContentUnavailableView("No Apps", systemImage: "speaker.slash", description: Text("Refresh or enable inactive apps in Settings."))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: PopupContentLayoutModel.emptyStateHeight)
+                } else {
+                    VStack(spacing: 8) {
+                        ForEach(store.displayRows) { row in
+                            VStack(spacing: 8) {
+                                AppRowView(
+                                    row: row,
+                                    rowHeight: dimensions.rowHeight,
+                                    isSelected: selectedAppID == row.identity,
+                                    onSelect: { select(row.identity) },
+                                    onVolume: { store.setVolumeIntent($0, for: row.identity) },
+                                    onVolumeEditingChanged: { editing in
+                                        editing ? store.beginVolumeEditing(for: row.identity) : store.endVolumeEditing(for: row.identity)
+                                    },
+                                    onMute: { store.setMutedIntent($0, for: row.identity) },
+                                    onBoost: { store.setBoostIntent($0, for: row.identity) },
+                                    onPin: { pinned in
+                                        store.pinIntent(pinned, identity: row.identity)
+                                    },
+                                    onIgnore: { store.ignoreIntent(row.identity) },
+                                    devices: store.devices,
+                                    onRoute: { store.setRouteIntent($0, for: row.identity) },
+                                    volumeStep: store.settings.customization.volumeStep.fraction,
+                                    layout: .compact
+                                )
+
+                                if selectedAppID == row.identity {
+                                    EQPanelView(
                                         row: row,
-                                        rowHeight: dimensions.rowHeight,
-                                        isSelected: selectedAppID == row.identity,
-                                        onSelect: { select(row.identity) },
-                                        onVolume: { store.setVolumeIntent($0, for: row.identity) },
-                                        onVolumeEditingChanged: { editing in
-                                            editing ? store.beginVolumeEditing(for: row.identity) : store.endVolumeEditing(for: row.identity)
+                                        style: .compact,
+                                        onClose: { closeEQ(for: row.identity) },
+                                        onGain: { band, gain in
+                                            store.setEQGainIntent(gain, band: band, for: row.identity)
                                         },
-                                        onMute: { store.setMutedIntent($0, for: row.identity) },
-                                        onBoost: { store.setBoostIntent($0, for: row.identity) },
-                                        onPin: { pinned in
-                                            store.pinIntent(pinned, identity: row.identity)
+                                        onGainEditingChanged: { band, editing in
+                                            editing ? store.beginEQEditing(band: band, for: row.identity) : store.endEQEditing(band: band, for: row.identity)
                                         },
-                                        onIgnore: { store.ignoreIntent(row.identity) },
-                                        devices: store.devices,
-                                        onRoute: { store.setRouteIntent($0, for: row.identity) },
-                                        volumeStep: store.settings.customization.volumeStep.fraction,
-                                        layout: .compact
+                                        onReset: { store.resetEQIntent(for: row.identity) }
                                     )
-
-                                    if selectedAppID == row.identity {
-                                        EQPanelView(
-                                            row: row,
-                                            style: .compact,
-                                            onClose: { closeEQ(for: row.identity) },
-                                            onGain: { band, gain in
-                                                store.setEQGainIntent(gain, band: band, for: row.identity)
-                                            },
-                                            onGainEditingChanged: { band, editing in
-                                                editing ? store.beginEQEditing(band: band, for: row.identity) : store.endEQEditing(band: band, for: row.identity)
-                                            },
-                                            onReset: { store.resetEQIntent(for: row.identity) }
-                                        )
-                                        .transition(.opacity.combined(with: .move(edge: .top)))
-                                    }
+                                    .transition(.opacity.combined(with: .move(edge: .top)))
                                 }
                             }
                         }
                     }
-
-                    if !hasExpandedEQ && !store.displayRows.isEmpty {
-                        eqHint
-                    }
                 }
-                .padding(.trailing, 2)
+
+                if !hasExpandedEQ && !store.displayRows.isEmpty {
+                    eqHint
+                }
             }
-            .scrollIndicators(.automatic)
-            // A ScrollView has no useful intrinsic height inside MenuBarExtra.
-            // Supplying the adaptive height explicitly prevents a collapsed,
-            // nearly unusable popover while still respecting small displays.
-            .frame(height: popupContentHeight)
         }
         .padding(dimensions.contentPadding)
         .frame(width: popupWidth)
+        .frame(maxHeight: maxPopupHeight)
+        .fixedSize(horizontal: false, vertical: true)
         .preferredColorScheme(store.settings.customization.appearance.colorScheme)
         .focusable()
         .focused($popupFocused)
@@ -146,25 +140,16 @@ struct MenuBarRootView: View {
         }
     }
 
-    /// Keeps the popover inside the display containing the pointer/menu-bar item.
-    /// Real intrinsic sizes matter here: the two-line app row, permission card,
-    /// and vertical EQ are all taller than their original estimates.
-    private var popupContentHeight: CGFloat {
-        CGFloat(PopupContentLayoutModel.contentHeight(
-            dimensions: dimensions,
-            rowCount: store.displayRows.count,
-            includesPermissionBanner: !store.permissionState.allowsProcessTaps,
-            includesIssueBanner: store.issues.last != nil,
-            includesExpandedEQ: hasExpandedEQ,
-            availableScreenHeight: Double(availableScreenHeight),
-            deviceCount: store.devices.count
-        ))
-    }
-
     private func updateAvailableScreenHeight() {
         let pointer = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(pointer, $0.frame, false) } ?? NSScreen.main
         availableScreenHeight = screen?.visibleFrame.height ?? 700
+    }
+
+    /// Maximum popover height before the app list starts scrolling. Keeps the
+    /// popover on-screen when many apps are discovered.
+    private var maxPopupHeight: CGFloat {
+        max(400, availableScreenHeight - 40)
     }
 
     private func toggleMuteForSelection() {

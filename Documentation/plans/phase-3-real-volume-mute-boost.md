@@ -25,23 +25,23 @@ Phase 3 intentionally supports only follow-default routing and one output device
 
 ## File Structure
 
-- Create `Sources/EQMacRep/Audio/CoreAudio/CoreAudioRealtimeGain.swift`: pure gain/mute/boost state, ramp math, limiter.
-- Create `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapResources.swift`: active resource container and teardown order.
-- Create `Sources/EQMacRep/Audio/CoreAudio/CoreAudioAggregateDeviceBuilder.swift`: pure aggregate description builder for one output device plus one tap.
-- Create `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapIOController.swift`: owns aggregate, IOProc, and realtime callback for one app tap.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessTapManager.swift`: create active IO controllers instead of tap-only sessions.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`: route `setVolume`, `setMuted`, and `setBoost` into active controllers.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift`: expose default output UID for follow-default output.
-- Test `Tests/EQMacRepTests/CoreAudioRealtimeGainTests.swift`: pure gain/ramp/limiter tests.
-- Test `Tests/EQMacRepTests/CoreAudioAggregateDeviceBuilderTests.swift`: aggregate description keys.
-- Test `Tests/EQMacRepTests/CoreAudioTapLifecycleTests.swift`: manager forwards command state.
+- Create `Sources/Auralis/Audio/CoreAudio/CoreAudioRealtimeGain.swift`: pure gain/mute/boost state, ramp math, limiter.
+- Create `Sources/Auralis/Audio/CoreAudio/CoreAudioTapResources.swift`: active resource container and teardown order.
+- Create `Sources/Auralis/Audio/CoreAudio/CoreAudioAggregateDeviceBuilder.swift`: pure aggregate description builder for one output device plus one tap.
+- Create `Sources/Auralis/Audio/CoreAudio/CoreAudioTapIOController.swift`: owns aggregate, IOProc, and realtime callback for one app tap.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessTapManager.swift`: create active IO controllers instead of tap-only sessions.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`: route `setVolume`, `setMuted`, and `setBoost` into active controllers.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift`: expose default output UID for follow-default output.
+- Test `Tests/AuralisTests/CoreAudioRealtimeGainTests.swift`: pure gain/ramp/limiter tests.
+- Test `Tests/AuralisTests/CoreAudioAggregateDeviceBuilderTests.swift`: aggregate description keys.
+- Test `Tests/AuralisTests/CoreAudioTapLifecycleTests.swift`: manager forwards command state.
 - Update `Documentation/flows.md` and `Documentation/phase-tracker.md`.
 
 ## Task 1: Pure Realtime Gain Model
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioRealtimeGain.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioRealtimeGainTests.swift`
+- Create: `Sources/Auralis/Audio/CoreAudio/CoreAudioRealtimeGain.swift`
+- Test: `Tests/AuralisTests/CoreAudioRealtimeGainTests.swift`
 
 - [ ] **Step 1: Write failing tests**
 
@@ -49,7 +49,7 @@ Create `CoreAudioRealtimeGainTests.swift`:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class CoreAudioRealtimeGainTests: XCTestCase {
     func testEffectiveGainCombinesVolumeMuteAndBoost() {
@@ -157,8 +157,8 @@ Expected: PASS.
 ## Task 2: Buffer Processor
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioRealtimeGain.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioRealtimeGainTests.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioRealtimeGain.swift`
+- Test: `Tests/AuralisTests/CoreAudioRealtimeGainTests.swift`
 
 - [ ] **Step 1: Write failing processing test**
 
@@ -235,8 +235,8 @@ Expected: PASS.
 ## Task 3: Aggregate Device Description Builder
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioAggregateDeviceBuilder.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioAggregateDeviceBuilderTests.swift`
+- Create: `Sources/Auralis/Audio/CoreAudio/CoreAudioAggregateDeviceBuilder.swift`
+- Test: `Tests/AuralisTests/CoreAudioAggregateDeviceBuilderTests.swift`
 
 - [ ] **Step 1: Write failing builder test**
 
@@ -245,7 +245,7 @@ Create `CoreAudioAggregateDeviceBuilderTests.swift`:
 ```swift
 import CoreAudio
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class CoreAudioAggregateDeviceBuilderTests: XCTestCase {
     func testSingleOutputAggregateDescriptionIncludesOutputAndTap() {
@@ -291,8 +291,8 @@ enum CoreAudioAggregateDeviceBuilder {
         appName: String
     ) -> [String: Any] {
         [
-            kAudioAggregateDeviceNameKey: "EQMacRep-\(appName)",
-            kAudioAggregateDeviceUIDKey: "EQMacRep-\(tapUUID.uuidString)",
+            kAudioAggregateDeviceNameKey: "Auralis-\(appName)",
+            kAudioAggregateDeviceUIDKey: "Auralis-\(tapUUID.uuidString)",
             kAudioAggregateDeviceMainSubDeviceKey: outputDeviceUID,
             kAudioAggregateDeviceClockDeviceKey: outputDeviceUID,
             kAudioAggregateDeviceIsPrivateKey: true,
@@ -328,8 +328,8 @@ Expected: PASS.
 ## Task 4: Active Tap Resource Teardown
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapResources.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioTapLifecycleTests.swift`
+- Create: `Sources/Auralis/Audio/CoreAudio/CoreAudioTapResources.swift`
+- Test: `Tests/AuralisTests/CoreAudioTapLifecycleTests.swift`
 
 - [ ] **Step 1: Write failing teardown-order test**
 
@@ -441,7 +441,7 @@ Expected: PASS.
 ## Task 5: Active IO Controller
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapIOController.swift`
+- Create: `Sources/Auralis/Audio/CoreAudio/CoreAudioTapIOController.swift`
 - Test: build only plus manual check
 
 - [ ] **Step 1: Implement system operations**
@@ -482,7 +482,7 @@ final class CoreAudioTapIOController {
     private let target: CoreAudioTapTarget
     private let outputDeviceUID: String
     private let operations: CoreAudioActiveTapOperating
-    private let queue = DispatchQueue(label: "EQMacRep.CoreAudioTapIOController", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "Auralis.CoreAudioTapIOController", qos: .userInitiated)
     private var resources = CoreAudioTapResources(
         tapID: AudioObjectID(kAudioObjectUnknown),
         aggregateDeviceID: AudioObjectID(kAudioObjectUnknown),
@@ -611,9 +611,9 @@ Expected: build succeeds.
 ## Task 6: Manager And Backend Command Wiring
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessTapManager.swift`
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioTapLifecycleTests.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessTapManager.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`
+- Test: `Tests/AuralisTests/CoreAudioTapLifecycleTests.swift`
 
 - [ ] **Step 1: Write failing command-forwarding test**
 
@@ -748,9 +748,9 @@ Expected: PASS.
 ## Task 7: Follow Default Output UID
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift`
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioMappingTests.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`
+- Test: `Tests/AuralisTests/CoreAudioMappingTests.swift`
 
 - [ ] **Step 1: Write failing default UID test**
 
@@ -848,7 +848,7 @@ Expected: tests pass, build succeeds, debug app bundle exists.
 Run:
 
 ```sh
-open .build/EQMacRep.app
+open .build/Auralis.app
 ```
 
 Manual checks:
@@ -861,7 +861,7 @@ Manual checks:
 - Set boost to 2x or 3x and confirm real audio gets louder.
 - Move EQ sliders and confirm no audible EQ change yet.
 - Ignore app and confirm app returns to normal macOS output.
-- Quit EQMacRep and confirm system audio remains normal.
+- Quit Auralis and confirm system audio remains normal.
 
 ## Review Notes
 

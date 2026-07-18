@@ -18,26 +18,26 @@ Phase 5 intentionally supports only one selected output device per app. Multi-ou
 
 ## File Structure
 
-- Modify `Sources/EQMacRep/Audio/AudioBackend.swift`: add `.setRoute(AudioAppIdentity, DeviceRoute)`.
-- Modify `Sources/EQMacRep/Domain/AudioModels.swift`: add route labels and validation helpers.
-- Modify `Sources/EQMacRep/State/AudioControlStore.swift`: persist and forward route changes.
-- Modify `Sources/EQMacRep/Views/AppRowView.swift`: add per-app route picker.
-- Modify `Sources/EQMacRep/Views/MenuBarRootView.swift`: pass device list and route callback to rows.
-- Modify `Sources/EQMacRep/Audio/MockAudioBackend.swift`: record route commands.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift`: expose default output UID and device lookup helpers from Phase 3.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessTapManager.swift`: resolve route and rebuild controllers on route changes.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`: route `.setRoute` and feed available devices into manager.
-- Test `Tests/EQMacRepTests/AudioControlStoreTests.swift`: route persistence and backend command.
-- Test `Tests/EQMacRepTests/CoreAudioRouteResolverTests.swift`: route resolution and missing-device fallback.
-- Test `Tests/EQMacRepTests/CoreAudioTapLifecycleTests.swift`: route change rebuild order.
+- Modify `Sources/Auralis/Audio/AudioBackend.swift`: add `.setRoute(AudioAppIdentity, DeviceRoute)`.
+- Modify `Sources/Auralis/Domain/AudioModels.swift`: add route labels and validation helpers.
+- Modify `Sources/Auralis/State/AudioControlStore.swift`: persist and forward route changes.
+- Modify `Sources/Auralis/Views/AppRowView.swift`: add per-app route picker.
+- Modify `Sources/Auralis/Views/MenuBarRootView.swift`: pass device list and route callback to rows.
+- Modify `Sources/Auralis/Audio/MockAudioBackend.swift`: record route commands.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift`: expose default output UID and device lookup helpers from Phase 3.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessTapManager.swift`: resolve route and rebuild controllers on route changes.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`: route `.setRoute` and feed available devices into manager.
+- Test `Tests/AuralisTests/AudioControlStoreTests.swift`: route persistence and backend command.
+- Test `Tests/AuralisTests/CoreAudioRouteResolverTests.swift`: route resolution and missing-device fallback.
+- Test `Tests/AuralisTests/CoreAudioTapLifecycleTests.swift`: route change rebuild order.
 - Update `Documentation/flows.md` and `Documentation/phase-tracker.md`.
 
 ## Task 1: Backend Route Command
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/AudioBackend.swift`
-- Modify: `Sources/EQMacRep/Audio/MockAudioBackend.swift`
-- Test: `Tests/EQMacRepTests/AudioControlStoreTests.swift`
+- Modify: `Sources/Auralis/Audio/AudioBackend.swift`
+- Modify: `Sources/Auralis/Audio/MockAudioBackend.swift`
+- Test: `Tests/AuralisTests/AudioControlStoreTests.swift`
 
 - [ ] **Step 1: Write failing store test**
 
@@ -106,10 +106,10 @@ Expected: PASS.
 ## Task 2: Route Labels And UI Picker
 
 **Files:**
-- Modify: `Sources/EQMacRep/Domain/AudioModels.swift`
-- Modify: `Sources/EQMacRep/Views/AppRowView.swift`
-- Modify: `Sources/EQMacRep/Views/MenuBarRootView.swift`
-- Test: `Tests/EQMacRepTests/CustomizationTests.swift`
+- Modify: `Sources/Auralis/Domain/AudioModels.swift`
+- Modify: `Sources/Auralis/Views/AppRowView.swift`
+- Modify: `Sources/Auralis/Views/MenuBarRootView.swift`
+- Test: `Tests/AuralisTests/CustomizationTests.swift`
 
 - [ ] **Step 1: Write route label tests**
 
@@ -194,8 +194,8 @@ Expected: PASS and build succeeds.
 ## Task 3: Route Resolution
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioRouteResolver.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioRouteResolverTests.swift`
+- Create: `Sources/Auralis/Audio/CoreAudio/CoreAudioRouteResolver.swift`
+- Test: `Tests/AuralisTests/CoreAudioRouteResolverTests.swift`
 
 - [ ] **Step 1: Write failing route resolver tests**
 
@@ -203,7 +203,7 @@ Create `CoreAudioRouteResolverTests.swift`:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class CoreAudioRouteResolverTests: XCTestCase {
     func testFollowDefaultResolvesToDefaultOutputUID() {
@@ -305,9 +305,9 @@ Expected: PASS.
 ## Task 4: Rebuild Tap Controller On Route Change
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessTapManager.swift`
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapIOController.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioTapLifecycleTests.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessTapManager.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioTapIOController.swift`
+- Test: `Tests/AuralisTests/CoreAudioTapLifecycleTests.swift`
 
 - [ ] **Step 1: Write failing rebuild-order test**
 
@@ -400,10 +400,10 @@ Expected: PASS.
 ## Task 5: Backend Device Feed And Route Command
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioMappingTests.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioDiscoveryBackendTests.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift`
+- Test: `Tests/AuralisTests/CoreAudioMappingTests.swift`
+- Test: `Tests/AuralisTests/CoreAudioDiscoveryBackendTests.swift`
 
 - [ ] **Step 1: Write failing backend routing tests**
 
@@ -469,9 +469,9 @@ Expected: PASS.
 ## Task 6: Route Validity And Fallback UX
 
 **Files:**
-- Modify: `Sources/EQMacRep/State/AudioControlStore.swift`
-- Modify: `Sources/EQMacRep/Views/AppRowView.swift`
-- Test: `Tests/EQMacRepTests/AudioControlStoreTests.swift`
+- Modify: `Sources/Auralis/State/AudioControlStore.swift`
+- Modify: `Sources/Auralis/Views/AppRowView.swift`
+- Test: `Tests/AuralisTests/AudioControlStoreTests.swift`
 
 - [ ] **Step 1: Write missing-device row test**
 
@@ -554,7 +554,7 @@ Expected: tests pass, build succeeds, debug app bundle exists.
 Run:
 
 ```sh
-open .build/EQMacRep.app
+open .build/Auralis.app
 ```
 
 Manual checks:
@@ -567,7 +567,7 @@ Manual checks:
 - Confirm app B plays through selected output.
 - Disconnect selected output and confirm app B falls back to default output.
 - Reconnect selected output and reselect it.
-- Quit EQMacRep and confirm system audio remains normal.
+- Quit Auralis and confirm system audio remains normal.
 
 ## Review Notes
 

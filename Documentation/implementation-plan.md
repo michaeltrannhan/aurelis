@@ -1,9 +1,9 @@
-# EQMacRep Implementation Plan
+# Auralis Implementation Plan
 
 ## Task 1: Package And Docs
 
-- Create SwiftPM executable target `EQMacRep`.
-- Create XCTest target `EQMacRepTests`.
+- Create SwiftPM executable target `Auralis`.
+- Create XCTest target `AuralisTests`.
 - Add README, license note, flow notes, and replication plan.
 - Verify with `swift build`.
 
@@ -41,7 +41,7 @@
 
 ## Task 6: SwiftUI App
 
-- Implement `EQMacRepApp`.
+- Implement `AuralisApp`.
 - Implement menu-bar popup in `MenuBarRootView`.
 - Implement per-app controls in `AppRowView`.
 - Implement EQ editor in `EQPanelView`.
@@ -50,7 +50,7 @@
 
 ## Task 7: Full Verification
 
-Run from `/Users/michaeltrannhan/Desktop/hobby/eq-mac-rep`:
+Run from the repository root:
 
 ```sh
 swift test

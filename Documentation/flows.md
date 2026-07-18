@@ -1,14 +1,14 @@
-# EQMacRep Flow Notes
+# Auralis Flow Notes
 
 ## FineTune Flow Being Replicated
 
 FineTune launches as a menu-bar app, creates long-lived app services, requests Screen & System Audio Recording permission, discovers CoreAudio apps and devices, creates process taps, applies persisted per-app settings, and renders controls in a menu-bar popup.
 
-EQMacRep keeps that shape with a mock backend for tests and a CoreAudio backend for real discovery. The current CoreAudio path creates private process taps for active apps, applies volume, mute, boost, realtime 10-band EQ, and explicit single- or multi-device routing, and tears down taps on ignore/reset/quit. Live HAL listeners, permission gating, and stability hardening are implemented; real-hardware verification remains required.
+Auralis keeps that shape with a mock backend for tests and a CoreAudio backend for real discovery. The current CoreAudio path creates private process taps for active apps, applies volume, mute, boost, realtime 10-band EQ, and explicit single- or multi-device routing, and tears down taps on ignore/reset/quit. Live HAL listeners, permission gating, and stability hardening are implemented; real-hardware verification remains required.
 
 ## Launch Flow
 
-1. `EQMacRepApp` creates a `SettingsStore`.
+1. `AuralisApp` creates a `SettingsStore`.
 2. It loads persisted settings and reads `AppCustomization.backendMode`.
 3. `AudioBackendFactory` creates either `MockAudioBackend` or `CoreAudioDiscoveryBackend`, owned by `AudioSessionCoordinator`.
 4. It creates an `AudioControlStore`, loading JSON settings or defaults through `AudioSettingsRepository`; capture permission is owned by `AudioPermissionCoordinator`.
@@ -28,11 +28,11 @@ CoreAudio Discovery mode:
 1. `CoreAudioProcessDiscovery` reads `kAudioHardwarePropertyProcessObjectList`.
 2. Each process object is mapped from PID, running-output state, bundle identifier, and `NSRunningApplication` display metadata.
 3. Helper processes are coalesced into their parent app identity where CoreAudio exposes both records.
-4. EQMacRep's own process and obvious CoreAudio/system daemons are filtered out.
+4. Auralis's own process and obvious CoreAudio/system daemons are filtered out.
 5. The backend emits the same snapshot shape used by the mock backend and caches tap targets by app identity.
 6. `CoreAudioDeviceDiscovery` reads HAL device-list and default-output properties.
-7. Devices without output streams or stable UIDs, hidden devices, and aggregate devices are filtered out so an EQMacRep aggregate cannot be selected recursively.
-8. When the system default is itself a user Aggregate/Multi-Output Device, discovery expands its ordered active physical subdevice UIDs. EQMacRep-owned and nested aggregates are never routed recursively.
+7. Devices without output streams or stable UIDs, hidden devices, and aggregate devices are filtered out so an Auralis aggregate cannot be selected recursively.
+8. When the system default is itself a user Aggregate/Multi-Output Device, discovery expands its ordered active physical subdevice UIDs. Auralis-owned and nested aggregates are never routed recursively.
 9. Default output UIDs and physical nominal sample rates are passed to the tap manager for follow-default routing and live topology validation.
 
 ## App State Flow
@@ -49,7 +49,7 @@ In CoreAudio Discovery mode, control intents update realtime state for the activ
 
 ## EQ Flow
 
-EQMacRep stores a 10-band `EQCurve` per app. Gains are normalized to exactly 10 bands and clamped to the selected range: 6 dB, 12 dB, or 18 dB.
+Auralis stores a 10-band `EQCurve` per app. Gains are normalized to exactly 10 bands and clamped to the selected range: 6 dB, 12 dB, or 18 dB.
 
 The CoreAudio tap IO path applies the app's `EQCurve` through a stereo biquad cascade before volume, mute, boost, ramp, and limiter processing. Flat EQ curves bypass the biquad stage while still preserving the same persisted settings model.
 
@@ -81,4 +81,4 @@ Real process taps require macOS 14.2 or newer, Screen & System Audio Recording p
 
 ## Debug App Bundle Flow
 
-Real process taps require macOS 14.2 or newer and an app bundle with `NSAudioCaptureUsageDescription`. Use `Scripts/build-debug-app.sh` and open `.build/EQMacRep.app` for manual audio testing. The script requires a persistent certificate-backed code-signing identity (auto-selecting the first valid identity, or accepting `SIGN_IDENTITY=...`) so TCC recognizes rebuilt bundles. Running with `swift run EQMacRep` is useful for UI smoke tests, but it is not the correct permission path for real per-app volume.
+Real process taps require macOS 14.2 or newer and an app bundle with `NSAudioCaptureUsageDescription`. Use `Scripts/build-debug-app.sh` and open `.build/Auralis.app` for manual audio testing. The script requires a persistent certificate-backed code-signing identity (auto-selecting the first valid identity, or accepting `SIGN_IDENTITY=...`) so TCC recognizes rebuilt bundles. Running with `swift run Auralis` is useful for UI smoke tests, but it is not the correct permission path for real per-app volume.

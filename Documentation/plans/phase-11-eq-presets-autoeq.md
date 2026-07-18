@@ -18,28 +18,28 @@ Phase 11 intentionally excludes loudness compensation and device volume. Those a
 
 ## File Structure
 
-- Create `Sources/EQMacRep/Domain/EQPreset.swift`: built-in preset enum and categories.
-- Create `Sources/EQMacRep/Domain/UserEQPreset.swift`: persisted user preset model.
-- Create `Sources/EQMacRep/Audio/AutoEQ/AutoEQProfile.swift`: profile/filter models.
-- Create `Sources/EQMacRep/Audio/AutoEQ/AutoEQParser.swift`: EqualizerAPO parser.
-- Create `Sources/EQMacRep/Audio/CoreAudio/CoreAudioAutoEQProcessor.swift`: parametric realtime processor.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioBiquadMath.swift`: low shelf, high shelf, AutoEQ coefficient helpers.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapIOController.swift`: run app EQ then AutoEQ then gain/limiter.
-- Modify `Sources/EQMacRep/Persistence/SettingsStore.swift`: user presets and per-device AutoEQ selections.
-- Modify `Sources/EQMacRep/State/AudioControlStore.swift`: preset and AutoEQ commands.
-- Modify `Sources/EQMacRep/Views/EQPanelView.swift`: preset picker, save, rename, delete.
-- Test `Tests/EQMacRepTests/EQPresetTests.swift`.
-- Test `Tests/EQMacRepTests/UserEQPresetTests.swift`.
-- Test `Tests/EQMacRepTests/AutoEQParserTests.swift`.
-- Test `Tests/EQMacRepTests/CoreAudioAutoEQProcessorTests.swift`.
-- Test `Tests/EQMacRepTests/AudioControlStoreTests.swift`.
+- Create `Sources/Auralis/Domain/EQPreset.swift`: built-in preset enum and categories.
+- Create `Sources/Auralis/Domain/UserEQPreset.swift`: persisted user preset model.
+- Create `Sources/Auralis/Audio/AutoEQ/AutoEQProfile.swift`: profile/filter models.
+- Create `Sources/Auralis/Audio/AutoEQ/AutoEQParser.swift`: EqualizerAPO parser.
+- Create `Sources/Auralis/Audio/CoreAudio/CoreAudioAutoEQProcessor.swift`: parametric realtime processor.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioBiquadMath.swift`: low shelf, high shelf, AutoEQ coefficient helpers.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioTapIOController.swift`: run app EQ then AutoEQ then gain/limiter.
+- Modify `Sources/Auralis/Persistence/SettingsStore.swift`: user presets and per-device AutoEQ selections.
+- Modify `Sources/Auralis/State/AudioControlStore.swift`: preset and AutoEQ commands.
+- Modify `Sources/Auralis/Views/EQPanelView.swift`: preset picker, save, rename, delete.
+- Test `Tests/AuralisTests/EQPresetTests.swift`.
+- Test `Tests/AuralisTests/UserEQPresetTests.swift`.
+- Test `Tests/AuralisTests/AutoEQParserTests.swift`.
+- Test `Tests/AuralisTests/CoreAudioAutoEQProcessorTests.swift`.
+- Test `Tests/AuralisTests/AudioControlStoreTests.swift`.
 - Update `Documentation/flows.md` and `Documentation/phase-tracker.md`.
 
 ## Task 1: Built-In EQ Presets
 
 **Files:**
-- Create: `Sources/EQMacRep/Domain/EQPreset.swift`
-- Test: `Tests/EQMacRepTests/EQPresetTests.swift`
+- Create: `Sources/Auralis/Domain/EQPreset.swift`
+- Test: `Tests/AuralisTests/EQPresetTests.swift`
 
 - [ ] **Step 1: Write preset tests**
 
@@ -47,7 +47,7 @@ Create:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class EQPresetTests: XCTestCase {
     func testBuiltInPresetsProduceTenBandCurves() {
@@ -97,11 +97,11 @@ Expected: PASS.
 ## Task 2: User Presets
 
 **Files:**
-- Create: `Sources/EQMacRep/Domain/UserEQPreset.swift`
-- Modify: `Sources/EQMacRep/Persistence/SettingsStore.swift`
-- Modify: `Sources/EQMacRep/State/AudioControlStore.swift`
-- Test: `Tests/EQMacRepTests/UserEQPresetTests.swift`
-- Test: `Tests/EQMacRepTests/AudioControlStoreTests.swift`
+- Create: `Sources/Auralis/Domain/UserEQPreset.swift`
+- Modify: `Sources/Auralis/Persistence/SettingsStore.swift`
+- Modify: `Sources/Auralis/State/AudioControlStore.swift`
+- Test: `Tests/AuralisTests/UserEQPresetTests.swift`
+- Test: `Tests/AuralisTests/AudioControlStoreTests.swift`
 
 - [ ] **Step 1: Write user preset tests**
 
@@ -109,7 +109,7 @@ Create:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class UserEQPresetTests: XCTestCase {
     func testPresetNameFallsBackAndDeduplicates() {
@@ -188,9 +188,9 @@ Expected: PASS.
 ## Task 3: Preset Picker UI
 
 **Files:**
-- Modify: `Sources/EQMacRep/Views/EQPanelView.swift`
-- Create: `Sources/EQMacRep/Views/EQPresetPickerView.swift`
-- Test: `Tests/EQMacRepTests/EQPresetTests.swift`
+- Modify: `Sources/Auralis/Views/EQPanelView.swift`
+- Create: `Sources/Auralis/Views/EQPresetPickerView.swift`
+- Test: `Tests/AuralisTests/EQPresetTests.swift`
 
 - [ ] **Step 1: Write picker section test**
 
@@ -246,9 +246,9 @@ Expected: PASS and build succeeds.
 ## Task 4: AutoEQ Parser And Profile Model
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/AutoEQ/AutoEQProfile.swift`
-- Create: `Sources/EQMacRep/Audio/AutoEQ/AutoEQParser.swift`
-- Test: `Tests/EQMacRepTests/AutoEQParserTests.swift`
+- Create: `Sources/Auralis/Audio/AutoEQ/AutoEQProfile.swift`
+- Create: `Sources/Auralis/Audio/AutoEQ/AutoEQParser.swift`
+- Test: `Tests/AuralisTests/AutoEQParserTests.swift`
 
 - [ ] **Step 1: Write parser tests**
 
@@ -256,7 +256,7 @@ Create:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class AutoEQParserTests: XCTestCase {
     func testParsesParametricEQText() {
@@ -319,10 +319,10 @@ Expected: PASS.
 ## Task 5: AutoEQ Realtime Processor
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioBiquadMath.swift`
-- Create: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioAutoEQProcessor.swift`
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapIOController.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioAutoEQProcessorTests.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioBiquadMath.swift`
+- Create: `Sources/Auralis/Audio/CoreAudio/CoreAudioAutoEQProcessor.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioTapIOController.swift`
+- Test: `Tests/AuralisTests/CoreAudioAutoEQProcessorTests.swift`
 
 - [ ] **Step 1: Write processor tests**
 
@@ -330,7 +330,7 @@ Create:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class CoreAudioAutoEQProcessorTests: XCTestCase {
     func testNilProfileCopiesInput() {
@@ -397,10 +397,10 @@ Expected: PASS.
 ## Task 6: Device AutoEQ Selection
 
 **Files:**
-- Modify: `Sources/EQMacRep/Persistence/SettingsStore.swift`
-- Modify: `Sources/EQMacRep/State/AudioControlStore.swift`
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessTapManager.swift`
-- Test: `Tests/EQMacRepTests/AudioControlStoreTests.swift`
+- Modify: `Sources/Auralis/Persistence/SettingsStore.swift`
+- Modify: `Sources/Auralis/State/AudioControlStore.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessTapManager.swift`
+- Test: `Tests/AuralisTests/AudioControlStoreTests.swift`
 
 - [ ] **Step 1: Write selection persistence test**
 
@@ -498,7 +498,7 @@ Expected: tests pass, build succeeds, debug app bundle exists.
 Run:
 
 ```sh
-open .build/EQMacRep.app
+open .build/Auralis.app
 ```
 
 Manual checks:

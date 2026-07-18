@@ -16,22 +16,22 @@ Apple's Core Audio tap documentation requires `NSAudioCaptureUsageDescription` i
 
 ## File Structure
 
-- Create `Sources/EQMacRep/Permissions/AudioCapturePermission.swift`: domain enums and user-facing copy.
-- Create `Sources/EQMacRep/Permissions/AudioCapturePermissionClient.swift`: protocol and system implementation.
-- Modify `Sources/EQMacRep/State/AudioControlStore.swift`: inject permission client, publish permission state, refresh/request methods.
-- Modify `Sources/EQMacRep/Views/MenuBarRootView.swift`: show permission banner.
-- Modify `Sources/EQMacRep/Views/SettingsView.swift`: show permission state and action.
-- Create `Resources/EQMacRep-Info.plist`: debug app-bundle plist with usage description.
-- Create `Scripts/build-debug-app.sh`: build and wrap SwiftPM executable in `.build/EQMacRep.app`.
-- Create `Tests/EQMacRepTests/AudioCapturePermissionTests.swift`: pure permission-state tests.
-- Modify `Tests/EQMacRepTests/AudioControlStoreTests.swift`: store permission mapping tests.
+- Create `Sources/Auralis/Permissions/AudioCapturePermission.swift`: domain enums and user-facing copy.
+- Create `Sources/Auralis/Permissions/AudioCapturePermissionClient.swift`: protocol and system implementation.
+- Modify `Sources/Auralis/State/AudioControlStore.swift`: inject permission client, publish permission state, refresh/request methods.
+- Modify `Sources/Auralis/Views/MenuBarRootView.swift`: show permission banner.
+- Modify `Sources/Auralis/Views/SettingsView.swift`: show permission state and action.
+- Create `Resources/Auralis-Info.plist`: debug app-bundle plist with usage description.
+- Create `Scripts/build-debug-app.sh`: build and wrap SwiftPM executable in `.build/Auralis.app`.
+- Create `Tests/AuralisTests/AudioCapturePermissionTests.swift`: pure permission-state tests.
+- Modify `Tests/AuralisTests/AudioControlStoreTests.swift`: store permission mapping tests.
 - Update `Documentation/flows.md`, `Documentation/phase-tracker.md`, and `README.md`.
 
 ## Task 1: Permission Domain Model
 
 **Files:**
-- Create: `Sources/EQMacRep/Permissions/AudioCapturePermission.swift`
-- Test: `Tests/EQMacRepTests/AudioCapturePermissionTests.swift`
+- Create: `Sources/Auralis/Permissions/AudioCapturePermission.swift`
+- Test: `Tests/AuralisTests/AudioCapturePermissionTests.swift`
 
 - [ ] **Step 1: Write failing tests**
 
@@ -39,7 +39,7 @@ Create `AudioCapturePermissionTests.swift`:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class AudioCapturePermissionTests: XCTestCase {
     func testMissingUsageDescriptionBlocksTapAttempt() {
@@ -145,8 +145,8 @@ Expected: PASS.
 ## Task 2: Permission Client
 
 **Files:**
-- Create: `Sources/EQMacRep/Permissions/AudioCapturePermissionClient.swift`
-- Test: `Tests/EQMacRepTests/AudioCapturePermissionTests.swift`
+- Create: `Sources/Auralis/Permissions/AudioCapturePermissionClient.swift`
+- Test: `Tests/AuralisTests/AudioCapturePermissionTests.swift`
 
 - [ ] **Step 1: Write failing URL test**
 
@@ -234,8 +234,8 @@ Expected: tests pass and build succeeds.
 ## Task 3: Store Integration
 
 **Files:**
-- Modify: `Sources/EQMacRep/State/AudioControlStore.swift`
-- Test: `Tests/EQMacRepTests/AudioControlStoreTests.swift`
+- Modify: `Sources/Auralis/State/AudioControlStore.swift`
+- Test: `Tests/AuralisTests/AudioControlStoreTests.swift`
 
 - [ ] **Step 1: Write failing store test**
 
@@ -360,8 +360,8 @@ Expected: PASS.
 ## Task 4: Popup And Settings UI
 
 **Files:**
-- Modify: `Sources/EQMacRep/Views/MenuBarRootView.swift`
-- Modify: `Sources/EQMacRep/Views/SettingsView.swift`
+- Modify: `Sources/Auralis/Views/MenuBarRootView.swift`
+- Modify: `Sources/Auralis/Views/SettingsView.swift`
 
 - [ ] **Step 1: Add popup permission banner**
 
@@ -420,13 +420,13 @@ Expected: build succeeds.
 ## Task 5: Development App Bundle Metadata
 
 **Files:**
-- Create: `Resources/EQMacRep-Info.plist`
+- Create: `Resources/Auralis-Info.plist`
 - Create: `Scripts/build-debug-app.sh`
 - Modify: `README.md`
 
 - [ ] **Step 1: Add Info.plist**
 
-Create `Resources/EQMacRep-Info.plist`:
+Create `Resources/Auralis-Info.plist`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -434,11 +434,11 @@ Create `Resources/EQMacRep-Info.plist`:
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>EQMacRep</string>
+    <string>Auralis</string>
     <key>CFBundleIdentifier</key>
-    <string>com.michaeltrannhan.EQMacRep</string>
+    <string>com.michaeltrannhan.Auralis</string>
     <key>CFBundleName</key>
-    <string>EQMacRep</string>
+    <string>Auralis</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -448,7 +448,7 @@ Create `Resources/EQMacRep-Info.plist`:
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSAudioCaptureUsageDescription</key>
-    <string>EQMacRep needs Screen &amp; System Audio Recording access to apply per-app volume and EQ using Core Audio process taps.</string>
+    <string>Auralis needs Screen &amp; System Audio Recording access to apply per-app volume and EQ using Core Audio process taps.</string>
 </dict>
 </plist>
 ```
@@ -463,14 +463,14 @@ set -eu
 
 swift build
 
-APP_DIR=".build/EQMacRep.app"
+APP_DIR=".build/Auralis.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR"
-cp ".build/debug/EQMacRep" "$MACOS_DIR/EQMacRep"
-cp "Resources/EQMacRep-Info.plist" "$CONTENTS_DIR/Info.plist"
+cp ".build/debug/Auralis" "$MACOS_DIR/Auralis"
+cp "Resources/Auralis-Info.plist" "$CONTENTS_DIR/Info.plist"
 
 echo "$APP_DIR"
 ```
@@ -491,7 +491,7 @@ Run:
 Scripts/build-debug-app.sh
 ```
 
-Expected: prints `.build/EQMacRep.app`.
+Expected: prints `.build/Auralis.app`.
 
 - [ ] **Step 5: Document run path**
 
@@ -502,7 +502,7 @@ For permission testing, run the debug app bundle so macOS can read `NSAudioCaptu
 
 ```sh
 Scripts/build-debug-app.sh
-open .build/EQMacRep.app
+open .build/Auralis.app
 ```
 ````
 
@@ -519,7 +519,7 @@ Add permission flow:
 ```md
 ## Permission Flow
 
-CoreAudio process taps require Screen & System Audio Recording permission and an `NSAudioCaptureUsageDescription` value in the app bundle. EQMacRep detects both before future tap phases attempt tap creation. When either condition is missing, the popup shows a permission banner and keeps discovery mode usable.
+CoreAudio process taps require Screen & System Audio Recording permission and an `NSAudioCaptureUsageDescription` value in the app bundle. Auralis detects both before future tap phases attempt tap creation. When either condition is missing, the popup shows a permission banner and keeps discovery mode usable.
 ```
 
 - [ ] **Step 2: Update tracker when phase completes**
@@ -570,14 +570,14 @@ Run:
 Scripts/build-debug-app.sh
 ```
 
-Expected: `.build/EQMacRep.app` exists and contains `Contents/Info.plist`.
+Expected: `.build/Auralis.app` exists and contains `Contents/Info.plist`.
 
 - [ ] **Step 5: Manual permission check**
 
 Run:
 
 ```sh
-open .build/EQMacRep.app
+open .build/Auralis.app
 ```
 
 Manual checks:

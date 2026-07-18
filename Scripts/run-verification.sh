@@ -6,7 +6,7 @@ REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 cd "$REPOSITORY_ROOT"
 
 MODE=${1:-all}
-STRESS_ITERATIONS=${EQMACREP_STRESS_ITERATIONS:-100000}
+STRESS_ITERATIONS=${AURALIS_STRESS_ITERATIONS:-100000}
 
 run_strict() {
     printf '==> SwiftPM tests with complete concurrency checking\n'
@@ -15,12 +15,12 @@ run_strict() {
 
 run_tsan() {
     printf '==> SwiftPM tests under Thread Sanitizer\n'
-    EQMACREP_INSTRUMENTED_TESTS=1 swift test --sanitize=thread
+    AURALIS_INSTRUMENTED_TESTS=1 swift test --sanitize=thread
 }
 
 run_stress() {
     printf '==> Sustained audio callback stress (%s iterations)\n' "$STRESS_ITERATIONS"
-    EQMACREP_STRESS_ITERATIONS=$STRESS_ITERATIONS \
+    AURALIS_STRESS_ITERATIONS=$STRESS_ITERATIONS \
         swift test --filter 'CoreAudioPCMRendererTests/testSustainedAudioCallbackStressBudget'
 }
 

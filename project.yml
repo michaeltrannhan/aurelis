@@ -1,4 +1,4 @@
-name: EQMacRep
+name: Auralis
 options:
   bundleIdPrefix: com.michaeltrannhan
   deploymentTarget:
@@ -21,102 +21,105 @@ configs:
   Debug: debug
   Release: release
 targets:
-  EQMacRep:
+  Auralis:
     type: application
     platform: macOS
     deploymentTarget: "14.2"
     sources:
-      - Sources/EQMacRep
+      - Sources/Auralis
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.michaeltrannhan.EQMacRep
-        INFOPLIST_FILE: Resources/EQMacRep-Info.plist
-        CODE_SIGN_ENTITLEMENTS: Resources/EQMacRep.entitlements
+        PRODUCT_NAME: Auralis
+        PRODUCT_MODULE_NAME: Auralis
+        EXECUTABLE_NAME: Auralis
+        PRODUCT_BUNDLE_IDENTIFIER: com.michaeltrannhan.Auralis
+        INFOPLIST_FILE: Resources/Auralis-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Resources/Auralis.entitlements
         GENERATE_INFOPLIST_FILE: NO
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
         ENABLE_PREVIEWS: YES
     dependencies:
-      - target: EQMacRepWidgetShared
-      - target: EQMacRepWidget
+      - target: AuralisWidgetShared
+      - target: AuralisWidget
         embed: true
         codeSign: true
-  EQMacRepWidgetShared:
+  AuralisWidgetShared:
     type: library.static
     platform: macOS
     deploymentTarget: "14.2"
     sources:
-      - Sources/EQMacRepWidgetShared
+      - Sources/AuralisWidgetShared
     settings:
       base:
         DEFINES_MODULE: YES
         SKIP_INSTALL: YES
-  EQMacRepWidget:
+  AuralisWidget:
     type: app-extension
     platform: macOS
     deploymentTarget: "14.2"
     sources:
-      - Sources/EQMacRepWidget
-      - path: Sources/EQMacRep/Widget/WidgetSnapshot.swift
-      - path: Sources/EQMacRep/Widget/WidgetCommandQueue.swift
+      - Sources/AuralisWidget
+      - path: Sources/Auralis/Widget/WidgetSnapshot.swift
+      - path: Sources/Auralis/Widget/WidgetCommandQueue.swift
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.michaeltrannhan.EQMacRep.EQMacRepWidget
-        INFOPLIST_FILE: Resources/EQMacRepWidget-Info.plist
-        CODE_SIGN_ENTITLEMENTS: Resources/EQMacRepWidget.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.michaeltrannhan.Auralis.Widget
+        INFOPLIST_FILE: Resources/AuralisWidget-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Resources/AuralisWidget.entitlements
         GENERATE_INFOPLIST_FILE: NO
         SKIP_INSTALL: YES
         APPLICATION_EXTENSION_API_ONLY: YES
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../../../../Frameworks"
     dependencies:
-      - target: EQMacRepWidgetShared
-  EQMacRepTests:
+      - target: AuralisWidgetShared
+  AuralisTests:
     type: bundle.unit-test
     platform: macOS
     deploymentTarget: "14.2"
     sources:
-      - Tests/EQMacRepTests
+      - Tests/AuralisTests
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.michaeltrannhan.EQMacRepTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.michaeltrannhan.AuralisTests
         GENERATE_INFOPLIST_FILE: YES
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/EQMacRep.app/Contents/MacOS/EQMacRep"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Auralis.app/Contents/MacOS/Auralis"
         BUNDLE_LOADER: "$(TEST_HOST)"
     dependencies:
-      - target: EQMacRep
-      - target: EQMacRepWidgetShared
-  EQMacRepWidgetTests:
+      - target: Auralis
+      - target: AuralisWidgetShared
+  AuralisWidgetTests:
     type: bundle.unit-test
     platform: macOS
     deploymentTarget: "14.2"
     sources:
-      - Tests/EQMacRepWidgetTests
-      - path: Sources/EQMacRepWidget/EQMacRepWidget.swift
-      - path: Sources/EQMacRepWidget/WidgetAppIntents.swift
-      - path: Sources/EQMacRepWidget/WidgetMixerView.swift
-      - path: Sources/EQMacRepWidget/WidgetEQView.swift
+      - Tests/AuralisWidgetTests
+      - path: Sources/AuralisWidget/AuralisWidget.swift
+      - path: Sources/AuralisWidget/WidgetAppIntents.swift
+      - path: Sources/AuralisWidget/WidgetMixerView.swift
+      - path: Sources/AuralisWidget/WidgetEQView.swift
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.michaeltrannhan.EQMacRepWidgetTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.michaeltrannhan.AuralisWidgetTests
         GENERATE_INFOPLIST_FILE: YES
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/EQMacRep.app/Contents/MacOS/EQMacRep"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Auralis.app/Contents/MacOS/Auralis"
         BUNDLE_LOADER: "$(TEST_HOST)"
     dependencies:
-      - target: EQMacRep
-      - target: EQMacRepWidgetShared
+      - target: Auralis
+      - target: AuralisWidgetShared
 schemes:
-  EQMacRep:
+  Auralis:
     build:
       targets:
-        EQMacRep: all
-        EQMacRepTests: [test]
-        EQMacRepWidgetTests: [test]
+        Auralis: all
+        AuralisTests: [test]
+        AuralisWidgetTests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
-        - name: EQMacRepTests
-        - name: EQMacRepWidgetTests
+        - name: AuralisTests
+        - name: AuralisWidgetTests
     profile:
       config: Release
     analyze:

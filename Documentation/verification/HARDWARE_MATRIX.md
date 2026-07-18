@@ -1,4 +1,4 @@
-# EQMacRep physical hardware matrix
+# Auralis physical hardware matrix
 
 This matrix is optional for ordinary pull requests and mandatory before a hardware-impacting release. Record macOS/build/device details and attach the app log, aggregate ownership journal, and failure notes to the release evidence.
 
@@ -10,7 +10,7 @@ Before touching live audio, run:
 Scripts/hardware-preflight.sh
 ```
 
-The preflight uses CoreAudio's live device registry and the production ownership-journal location. It fails unless at least two physical output devices are available and the starting state contains neither a live `EQMacRep-*` aggregate nor an outstanding journal record. Override the availability threshold with `MIN_PHYSICAL_OUTPUTS=1` only for a single-device row. It never plays audio, changes routes, requests permissions, or substitutes for the exercises below; retain its output with the release evidence.
+The preflight uses CoreAudio's live device registry and the production ownership-journal location. It fails unless at least two physical output devices are available and the starting state contains neither a live `Auralis-*` aggregate nor an outstanding journal record. Override the availability threshold with `MIN_PHYSICAL_OUTPUTS=1` only for a single-device row. It never plays audio, changes routes, requests permissions, or substitutes for the exercises below; retain its output with the release evidence.
 
 ## Required configurations
 
@@ -28,7 +28,7 @@ The preflight uses CoreAudio's live device registry and the production ownership
 
 ## Pass procedure
 
-1. Start with no `EQMacRep-*` aggregate devices and an empty ownership journal.
+1. Start with no `Auralis-*` aggregate devices and an empty ownership journal.
 2. Exercise volume, mute, boost, all ten EQ bands, every route type, and rapid route reordering while audio is continuous.
 3. Unplug each selected output during playback, reconnect it, change the system default, and repeat across sleep/wake.
 4. Revoke and restore Screen & System Audio Recording and Accessibility permissions; verify failures remain visible and recovery actions work.

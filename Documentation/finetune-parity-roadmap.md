@@ -1,6 +1,6 @@
 # FineTune Parity Roadmap
 
-This roadmap splits EQMacRep into reviewable, trackable phases to reach FineTune-like behavior before adding new extensions. Each phase should become its own implementation plan after review.
+This roadmap splits Auralis into reviewable, trackable phases to reach FineTune-like behavior before adding new extensions. Each phase should become its own implementation plan after review.
 
 Track phase status and active goal state in `Documentation/phase-tracker.md`.
 
@@ -91,7 +91,7 @@ Do not parallelize two tasks that both edit tap lifecycle, route switching, or D
 - [ ] Permission state is reflected in popup and settings.
 - [ ] Tests cover permission-state mapping and store status.
 
-**Done:** Debug app bundle with `Resources/EQMacRep-Info.plist` and `Scripts/build-debug-app.sh`.
+**Done:** Debug app bundle with `Resources/Auralis-Info.plist` and `Scripts/build-debug-app.sh`.
 
 **Parallelizable:** UI banner/settings copy can run parallel with permission service after service interface is agreed.
 

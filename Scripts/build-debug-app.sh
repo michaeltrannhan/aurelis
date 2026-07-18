@@ -131,16 +131,21 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 cd "$REPOSITORY_ROOT"
 
-SCHEME=${SCHEME:-EQMacRep}
+SCHEME=${SCHEME:-Auralis}
 CONFIGURATION=${CONFIGURATION:-Debug}
-PROJECT=${PROJECT:-EQMacRep.xcodeproj}
-APP_NAME=${APP_NAME:-EQMacRep}
-WIDGET_NAME=${WIDGET_NAME:-EQMacRepWidget}
-TEST_NAME=${TEST_NAME:-EQMacRepTests}
-WIDGET_TEST_NAME=${WIDGET_TEST_NAME:-EQMacRepWidgetTests}
-APP_BUNDLE_ID=${APP_BUNDLE_ID:-com.michaeltrannhan.EQMacRep}
-WIDGET_BUNDLE_ID=${WIDGET_BUNDLE_ID:-com.michaeltrannhan.EQMacRep.EQMacRepWidget}
-APP_GROUP_ID=${APP_GROUP_ID:-com.michaeltrannhan.EQMacRep.group}
+PROJECT=${PROJECT:-Auralis.xcodeproj}
+APP_PRODUCT_NAME=${APP_PRODUCT_NAME:-Auralis}
+APP_EXECUTABLE_NAME=${APP_EXECUTABLE_NAME:-Auralis}
+APP_DISPLAY_NAME=${APP_DISPLAY_NAME:-Auralis}
+WIDGET_NAME=${WIDGET_NAME:-AuralisWidget}
+WIDGET_DISPLAY_NAME=${WIDGET_DISPLAY_NAME:-Auralis Widget}
+TEST_NAME=${TEST_NAME:-AuralisTests}
+WIDGET_TEST_NAME=${WIDGET_TEST_NAME:-AuralisWidgetTests}
+APP_BUNDLE_ID=${APP_BUNDLE_ID:-com.michaeltrannhan.Auralis}
+WIDGET_BUNDLE_ID=${WIDGET_BUNDLE_ID:-com.michaeltrannhan.Auralis.Widget}
+APP_GROUP_ID=${APP_GROUP_ID:-group.com.michaeltrannhan.Auralis}
+APP_URL_NAME=${APP_URL_NAME:-$APP_BUNDLE_ID}
+APP_URL_SCHEME=${APP_URL_SCHEME:-auralis}
 MARKETING_VERSION=${MARKETING_VERSION:-0.1.0}
 CURRENT_PROJECT_VERSION=${CURRENT_PROJECT_VERSION:-1}
 ARCHS=${ARCHS:-$(/usr/bin/uname -m)}
@@ -155,6 +160,7 @@ VALIDATE_ONLY=${VALIDATE_ONLY:-NO}
 BUILT_APP_OVERRIDE=${BUILT_APP_OVERRIDE:-}
 COPY_VALIDATED_APP=${COPY_VALIDATED_APP:-YES}
 OUTPUT_APP_OVERRIDE=${OUTPUT_APP_OVERRIDE:-}
+BUILD_ROOT_OVERRIDE=${BUILD_ROOT_OVERRIDE:-}
 LOG_VARIANT=${LOG_VARIANT:-}
 
 case "$CONFIGURATION" in
@@ -206,7 +212,14 @@ case "$PROJECT" in
     *) PROJECT_PATH=$REPOSITORY_ROOT/$PROJECT ;;
 esac
 
-BUILD_ROOT=$REPOSITORY_ROOT/.build/xcode/$CONFIGURATION
+if [ -n "$BUILD_ROOT_OVERRIDE" ]; then
+    case "$BUILD_ROOT_OVERRIDE" in
+        /*) BUILD_ROOT=$BUILD_ROOT_OVERRIDE ;;
+        *) BUILD_ROOT=$REPOSITORY_ROOT/$BUILD_ROOT_OVERRIDE ;;
+    esac
+else
+    BUILD_ROOT=$REPOSITORY_ROOT/.build/xcode/$CONFIGURATION
+fi
 DERIVED_DATA_DIR=$BUILD_ROOT/BuildDerivedData
 TEST_DERIVED_DATA_DIR=$BUILD_ROOT/TestDerivedData
 LOG_DIR=$REPOSITORY_ROOT/.build/logs
@@ -230,21 +243,25 @@ if [ -n "$OUTPUT_APP_OVERRIDE" ]; then
         *) OUTPUT_APP=$REPOSITORY_ROOT/$OUTPUT_APP_OVERRIDE ;;
     esac
 else
-    OUTPUT_APP=$REPOSITORY_ROOT/.build/$APP_NAME.app
+    OUTPUT_APP=$REPOSITORY_ROOT/.build/$APP_PRODUCT_NAME.app
 fi
+LEGACY_OUTPUT_APP=$REPOSITORY_ROOT/.build/EQMacRep.app
 
 require_command plutil
 require_command lipo
 require_command ditto
 require_file "$REPOSITORY_ROOT/project.yml"
-require_file "$REPOSITORY_ROOT/Resources/EQMacRep.entitlements"
-require_file "$REPOSITORY_ROOT/Resources/EQMacRepWidget.entitlements"
+require_file "$REPOSITORY_ROOT/Resources/Auralis.entitlements"
+require_file "$REPOSITORY_ROOT/Resources/AuralisWidget.entitlements"
 
 /bin/mkdir -p "$LOG_DIR" "$BUILD_ROOT"
 if [ "$VALIDATE_ONLY" = NO ]; then
     require_command xcodegen
     require_command xcodebuild
     /bin/rm -rf "$DERIVED_DATA_DIR" "$TEST_DERIVED_DATA_DIR" "$OUTPUT_APP"
+    if [ "$LEGACY_OUTPUT_APP" != "$OUTPUT_APP" ]; then
+        /bin/rm -rf "$LEGACY_OUTPUT_APP"
+    fi
 
     printf '==> Generating %s\n' "$PROJECT"
     set +e
@@ -300,7 +317,7 @@ if [ "$RUN_TESTS" = YES ]; then
     if [ "$REQUIRE_APP_GROUP_SMOKE" = YES ]; then
         APP_GROUP_TEST_ARGUMENT=
     else
-        APP_GROUP_TEST_ARGUMENT='-skip-testing:EQMacRepWidgetTests/WidgetRenderingTests/testSignedHostResolvesConfiguredApplicationGroup'
+        APP_GROUP_TEST_ARGUMENT='-skip-testing:AuralisWidgetTests/WidgetRenderingTests/testSignedHostResolvesConfiguredApplicationGroup'
     fi
     set +e
     xcodebuild \
@@ -335,12 +352,12 @@ BUILT_PRODUCTS_DIR=$DERIVED_DATA_DIR/Build/Products/$CONFIGURATION
 if [ -n "$BUILT_APP_OVERRIDE" ]; then
     BUILT_APP=$BUILT_APP_OVERRIDE
 else
-    BUILT_APP=$BUILT_PRODUCTS_DIR/$APP_NAME.app
+    BUILT_APP=$BUILT_PRODUCTS_DIR/$APP_PRODUCT_NAME.app
 fi
 BUILT_WIDGET=$BUILT_APP/Contents/PlugIns/$WIDGET_NAME.appex
 APP_INFO=$BUILT_APP/Contents/Info.plist
 WIDGET_INFO=$BUILT_WIDGET/Contents/Info.plist
-APP_EXECUTABLE=$BUILT_APP/Contents/MacOS/$APP_NAME
+APP_EXECUTABLE=$BUILT_APP/Contents/MacOS/$APP_EXECUTABLE_NAME
 WIDGET_EXECUTABLE=$BUILT_WIDGET/Contents/MacOS/$WIDGET_NAME
 BUILT_TEST_BUNDLE=$BUILT_APP/Contents/PlugIns/$TEST_NAME.xctest
 
@@ -355,8 +372,16 @@ require_file "$WIDGET_EXECUTABLE"
 
 assert_plist_value "$APP_INFO" CFBundlePackageType APPL "app package type"
 assert_plist_value "$WIDGET_INFO" CFBundlePackageType 'XPC!' "widget package type"
+assert_plist_value "$APP_INFO" CFBundleDisplayName "$APP_DISPLAY_NAME" "app display name"
+assert_plist_value "$APP_INFO" CFBundleName "$APP_DISPLAY_NAME" "app bundle name"
+assert_plist_value "$APP_INFO" CFBundleExecutable "$APP_EXECUTABLE_NAME" "app executable name"
+assert_plist_value "$WIDGET_INFO" CFBundleDisplayName "$WIDGET_DISPLAY_NAME" "widget display name"
+assert_plist_value "$WIDGET_INFO" CFBundleName "$WIDGET_DISPLAY_NAME" "widget bundle name"
+assert_plist_value "$WIDGET_INFO" CFBundleExecutable "$WIDGET_NAME" "widget executable name"
 assert_plist_value "$APP_INFO" CFBundleIdentifier "$APP_BUNDLE_ID" "app bundle identifier"
 assert_plist_value "$WIDGET_INFO" CFBundleIdentifier "$WIDGET_BUNDLE_ID" "widget bundle identifier"
+assert_plist_value "$APP_INFO" CFBundleURLTypes.0.CFBundleURLName "$APP_URL_NAME" "app URL name"
+assert_plist_value "$APP_INFO" CFBundleURLTypes.0.CFBundleURLSchemes.0 "$APP_URL_SCHEME" "app URL scheme"
 assert_plist_value "$APP_INFO" CFBundleShortVersionString "$MARKETING_VERSION" "app marketing version"
 assert_plist_value "$WIDGET_INFO" CFBundleShortVersionString "$MARKETING_VERSION" "widget marketing version"
 assert_plist_value "$APP_INFO" CFBundleVersion "$CURRENT_PROJECT_VERSION" "app build version"
@@ -367,8 +392,8 @@ assert_plist_value "$WIDGET_INFO" NSExtension.NSExtensionPointIdentifier \
 assert_architectures "$APP_EXECUTABLE" "app executable"
 assert_architectures "$WIDGET_EXECUTABLE" "widget executable"
 
-APP_SOURCE_ENTITLEMENTS=$REPOSITORY_ROOT/Resources/EQMacRep.entitlements
-WIDGET_SOURCE_ENTITLEMENTS=$REPOSITORY_ROOT/Resources/EQMacRepWidget.entitlements
+APP_SOURCE_ENTITLEMENTS=$REPOSITORY_ROOT/Resources/Auralis.entitlements
+WIDGET_SOURCE_ENTITLEMENTS=$REPOSITORY_ROOT/Resources/AuralisWidget.entitlements
 assert_app_group "$APP_SOURCE_ENTITLEMENTS" "app source entitlements"
 assert_app_group "$WIDGET_SOURCE_ENTITLEMENTS" "widget source entitlements"
 assert_entitlement_value "$WIDGET_SOURCE_ENTITLEMENTS" com.apple.security.app-sandbox true \
@@ -420,7 +445,7 @@ if [ "$CODE_SIGNING_ALLOWED" = YES ]; then
         "$APP_GROUP_PROBE_EXECUTABLE" "$WIDGET_BUILT_ENTITLEMENTS"
 
     APP_GROUP_TOKEN=$(/usr/bin/uuidgen)
-    APP_GROUP_MARKER=.eqmacrep-app-group-smoke-$APP_GROUP_TOKEN
+    APP_GROUP_MARKER=.auralis-app-group-smoke-$APP_GROUP_TOKEN
     APP_GROUP_APP_PATH=$(
         "$APP_GROUP_APP_PROBE/Contents/MacOS/AppGroupRuntimeProbe" \
             "$APP_GROUP_ID" write "$APP_GROUP_MARKER" "$APP_GROUP_TOKEN"

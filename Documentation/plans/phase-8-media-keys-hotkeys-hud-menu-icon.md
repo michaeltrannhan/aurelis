@@ -22,36 +22,36 @@ FineTune uses:
 - HUD that hides automatically
 - menu bar icon state derived from volume, mute, and current device
 
-Phase 8 controls EQMacRep app volume, not hardware device volume. Device hardware volume enhancements stay Phase 12.
+Phase 8 controls Auralis app volume, not hardware device volume. Device hardware volume enhancements stay Phase 12.
 
 ## File Structure
 
-- Create `Sources/EQMacRep/Controls/AccessibilityPermissionService.swift`: Accessibility trust query and System Settings opener.
-- Create `Sources/EQMacRep/Controls/MediaKeyEventDecoder.swift`: pure media-key decoder.
-- Create `Sources/EQMacRep/Controls/MediaKeyMonitor.swift`: CGEvent tap lifecycle and watchdog.
-- Create `Sources/EQMacRep/Controls/ShortcutAction.swift`: hotkey action model.
-- Create `Sources/EQMacRep/Controls/GlobalHotkeyRegistrar.swift`: Carbon hotkey registration.
-- Create `Sources/EQMacRep/Controls/AppControlTargetResolver.swift`: audible/frontmost target selection.
-- Create `Sources/EQMacRep/Controls/AppControlCommandExecutor.swift`: apply volume and mute commands to `AudioControlStore`.
-- Create `Sources/EQMacRep/Views/HUD/VolumeHUDState.swift`: pure HUD value model.
-- Create `Sources/EQMacRep/Views/HUD/VolumeHUDView.swift`: SwiftUI HUD content.
-- Create `Sources/EQMacRep/Views/HUD/VolumeHUDWindowController.swift`: AppKit panel and hide timer.
-- Create `Sources/EQMacRep/Views/MenuBar/MenuBarIconState.swift`: pure menu icon model.
-- Modify `Sources/EQMacRep/EQMacRepApp.swift`: own long-lived monitors/controllers and dynamic menu icon.
-- Modify `Sources/EQMacRep/Views/Settings/ShortcutsSettingsTab.swift`: media-key and hotkey settings.
-- Modify `Sources/EQMacRep/Domain/AppCustomization.swift`: control settings.
-- Test `Tests/EQMacRepTests/MediaKeyEventDecoderTests.swift`.
-- Test `Tests/EQMacRepTests/AppControlTargetResolverTests.swift`.
-- Test `Tests/EQMacRepTests/AppControlCommandExecutorTests.swift`.
-- Test `Tests/EQMacRepTests/MenuBarIconStateTests.swift`.
-- Test `Tests/EQMacRepTests/VolumeHUDStateTests.swift`.
+- Create `Sources/Auralis/Controls/AccessibilityPermissionService.swift`: Accessibility trust query and System Settings opener.
+- Create `Sources/Auralis/Controls/MediaKeyEventDecoder.swift`: pure media-key decoder.
+- Create `Sources/Auralis/Controls/MediaKeyMonitor.swift`: CGEvent tap lifecycle and watchdog.
+- Create `Sources/Auralis/Controls/ShortcutAction.swift`: hotkey action model.
+- Create `Sources/Auralis/Controls/GlobalHotkeyRegistrar.swift`: Carbon hotkey registration.
+- Create `Sources/Auralis/Controls/AppControlTargetResolver.swift`: audible/frontmost target selection.
+- Create `Sources/Auralis/Controls/AppControlCommandExecutor.swift`: apply volume and mute commands to `AudioControlStore`.
+- Create `Sources/Auralis/Views/HUD/VolumeHUDState.swift`: pure HUD value model.
+- Create `Sources/Auralis/Views/HUD/VolumeHUDView.swift`: SwiftUI HUD content.
+- Create `Sources/Auralis/Views/HUD/VolumeHUDWindowController.swift`: AppKit panel and hide timer.
+- Create `Sources/Auralis/Views/MenuBar/MenuBarIconState.swift`: pure menu icon model.
+- Modify `Sources/Auralis/AuralisApp.swift`: own long-lived monitors/controllers and dynamic menu icon.
+- Modify `Sources/Auralis/Views/Settings/ShortcutsSettingsTab.swift`: media-key and hotkey settings.
+- Modify `Sources/Auralis/Domain/AppCustomization.swift`: control settings.
+- Test `Tests/AuralisTests/MediaKeyEventDecoderTests.swift`.
+- Test `Tests/AuralisTests/AppControlTargetResolverTests.swift`.
+- Test `Tests/AuralisTests/AppControlCommandExecutorTests.swift`.
+- Test `Tests/AuralisTests/MenuBarIconStateTests.swift`.
+- Test `Tests/AuralisTests/VolumeHUDStateTests.swift`.
 - Update `Documentation/flows.md` and `Documentation/phase-tracker.md`.
 
 ## Task 1: Control Settings
 
 **Files:**
-- Modify: `Sources/EQMacRep/Domain/AppCustomization.swift`
-- Test: `Tests/EQMacRepTests/CustomizationTests.swift`
+- Modify: `Sources/Auralis/Domain/AppCustomization.swift`
+- Test: `Tests/AuralisTests/CustomizationTests.swift`
 
 - [ ] **Step 1: Write settings defaults test**
 
@@ -121,8 +121,8 @@ Expected: PASS.
 ## Task 2: Media Key Decoder
 
 **Files:**
-- Create: `Sources/EQMacRep/Controls/MediaKeyEventDecoder.swift`
-- Test: `Tests/EQMacRepTests/MediaKeyEventDecoderTests.swift`
+- Create: `Sources/Auralis/Controls/MediaKeyEventDecoder.swift`
+- Test: `Tests/AuralisTests/MediaKeyEventDecoderTests.swift`
 
 - [ ] **Step 1: Write decoder tests**
 
@@ -130,7 +130,7 @@ Create:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class MediaKeyEventDecoderTests: XCTestCase {
     func testDecodesVolumeUpDownAndMute() {
@@ -212,8 +212,8 @@ Expected: PASS.
 ## Task 3: Target Resolver
 
 **Files:**
-- Create: `Sources/EQMacRep/Controls/AppControlTargetResolver.swift`
-- Test: `Tests/EQMacRepTests/AppControlTargetResolverTests.swift`
+- Create: `Sources/Auralis/Controls/AppControlTargetResolver.swift`
+- Test: `Tests/AuralisTests/AppControlTargetResolverTests.swift`
 
 - [ ] **Step 1: Write resolver tests**
 
@@ -221,7 +221,7 @@ Create:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class AppControlTargetResolverTests: XCTestCase {
     func testAudibleAppWinsOverFrontmost() {
@@ -297,8 +297,8 @@ Expected: PASS.
 ## Task 4: Command Executor
 
 **Files:**
-- Create: `Sources/EQMacRep/Controls/AppControlCommandExecutor.swift`
-- Test: `Tests/EQMacRepTests/AppControlCommandExecutorTests.swift`
+- Create: `Sources/Auralis/Controls/AppControlCommandExecutor.swift`
+- Test: `Tests/AuralisTests/AppControlCommandExecutorTests.swift`
 
 - [ ] **Step 1: Write pure command tests**
 
@@ -306,7 +306,7 @@ Create tests for command math:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class AppControlCommandExecutorTests: XCTestCase {
     func testVolumeUpAutoUnmutes() {
@@ -389,10 +389,10 @@ Expected: PASS.
 ## Task 5: Media Key Monitor And Accessibility
 
 **Files:**
-- Create: `Sources/EQMacRep/Controls/AccessibilityPermissionService.swift`
-- Create: `Sources/EQMacRep/Controls/MediaKeyMonitor.swift`
-- Modify: `Sources/EQMacRep/Views/Settings/ShortcutsSettingsTab.swift`
-- Test: `Tests/EQMacRepTests/MediaKeyEventDecoderTests.swift`
+- Create: `Sources/Auralis/Controls/AccessibilityPermissionService.swift`
+- Create: `Sources/Auralis/Controls/MediaKeyMonitor.swift`
+- Modify: `Sources/Auralis/Views/Settings/ShortcutsSettingsTab.swift`
+- Test: `Tests/AuralisTests/MediaKeyEventDecoderTests.swift`
 
 - [ ] **Step 1: Implement Accessibility service**
 
@@ -471,10 +471,10 @@ Expected: build succeeds.
 ## Task 6: Global Hotkeys
 
 **Files:**
-- Create: `Sources/EQMacRep/Controls/ShortcutAction.swift`
-- Create: `Sources/EQMacRep/Controls/GlobalHotkeyRegistrar.swift`
-- Modify: `Sources/EQMacRep/Views/Settings/ShortcutsSettingsTab.swift`
-- Test: `Tests/EQMacRepTests/CustomizationTests.swift`
+- Create: `Sources/Auralis/Controls/ShortcutAction.swift`
+- Create: `Sources/Auralis/Controls/GlobalHotkeyRegistrar.swift`
+- Modify: `Sources/Auralis/Views/Settings/ShortcutsSettingsTab.swift`
+- Test: `Tests/AuralisTests/CustomizationTests.swift`
 
 - [ ] **Step 1: Write shortcut action test**
 
@@ -542,13 +542,13 @@ Expected: PASS and build succeeds.
 ## Task 7: HUD And Menu Bar Icon
 
 **Files:**
-- Create: `Sources/EQMacRep/Views/HUD/VolumeHUDState.swift`
-- Create: `Sources/EQMacRep/Views/HUD/VolumeHUDView.swift`
-- Create: `Sources/EQMacRep/Views/HUD/VolumeHUDWindowController.swift`
-- Create: `Sources/EQMacRep/Views/MenuBar/MenuBarIconState.swift`
-- Modify: `Sources/EQMacRep/EQMacRepApp.swift`
-- Test: `Tests/EQMacRepTests/VolumeHUDStateTests.swift`
-- Test: `Tests/EQMacRepTests/MenuBarIconStateTests.swift`
+- Create: `Sources/Auralis/Views/HUD/VolumeHUDState.swift`
+- Create: `Sources/Auralis/Views/HUD/VolumeHUDView.swift`
+- Create: `Sources/Auralis/Views/HUD/VolumeHUDWindowController.swift`
+- Create: `Sources/Auralis/Views/MenuBar/MenuBarIconState.swift`
+- Modify: `Sources/Auralis/AuralisApp.swift`
+- Test: `Tests/AuralisTests/VolumeHUDStateTests.swift`
+- Test: `Tests/AuralisTests/MenuBarIconStateTests.swift`
 
 - [ ] **Step 1: Write value-model tests**
 
@@ -598,7 +598,7 @@ Clamp volume to the closed unit range. `VolumeHUDWindowController` hosts `Volume
 
 - [ ] **Step 5: Wire app root**
 
-`EQMacRepApp` owns:
+`AuralisApp` owns:
 
 - `AccessibilityPermissionService`
 - `MediaKeyStatus`
@@ -669,7 +669,7 @@ Expected: tests pass, build succeeds, debug app bundle exists.
 Run:
 
 ```sh
-open .build/EQMacRep.app
+open .build/Auralis.app
 ```
 
 Manual checks:

@@ -24,21 +24,21 @@ This phase must not create aggregate devices or start an IOProc. That belongs to
 
 ## File Structure
 
-- Modify `Sources/EQMacRep/Audio/AudioBackend.swift`: add tap synchronization protocol.
-- Modify `Sources/EQMacRep/State/AudioControlStore.swift`: call tap synchronization after refresh, ignore, unignore, reset, and shutdown.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessDiscovery.swift`: expose tap targets containing identity and process object IDs.
-- Create `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapTypes.swift`: tap target/session result types.
-- Create `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessTapManager.swift`: manager protocol and CoreAudio implementation.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`: own tap manager and identity target cache.
-- Test `Tests/EQMacRepTests/CoreAudioTapLifecycleTests.swift`: pure manager reconciliation using fake tap operations.
-- Test `Tests/EQMacRepTests/AudioControlStoreTests.swift`: store forwards active/ignored state to tap-capable backend.
+- Modify `Sources/Auralis/Audio/AudioBackend.swift`: add tap synchronization protocol.
+- Modify `Sources/Auralis/State/AudioControlStore.swift`: call tap synchronization after refresh, ignore, unignore, reset, and shutdown.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessDiscovery.swift`: expose tap targets containing identity and process object IDs.
+- Create `Sources/Auralis/Audio/CoreAudio/CoreAudioTapTypes.swift`: tap target/session result types.
+- Create `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessTapManager.swift`: manager protocol and CoreAudio implementation.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`: own tap manager and identity target cache.
+- Test `Tests/AuralisTests/CoreAudioTapLifecycleTests.swift`: pure manager reconciliation using fake tap operations.
+- Test `Tests/AuralisTests/AudioControlStoreTests.swift`: store forwards active/ignored state to tap-capable backend.
 - Update `Documentation/flows.md` and `Documentation/phase-tracker.md`.
 
 ## Task 1: Tap Target Types
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapTypes.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioTapLifecycleTests.swift`
+- Create: `Sources/Auralis/Audio/CoreAudio/CoreAudioTapTypes.swift`
+- Test: `Tests/AuralisTests/CoreAudioTapLifecycleTests.swift`
 
 - [ ] **Step 1: Write failing target equality test**
 
@@ -47,7 +47,7 @@ Create `CoreAudioTapLifecycleTests.swift`:
 ```swift
 import CoreAudio
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class CoreAudioTapLifecycleTests: XCTestCase {
     func testTapTargetUsesAppIdentityAndProcessObjects() {
@@ -108,8 +108,8 @@ Expected: PASS.
 ## Task 2: Process Discovery Tap Targets
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessDiscovery.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioMappingTests.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessDiscovery.swift`
+- Test: `Tests/AuralisTests/CoreAudioMappingTests.swift`
 
 - [ ] **Step 1: Write failing coalesced target test**
 
@@ -219,8 +219,8 @@ Expected: PASS.
 ## Task 3: Tap Manager With Fake Operations
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessTapManager.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioTapLifecycleTests.swift`
+- Create: `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessTapManager.swift`
+- Test: `Tests/AuralisTests/CoreAudioTapLifecycleTests.swift`
 
 - [ ] **Step 1: Write failing reconcile test**
 
@@ -356,7 +356,7 @@ Expected: PASS.
 ## Task 4: System Tap Operations
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessTapManager.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessTapManager.swift`
 - Test: build only
 
 - [ ] **Step 1: Add CoreAudio error**
@@ -388,7 +388,7 @@ final class SystemCoreAudioTapOperations: CoreAudioTapOperating {
     func createTap(for target: CoreAudioTapTarget) throws -> AudioObjectID {
         let processNumbers = target.processObjectIDs.map { NSNumber(value: $0) }
         let description = CATapDescription(stereoMixdownOfProcesses: processNumbers)
-        description.name = "EQMacRep \(target.displayName)"
+        description.name = "Auralis \(target.displayName)"
         description.uuid = UUID()
         description.isPrivate = true
         description.muteBehavior = CATapUnmuted
@@ -423,9 +423,9 @@ Expected: build succeeds.
 ## Task 5: Backend Tap Synchronization Protocol
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/AudioBackend.swift`
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioTapLifecycleTests.swift`
+- Modify: `Sources/Auralis/Audio/AudioBackend.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`
+- Test: `Tests/AuralisTests/CoreAudioTapLifecycleTests.swift`
 
 - [ ] **Step 1: Add backend protocol**
 
@@ -544,8 +544,8 @@ Expected: PASS.
 ## Task 6: Store Calls Tap Synchronization
 
 **Files:**
-- Modify: `Sources/EQMacRep/State/AudioControlStore.swift`
-- Test: `Tests/EQMacRepTests/AudioControlStoreTests.swift`
+- Modify: `Sources/Auralis/State/AudioControlStore.swift`
+- Test: `Tests/AuralisTests/AudioControlStoreTests.swift`
 
 - [ ] **Step 1: Write failing store forwarding test**
 
@@ -658,8 +658,8 @@ Expected: PASS.
 ## Task 7: Shutdown Teardown
 
 **Files:**
-- Modify: `Sources/EQMacRep/State/AudioControlStore.swift`
-- Modify: `Sources/EQMacRep/EQMacRepApp.swift`
+- Modify: `Sources/Auralis/State/AudioControlStore.swift`
+- Modify: `Sources/Auralis/AuralisApp.swift`
 
 - [ ] **Step 1: Add explicit shutdown method**
 
@@ -674,13 +674,13 @@ func shutdown() {
 
 - [ ] **Step 2: Call shutdown from app**
 
-In `EQMacRepApp.body`, attach:
+In `AuralisApp.body`, attach:
 
 ```swift
 .onChange(of: NSApp.isActive) { _, _ in }
 ```
 
-If SwiftUI scene hooks do not expose termination cleanly, add an `NSApplicationDelegate` adaptor in `EQMacRepApp`:
+If SwiftUI scene hooks do not expose termination cleanly, add an `NSApplicationDelegate` adaptor in `AuralisApp`:
 
 ```swift
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -741,7 +741,7 @@ Run:
 swift test
 swift build
 Scripts/build-debug-app.sh
-open .build/EQMacRep.app
+open .build/Auralis.app
 ```
 
 Manual checks:

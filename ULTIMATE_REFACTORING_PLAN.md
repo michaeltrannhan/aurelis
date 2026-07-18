@@ -1,4 +1,4 @@
-# EQMacRep Ultimate Refactoring Plan
+# Auralis Ultimate Refactoring Plan
 
 Date of audit: 2026-07-15
 
@@ -33,31 +33,31 @@ Audit-time working tree:
 ```text
  M .gitignore
  M README.md
- M Resources/EQMacRep-Info.plist
+ M Resources/Auralis-Info.plist
  M Scripts/build-debug-app.sh
- M Sources/EQMacRep/EQMacRepApp.swift
-?? Resources/EQMacRep.entitlements
-?? Resources/EQMacRepWidget-Info.plist
-?? Resources/EQMacRepWidget.entitlements
-?? Sources/EQMacRep/Widget/
-?? Sources/EQMacRepWidget/
+ M Sources/Auralis/AuralisApp.swift
+?? Resources/Auralis.entitlements
+?? Resources/AuralisWidget-Info.plist
+?? Resources/AuralisWidget.entitlements
+?? Sources/Auralis/Widget/
+?? Sources/AuralisWidget/
 ?? project.yml
 ```
 
 ## Release blockers
 
-- `Sources/EQMacRep/Widget/WidgetBridge.swift:131`: The watcher opens `commands.json`, then startup draining deletes the watched inode. Watch the command directory or reopen after delete/rename.
-- `Sources/EQMacRep/Widget/WidgetCommandQueue.swift:39`: Atomic writes replace the file inode and invalidate the watcher after the first command.
-- `Sources/EQMacRep/Widget/WidgetCommandQueue.swift:28`: Cross-process read-modify-write and drain-delete operations have no locking. Concurrent commands can be overwritten or lost.
-- `Sources/EQMacRepWidget/WidgetAppIntents.swift:23`: Intents only enqueue commands and do not ensure a host is running to consume them.
-- `Sources/EQMacRepWidget/WidgetMixerView.swift:83`: Device mute emits an application-mute command with a synthetic `device:` identity that the bridge cannot resolve.
+- `Sources/Auralis/Widget/WidgetBridge.swift:131`: The watcher opens `commands.json`, then startup draining deletes the watched inode. Watch the command directory or reopen after delete/rename.
+- `Sources/Auralis/Widget/WidgetCommandQueue.swift:39`: Atomic writes replace the file inode and invalidate the watcher after the first command.
+- `Sources/Auralis/Widget/WidgetCommandQueue.swift:28`: Cross-process read-modify-write and drain-delete operations have no locking. Concurrent commands can be overwritten or lost.
+- `Sources/AuralisWidget/WidgetAppIntents.swift:23`: Intents only enqueue commands and do not ensure a host is running to consume them.
+- `Sources/AuralisWidget/WidgetMixerView.swift:83`: Device mute emits an application-mute command with a synthetic `device:` identity that the bridge cannot resolve.
 - `project.yml:57`: The widget `CFBundlePackageType` is overridden to `APPL`; the built extension plist confirmed the incorrect value. It must be `XPC!`.
 - `Scripts/build-debug-app.sh:21`: `grep ... || true` hides `xcodebuild` failures, allowing a stale app to be copied and reported as successful.
-- `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapIOController.swift:189`: Render code assumes the first buffer is interleaved stereo `Float32`; other layouts are corrupted or ignored.
-- `Sources/EQMacRep/Audio/CoreAudio/CoreAudioAggregateCrashGuard.swift:48`: Fatal signal handlers call non-async-signal-safe CoreAudio APIs and access non-atomic shared state.
-- `Sources/EQMacRep/Domain/EQCurve.swift`: Synthesized decoding bypasses band-count and gain normalization. Short arrays crash EQ controls; long arrays can crash the widget.
-- `Sources/EQMacRep/EQMacRepApp.swift:66`: Backend observation and external controls start inside `MenuBarExtra` content `.task`, so they may not start until the menu opens.
-- `Sources/EQMacRep/State/AudioControlStore.swift:543`: `Dictionary(uniqueKeysWithValues:)` trusts backend and persisted identifiers and can terminate on duplicates.
+- `Sources/Auralis/Audio/CoreAudio/CoreAudioTapIOController.swift:189`: Render code assumes the first buffer is interleaved stereo `Float32`; other layouts are corrupted or ignored.
+- `Sources/Auralis/Audio/CoreAudio/CoreAudioAggregateCrashGuard.swift:48`: Fatal signal handlers call non-async-signal-safe CoreAudio APIs and access non-atomic shared state.
+- `Sources/Auralis/Domain/EQCurve.swift`: Synthesized decoding bypasses band-count and gain normalization. Short arrays crash EQ controls; long arrays can crash the widget.
+- `Sources/Auralis/AuralisApp.swift:66`: Backend observation and external controls start inside `MenuBarExtra` content `.task`, so they may not start until the menu opens.
+- `Sources/Auralis/State/AudioControlStore.swift:543`: `Dictionary(uniqueKeysWithValues:)` trusts backend and persisted identifiers and can terminate on duplicates.
 
 ## Complete finding inventory
 
@@ -218,7 +218,7 @@ Tasks:
 
 - [x] Remove the widget `CFBundlePackageType: APPL` override and verify the built extension is `XPC!`.
 - [x] Set `APPLICATION_EXTENSION_API_ONLY=YES` on the widget target.
-- [x] Add `EQMacRepTests` to the generated Xcode project and shared scheme.
+- [x] Add `AuralisTests` to the generated Xcode project and shared scheme.
 - [x] Extract widget snapshot/command models into a shared target compiled by the app, widget, and tests.
 - [x] Rewrite `build-debug-app.sh` with pipeline failure propagation and explicit `xcodebuild` status capture.
 - [x] Preserve a full build log while still printing a concise terminal summary.
@@ -479,13 +479,13 @@ Automated completion evidence (2026-07-16):
 - Generated Xcode unsigned and Apple Development-signed Release builds: passed
   structural validation.
 - Signed app and sandboxed widget entitlement probes resolved
-  `com.michaeltrannhan.EQMacRep.group` to the same container and exchanged a
+  `group.com.michaeltrannhan.Auralis` to the same container and exchanged a
   nonce across processes.
 - Product verifier self-tests rejected build, plist, embedding, architecture,
   bundle-identifier, entitlement, missing-notary-configuration, signed-product
   tampering, and non–Developer ID distribution faults.
 - Read-only hardware preflight on an Apple silicon laptop found built-in and
-  HDMI physical outputs, zero live `EQMacRep-*` aggregates, and an empty
+  HDMI physical outputs, zero live `Auralis-*` aggregates, and an empty
   production ownership journal.
 - `git diff --check` and verification-script shell syntax: passed.
 

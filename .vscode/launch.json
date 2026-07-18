@@ -4,21 +4,21 @@
             "type": "swift",
             "request": "launch",
             "args": [],
-            "cwd": "${workspaceFolder:eq-mac-rep}",
-            "name": "Debug EQMacRep",
-            "target": "EQMacRep",
+            "cwd": "${workspaceFolder}",
+            "name": "Debug Auralis",
+            "target": "Auralis",
             "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug EQMacRep"
+            "preLaunchTask": "swift: Build Debug Auralis"
         },
         {
             "type": "swift",
             "request": "launch",
             "args": [],
-            "cwd": "${workspaceFolder:eq-mac-rep}",
-            "name": "Release EQMacRep",
-            "target": "EQMacRep",
+            "cwd": "${workspaceFolder}",
+            "name": "Release Auralis",
+            "target": "Auralis",
             "configuration": "release",
-            "preLaunchTask": "swift: Build Release EQMacRep"
+            "preLaunchTask": "swift: Build Release Auralis"
         }
     ]
 }

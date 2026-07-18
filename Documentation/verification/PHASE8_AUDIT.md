@@ -13,7 +13,7 @@ Audit date: 2026-07-16. This document maps every Phase 8 task and completion gat
 | DSP response, stability, denormal, storage, and performance | `CoreAudioPCMRendererTests.swift`, `CoreAudioBiquadMathTests.swift`, and `CoreAudioRealtimeGainTests.swift` | Automated proof complete |
 | Malformed, future, corrupt, and property/fuzz settings | `SettingsFuzzTests.swift` and `SettingsStoreTests.swift` | Automated proof complete |
 | Remove fixed async sleeps from tests | No `sleep`, `usleep`, `Thread.sleep`, or `Task.sleep` call remains under `Tests/`; injected schedulers and XCTest expectations are used | Automated proof complete |
-| Consolidated test support | `Tests/EQMacRepTests/TestSupport.swift` owns temporary paths, schedulers, layouts, and audio-buffer helpers | Automated proof complete |
+| Consolidated test support | `Tests/AuralisTests/TestSupport.swift` owns temporary paths, schedulers, layouts, and audio-buffer helpers | Automated proof complete |
 | External-control and permission lifecycle through OS seams | `ExternalControlsCoordinatorTests.swift`, `AudioCapturePermissionTests.swift`, and `MediaTapRecoveryAndRelaunchTests.swift` | Automated proof complete |
 | Popup/widget rendering and accessibility integration | `ViewRenderingIntegrationTests.swift`, `WidgetRenderingTests.swift`, `WidgetModelsTests.swift`, and `PopupKeyboardNavModelTests.swift` | Automated proof complete |
 | Complete strict concurrency | SwiftPM/Xcode settings, `run-verification.sh strict`, and the `strict-concurrency` workflow job | 290 tests pass |
@@ -34,7 +34,7 @@ Audit date: 2026-07-16. This document maps every Phase 8 task and completion gat
 | Widget commands work with running and closed hosts | Queue/bridge durability, stopped lease, restart drain, idempotent replay, acknowledgment ordering, and production rendering are proven in automation; the real WidgetKit app-running/app-closed exercise remains a hands-on matrix row |
 | No teardown failure loses a CoreAudio resource handle | Failure injection proves failed handles and journal ownership remain retryable; real HAL teardown is still checked during the hands-on matrix |
 | Audio callback meets its budget | Proven: stable preallocated storage, zero declared heap-allocation budget, finite output, and 100,000-callback gate passed in 46.384 seconds |
-| Hardware matrix passes without stuck taps or orphaned aggregates | Not yet proven. The read-only preflight found two physical outputs, zero live EQMacRep aggregates, and zero journal records, but it did not play audio or exercise route/permission/device/sleep transitions |
+| Hardware matrix passes without stuck taps or orphaned aggregates | Not yet proven. The read-only preflight found two physical outputs, zero live Auralis aggregates, and zero journal records, but it did not play audio or exercise route/permission/device/sleep transitions |
 | Build scripts reject build, plist, embedding, architecture, signature, or entitlement mismatch | Proven. Unsigned self-test rejects seven fault classes; signed self-test rejects nine, adding signature tampering and non–Developer ID distribution |
 
 ## Current environment boundary
@@ -42,7 +42,7 @@ Audit date: 2026-07-16. This document maps every Phase 8 task and completion gat
 - Apple silicon laptop running macOS 26.5.2 has built-in and HDMI physical outputs available.
 - `hardware-preflight.sh` passes with two physical outputs, zero live owned aggregates, and an empty production journal.
 - Keychain contains one Apple Development identity for team `6T8J96Z3SD`; it contains no Developer ID Application identity.
-- No `eqmacrep-notary` keychain profile exists.
+- No `auralis-notary` keychain profile exists.
 - Completing the hands-on matrix would change live output routes, permissions, app/widget state, and sleep/login state. Those actions require the user to conduct or explicitly supervise the matrix.
 - Developer ID packaging/notarization cannot be positively executed until its identity and notary credentials exist.
 

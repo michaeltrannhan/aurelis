@@ -18,6 +18,14 @@ private enum HardwarePreflightError: Error, CustomStringConvertible {
     }
 }
 
+private enum AggregateIdentity {
+    static let currentPrefix = "Auralis-"
+    // Retained only so an upgrade can detect and clean devices left by the
+    // previous application identity after a crash.
+    static let legacyPrefix = "EQMacRep-"
+    static let recognizedPrefixes = [currentPrefix, legacyPrefix]
+}
+
 private struct OutputDevice {
     var id: AudioObjectID
     var uid: String
@@ -45,10 +53,12 @@ private struct OutputDevice {
         }
     }
 
-    var isEQMacRepAggregate: Bool {
+    var isOwnedAggregate: Bool {
         let isAggregate = transport == kAudioDeviceTransportTypeAggregate
             || transport == kAudioDeviceTransportTypeAutoAggregate
-        return isAggregate && (uid.hasPrefix("EQMacRep-") || name.hasPrefix("EQMacRep-"))
+        return isAggregate && AggregateIdentity.recognizedPrefixes.contains { prefix in
+            uid.hasPrefix(prefix) || name.hasPrefix(prefix)
+        }
     }
 }
 
@@ -220,16 +230,26 @@ do {
     guard let minimumPhysicalOutputs = Int(minimumArgument), minimumPhysicalOutputs >= 0 else {
         throw HardwarePreflightError.invalidMinimum(minimumArgument)
     }
-    let journalURL = FileManager.default
+    let applicationSupportURL = FileManager.default
         .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    let currentJournalURL = applicationSupportURL
+        .appendingPathComponent("Auralis", isDirectory: true)
+        .appendingPathComponent("aggregate-ownership.json")
+    // Read-only legacy inspection prevents an old crash journal from being
+    // mistaken for a clean starting state during the identity migration.
+    let legacyJournalURL = applicationSupportURL
         .appendingPathComponent("EQMacRep", isDirectory: true)
         .appendingPathComponent("aggregate-ownership.json")
+    let journalURLs = [currentJournalURL, legacyJournalURL]
     let devices = try outputDevices()
     let physical = devices.filter(\.isPhysical)
-    let staleAggregates = devices.filter(\.isEQMacRepAggregate)
-    let journalUIDs = try journalRecordUIDs(at: journalURL)
+    let staleAggregates = devices.filter(\.isOwnedAggregate)
+    let journalRecords = try journalURLs.map { url in
+        (url: url, uids: try journalRecordUIDs(at: url))
+    }
+    let journalUIDs = journalRecords.flatMap { $0.uids }
 
-    print("EQMacRep read-only hardware preflight")
+    print("Auralis read-only hardware preflight")
     print("  OS: \(ProcessInfo.processInfo.operatingSystemVersionString)")
 #if arch(arm64)
     print("  architecture: arm64")
@@ -246,8 +266,11 @@ do {
             "    - \(device.name) [\(transportName(device.transport)), \(physicalMarker)\(defaultMarker), \(Int(device.sampleRate.rounded())) Hz]"
         )
     }
-    print("  live EQMacRep aggregates: \(staleAggregates.count)")
-    print("  ownership journal records: \(journalUIDs.count) (\(journalURL.path))")
+    print("  live owned aggregates: \(staleAggregates.count)")
+    print("  ownership journal records: \(journalUIDs.count)")
+    for journal in journalRecords where !journal.uids.isEmpty {
+        print("    - \(journal.uids.count) at \(journal.url.path)")
+    }
 
     var failures: [String] = []
     if physical.count < minimumPhysicalOutputs {

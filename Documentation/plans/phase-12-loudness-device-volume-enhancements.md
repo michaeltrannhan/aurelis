@@ -18,30 +18,30 @@ Phase 12 does not add inspector, automation, signing, or updates. Those are Phas
 
 ## File Structure
 
-- Create `Sources/EQMacRep/Audio/Loudness/LoudnessSettings.swift`.
-- Create `Sources/EQMacRep/Audio/Loudness/LoudnessCompensator.swift`.
-- Create `Sources/EQMacRep/Audio/Loudness/LoudnessDetector.swift`.
-- Create `Sources/EQMacRep/Audio/Loudness/GainComputer.swift`.
-- Create `Sources/EQMacRep/Audio/Devices/CoreAudioDeviceVolumeController.swift`.
-- Create `Sources/EQMacRep/Audio/Devices/SystemAlertVolumeController.swift`.
-- Create `Sources/EQMacRep/Audio/Devices/SoftwareOutputVolumeStore.swift`.
-- Create `Sources/EQMacRep/Audio/DDC/DDCService.swift`.
-- Create `Sources/EQMacRep/Audio/DDC/DDCController.swift`.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapIOController.swift`: apply software device gain and loudness processors.
-- Modify `Sources/EQMacRep/State/AudioControlStore.swift`: device volume commands.
-- Modify `Sources/EQMacRep/Views/Settings/AudioSettingsTab.swift`: loudness and alert volume controls.
-- Test `Tests/EQMacRepTests/LoudnessCompensatorTests.swift`.
-- Test `Tests/EQMacRepTests/LoudnessDetectorTests.swift`.
-- Test `Tests/EQMacRepTests/CoreAudioDeviceVolumeControllerTests.swift`.
-- Test `Tests/EQMacRepTests/SystemAlertVolumeControllerTests.swift`.
-- Test `Tests/EQMacRepTests/DDCServiceTests.swift`.
+- Create `Sources/Auralis/Audio/Loudness/LoudnessSettings.swift`.
+- Create `Sources/Auralis/Audio/Loudness/LoudnessCompensator.swift`.
+- Create `Sources/Auralis/Audio/Loudness/LoudnessDetector.swift`.
+- Create `Sources/Auralis/Audio/Loudness/GainComputer.swift`.
+- Create `Sources/Auralis/Audio/Devices/CoreAudioDeviceVolumeController.swift`.
+- Create `Sources/Auralis/Audio/Devices/SystemAlertVolumeController.swift`.
+- Create `Sources/Auralis/Audio/Devices/SoftwareOutputVolumeStore.swift`.
+- Create `Sources/Auralis/Audio/DDC/DDCService.swift`.
+- Create `Sources/Auralis/Audio/DDC/DDCController.swift`.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioTapIOController.swift`: apply software device gain and loudness processors.
+- Modify `Sources/Auralis/State/AudioControlStore.swift`: device volume commands.
+- Modify `Sources/Auralis/Views/Settings/AudioSettingsTab.swift`: loudness and alert volume controls.
+- Test `Tests/AuralisTests/LoudnessCompensatorTests.swift`.
+- Test `Tests/AuralisTests/LoudnessDetectorTests.swift`.
+- Test `Tests/AuralisTests/CoreAudioDeviceVolumeControllerTests.swift`.
+- Test `Tests/AuralisTests/SystemAlertVolumeControllerTests.swift`.
+- Test `Tests/AuralisTests/DDCServiceTests.swift`.
 - Update `Documentation/flows.md` and `Documentation/phase-tracker.md`.
 
 ## Task 1: Device Volume Controller
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/Devices/CoreAudioDeviceVolumeController.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioDeviceVolumeControllerTests.swift`
+- Create: `Sources/Auralis/Audio/Devices/CoreAudioDeviceVolumeController.swift`
+- Test: `Tests/AuralisTests/CoreAudioDeviceVolumeControllerTests.swift`
 
 - [ ] **Step 1: Write device volume tests**
 
@@ -50,7 +50,7 @@ Create:
 ```swift
 import CoreAudio
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class CoreAudioDeviceVolumeControllerTests: XCTestCase {
     func testHardwareVolumeWritesClampValue() {
@@ -112,8 +112,8 @@ Expected: PASS.
 ## Task 2: Alert Volume
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/Devices/SystemAlertVolumeController.swift`
-- Test: `Tests/EQMacRepTests/SystemAlertVolumeControllerTests.swift`
+- Create: `Sources/Auralis/Audio/Devices/SystemAlertVolumeController.swift`
+- Test: `Tests/AuralisTests/SystemAlertVolumeControllerTests.swift`
 
 - [ ] **Step 1: Write AppleScript command tests**
 
@@ -121,7 +121,7 @@ Create:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class SystemAlertVolumeControllerTests: XCTestCase {
     func testSetAlertVolumeBuildsClampedAppleScriptPercent() {
@@ -167,9 +167,9 @@ Expected: PASS.
 ## Task 3: Software Output Volume
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/Devices/SoftwareOutputVolumeStore.swift`
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapIOController.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioTapLifecycleTests.swift`
+- Create: `Sources/Auralis/Audio/Devices/SoftwareOutputVolumeStore.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioTapIOController.swift`
+- Test: `Tests/AuralisTests/CoreAudioTapLifecycleTests.swift`
 
 - [ ] **Step 1: Write gain combination test**
 
@@ -230,9 +230,9 @@ Expected: PASS.
 ## Task 4: Loudness Compensation
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/Loudness/LoudnessSettings.swift`
-- Create: `Sources/EQMacRep/Audio/Loudness/LoudnessCompensator.swift`
-- Test: `Tests/EQMacRepTests/LoudnessCompensatorTests.swift`
+- Create: `Sources/Auralis/Audio/Loudness/LoudnessSettings.swift`
+- Create: `Sources/Auralis/Audio/Loudness/LoudnessCompensator.swift`
+- Test: `Tests/AuralisTests/LoudnessCompensatorTests.swift`
 
 - [ ] **Step 1: Write loudness coefficient tests**
 
@@ -240,7 +240,7 @@ Create:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class LoudnessCompensatorTests: XCTestCase {
     func testReferenceVolumeBypassesCompensation() {
@@ -305,9 +305,9 @@ Expected: PASS.
 ## Task 5: Loudness Equalization
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/Loudness/LoudnessDetector.swift`
-- Create: `Sources/EQMacRep/Audio/Loudness/GainComputer.swift`
-- Test: `Tests/EQMacRepTests/LoudnessDetectorTests.swift`
+- Create: `Sources/Auralis/Audio/Loudness/LoudnessDetector.swift`
+- Create: `Sources/Auralis/Audio/Loudness/GainComputer.swift`
+- Test: `Tests/AuralisTests/LoudnessDetectorTests.swift`
 
 - [ ] **Step 1: Write detector/gain tests**
 
@@ -315,7 +315,7 @@ Create:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class LoudnessDetectorTests: XCTestCase {
     func testGainComputerBoostsQuietSignal() {
@@ -365,9 +365,9 @@ Expected: PASS.
 ## Task 6: DDC Display Volume
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/DDC/DDCService.swift`
-- Create: `Sources/EQMacRep/Audio/DDC/DDCController.swift`
-- Test: `Tests/EQMacRepTests/DDCServiceTests.swift`
+- Create: `Sources/Auralis/Audio/DDC/DDCService.swift`
+- Create: `Sources/Auralis/Audio/DDC/DDCController.swift`
+- Test: `Tests/AuralisTests/DDCServiceTests.swift`
 
 - [ ] **Step 1: Write DDC packet tests**
 
@@ -375,7 +375,7 @@ Create:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class DDCServiceTests: XCTestCase {
     func testSetVCPPacketIncludesChecksum() {
@@ -432,7 +432,7 @@ Expected: PASS and build succeeds.
 ## Task 7: Settings And Verification
 
 **Files:**
-- Modify: `Sources/EQMacRep/Views/Settings/AudioSettingsTab.swift`
+- Modify: `Sources/Auralis/Views/Settings/AudioSettingsTab.swift`
 - Modify: `Documentation/flows.md`
 - Modify: `Documentation/phase-tracker.md`
 
@@ -478,7 +478,7 @@ Expected: tests pass, build succeeds, debug app bundle exists.
 Run:
 
 ```sh
-open .build/EQMacRep.app
+open .build/Auralis.app
 ```
 
 Manual checks:

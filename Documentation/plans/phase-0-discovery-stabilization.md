@@ -4,7 +4,7 @@
 
 **Goal:** Make CoreAudio Discovery mode refresh live and produce stable app/device snapshots before process taps are added.
 
-**Architecture:** Keep `AudioBackend.fetchSnapshot()` as the synchronous snapshot boundary. Add a backend event stream protocol for change notifications, then let `AudioControlStore` debounce those events and call `refresh()`. CoreAudio listeners stay inside `Sources/EQMacRep/Audio/CoreAudio/`; UI only observes store state.
+**Architecture:** Keep `AudioBackend.fetchSnapshot()` as the synchronous snapshot boundary. Add a backend event stream protocol for change notifications, then let `AudioControlStore` debounce those events and call `refresh()`. CoreAudio listeners stay inside `Sources/Auralis/Audio/CoreAudio/`; UI only observes store state.
 
 **Tech Stack:** Swift 6, SwiftUI, Combine, XCTest, CoreAudio HAL property listeners.
 
@@ -12,22 +12,22 @@
 
 ## File Structure
 
-- Modify `Sources/EQMacRep/Audio/AudioBackend.swift`: add update-event publishing protocol.
-- Modify `Sources/EQMacRep/State/AudioControlStore.swift`: add observation task, debounce, and safe refresh-on-event.
-- Modify `Sources/EQMacRep/EQMacRepApp.swift`: start backend observation on popup task.
-- Create `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDiscoveryEventSource.swift`: owns CoreAudio property listeners with listener procs and emits change events.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`: expose event stream from event source.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessDiscovery.swift`: keep stable identity coalescing and add tests for helper-name preference.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift`: sort device snapshots and keep default device first.
-- Test `Tests/EQMacRepTests/AudioControlStoreTests.swift`: event-driven refresh behavior.
-- Test `Tests/EQMacRepTests/CoreAudioMappingTests.swift`: device sorting and helper coalescing edge cases.
+- Modify `Sources/Auralis/Audio/AudioBackend.swift`: add update-event publishing protocol.
+- Modify `Sources/Auralis/State/AudioControlStore.swift`: add observation task, debounce, and safe refresh-on-event.
+- Modify `Sources/Auralis/AuralisApp.swift`: start backend observation on popup task.
+- Create `Sources/Auralis/Audio/CoreAudio/CoreAudioDiscoveryEventSource.swift`: owns CoreAudio property listeners with listener procs and emits change events.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`: expose event stream from event source.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessDiscovery.swift`: keep stable identity coalescing and add tests for helper-name preference.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift`: sort device snapshots and keep default device first.
+- Test `Tests/AuralisTests/AudioControlStoreTests.swift`: event-driven refresh behavior.
+- Test `Tests/AuralisTests/CoreAudioMappingTests.swift`: device sorting and helper coalescing edge cases.
 - Update `Documentation/phase-tracker.md` and `Documentation/flows.md`.
 
 ## Task 1: Backend Update Event Contract
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/AudioBackend.swift`
-- Test: `Tests/EQMacRepTests/AudioControlStoreTests.swift`
+- Modify: `Sources/Auralis/Audio/AudioBackend.swift`
+- Test: `Tests/AuralisTests/AudioControlStoreTests.swift`
 
 - [ ] **Step 1: Write failing store refresh test**
 
@@ -147,8 +147,8 @@ Expected: PASS.
 ## Task 2: CoreAudio Discovery Event Source
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDiscoveryEventSource.swift`
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`
+- Create: `Sources/Auralis/Audio/CoreAudio/CoreAudioDiscoveryEventSource.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`
 
 - [ ] **Step 1: Add event source file**
 
@@ -278,7 +278,7 @@ Expected: build succeeds.
 ## Task 3: Start Observation From App
 
 **Files:**
-- Modify: `Sources/EQMacRep/EQMacRepApp.swift`
+- Modify: `Sources/Auralis/AuralisApp.swift`
 
 - [ ] **Step 1: Add observation start**
 
@@ -304,8 +304,8 @@ Expected: build succeeds.
 ## Task 4: Device Snapshot Stability
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioMappingTests.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift`
+- Test: `Tests/AuralisTests/CoreAudioMappingTests.swift`
 
 - [ ] **Step 1: Write failing device sort test**
 
@@ -368,8 +368,8 @@ Expected: PASS.
 ## Task 5: Process Snapshot Stability
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessDiscovery.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioMappingTests.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessDiscovery.swift`
+- Test: `Tests/AuralisTests/CoreAudioMappingTests.swift`
 
 - [ ] **Step 1: Write failing helper-name test**
 
@@ -485,7 +485,7 @@ Expected: build succeeds.
 Run:
 
 ```sh
-swift run EQMacRep
+swift run Auralis
 ```
 
 Manual checks:

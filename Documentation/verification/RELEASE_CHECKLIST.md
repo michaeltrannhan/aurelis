@@ -21,7 +21,7 @@ Create a keychain profile with `xcrun notarytool store-credentials`, then packag
 ```sh
 DEVELOPMENT_TEAM=TEAMID \
 SIGN_IDENTITY="Developer ID Application" \
-NOTARY_PROFILE=eqmacrep-notary \
+NOTARY_PROFILE=auralis-notary \
 Scripts/package-release.sh
 ```
 

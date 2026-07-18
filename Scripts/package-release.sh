@@ -49,17 +49,17 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 cd "$REPOSITORY_ROOT"
 
-APP_NAME=${APP_NAME:-EQMacRep}
-WIDGET_NAME=${WIDGET_NAME:-EQMacRepWidget}
+APP_PRODUCT_NAME=${APP_PRODUCT_NAME:-Auralis}
+WIDGET_NAME=${WIDGET_NAME:-AuralisWidget}
 MARKETING_VERSION=${MARKETING_VERSION:-0.1.0}
 CURRENT_PROJECT_VERSION=${CURRENT_PROJECT_VERSION:-1}
 SKIP_BUILD=${SKIP_BUILD:-NO}
 REQUIRE_NOTARIZATION=${REQUIRE_NOTARIZATION:-YES}
 NOTARY_PROFILE=${NOTARY_PROFILE:-}
 OUTPUT_DIRECTORY=${OUTPUT_DIRECTORY:-$REPOSITORY_ROOT/.build/release}
-APP_PATH=${APP_PATH:-$REPOSITORY_ROOT/.build/$APP_NAME.app}
+APP_PATH=${APP_PATH:-$REPOSITORY_ROOT/.build/$APP_PRODUCT_NAME.app}
 WIDGET_PATH=$APP_PATH/Contents/PlugIns/$WIDGET_NAME.appex
-ARCHIVE_PATH=$OUTPUT_DIRECTORY/$APP_NAME-$MARKETING_VERSION-$CURRENT_PROJECT_VERSION.zip
+ARCHIVE_PATH=$OUTPUT_DIRECTORY/$APP_PRODUCT_NAME-$MARKETING_VERSION-$CURRENT_PROJECT_VERSION.zip
 ARCHIVE_VALIDATION_ROOT=
 
 case "$SKIP_BUILD" in YES|NO) ;; *) fail "SKIP_BUILD must be YES or NO" ;; esac
@@ -101,13 +101,13 @@ else
     printf 'warning: notarization skipped because REQUIRE_NOTARIZATION=NO\n' >&2
 fi
 
-ARCHIVE_VALIDATION_ROOT=$(/usr/bin/mktemp -d "$OUTPUT_DIRECTORY/.eqmacrep-archive-validation.XXXXXX") ||
+ARCHIVE_VALIDATION_ROOT=$(/usr/bin/mktemp -d "$OUTPUT_DIRECTORY/.auralis-archive-validation.XXXXXX") ||
     fail "could not create archive validation directory"
 trap cleanup EXIT HUP INT TERM
 /usr/bin/ditto -x -k "$ARCHIVE_PATH" "$ARCHIVE_VALIDATION_ROOT" ||
     fail "could not extract release archive for validation"
-EXTRACTED_APP=$ARCHIVE_VALIDATION_ROOT/$APP_NAME.app
-[ -d "$EXTRACTED_APP" ] || fail "release archive does not contain $APP_NAME.app at its root"
+EXTRACTED_APP=$ARCHIVE_VALIDATION_ROOT/$APP_PRODUCT_NAME.app
+[ -d "$EXTRACTED_APP" ] || fail "release archive does not contain $APP_PRODUCT_NAME.app at its root"
 validate_distribution_product "$EXTRACTED_APP"
 
 if [ -n "$NOTARY_PROFILE" ]; then

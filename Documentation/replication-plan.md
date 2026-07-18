@@ -1,8 +1,8 @@
-# EQMacRep Replication Plan
+# Auralis Replication Plan
 
 ## Source Application
 
-EQMacRep replicates the architecture and user-facing control flow of FineTune:
+Auralis replicates the architecture and user-facing control flow of FineTune:
 
 - menu-bar-first macOS app
 - app/device discovery layer
@@ -19,7 +19,7 @@ The replica is built in layers so each flow is understandable and testable befor
 
 Implemented in this project.
 
-- SwiftUI `MenuBarExtra` app named `EQMacRep`.
+- SwiftUI `MenuBarExtra` app named `Auralis`.
 - Mock backend that returns deterministic audio apps and output devices.
 - Per-app volume, mute, boost, pin, ignore, and 10-band EQ state.
 - Customization settings for appearance, popup density, default new-app volume, EQ gain range, volume step, and inactive app visibility.
@@ -62,7 +62,7 @@ Add FineTune-like advanced features after the realtime path is stable:
 
 ## Current Architecture
 
-`EQMacRepApp` composes:
+`AuralisApp` composes:
 
 1. `SettingsStore`
 2. `MockAudioBackend`

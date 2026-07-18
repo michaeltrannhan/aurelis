@@ -12,9 +12,9 @@ cd "$REPOSITORY_ROOT"
 
 CONFIGURATION=${CONFIGURATION:-Release}
 CODE_SIGNING_ALLOWED=${CODE_SIGNING_ALLOWED:-NO}
-APP_NAME=${APP_NAME:-EQMacRep}
-WIDGET_NAME=${WIDGET_NAME:-EQMacRepWidget}
-BASE_APP=${BASE_APP:-$REPOSITORY_ROOT/.build/xcode/$CONFIGURATION/BuildDerivedData/Build/Products/$CONFIGURATION/$APP_NAME.app}
+APP_PRODUCT_NAME=${APP_PRODUCT_NAME:-Auralis}
+WIDGET_NAME=${WIDGET_NAME:-AuralisWidget}
+BASE_APP=${BASE_APP:-$REPOSITORY_ROOT/.build/xcode/$CONFIGURATION/BuildDerivedData/Build/Products/$CONFIGURATION/$APP_PRODUCT_NAME.app}
 FAULT_ROOT=$REPOSITORY_ROOT/.build/verifier-self-test/$(/usr/bin/uuidgen)
 LOG_ROOT=$FAULT_ROOT/logs
 
@@ -72,17 +72,31 @@ BASE_COPY=$FAULT_ROOT/base.app
 /usr/bin/ditto "$BASE_APP" "$BASE_COPY"
 
 expect_failure build-failure env \
-    ARCHS=eqmacrep-invalid-architecture \
+    ARCHS=auralis-invalid-architecture \
     LOG_VARIANT=verifier-build-failure \
+    BUILD_ROOT_OVERRIDE="$FAULT_ROOT/build-failure-derived" \
+    OUTPUT_APP_OVERRIDE="$FAULT_ROOT/build-failure-output.app" \
     CONFIGURATION=Debug \
     RUN_TESTS=NO \
     CODE_SIGNING_ALLOWED=NO \
     "$SCRIPT_DIR/build-debug-app.sh"
+[ -d "$BASE_APP" ] || fail "build-failure fault removed the validated base app"
 
 PLIST_APP=$FAULT_ROOT/plist.app
 /usr/bin/ditto "$BASE_COPY" "$PLIST_APP"
 /usr/bin/plutil -replace CFBundlePackageType -string BNDL "$PLIST_APP/Contents/Info.plist"
 expect_failure plist validate_app "$PLIST_APP"
+
+BRANDING_APP=$FAULT_ROOT/branding.app
+/usr/bin/ditto "$BASE_COPY" "$BRANDING_APP"
+/usr/bin/plutil -replace CFBundleDisplayName -string 'Wrong Brand' "$BRANDING_APP/Contents/Info.plist"
+expect_failure branding validate_app "$BRANDING_APP"
+
+URL_SCHEME_APP=$FAULT_ROOT/url-scheme.app
+/usr/bin/ditto "$BASE_COPY" "$URL_SCHEME_APP"
+/usr/bin/plutil -replace CFBundleURLTypes.0.CFBundleURLSchemes.0 -string wrong-scheme \
+    "$URL_SCHEME_APP/Contents/Info.plist"
+expect_failure url-scheme validate_app "$URL_SCHEME_APP"
 
 EMBEDDING_APP=$FAULT_ROOT/embedding.app
 /usr/bin/ditto "$BASE_COPY" "$EMBEDDING_APP"
@@ -131,7 +145,7 @@ expect_failure notary-configuration env \
 if [ "$CODE_SIGNING_ALLOWED" = YES ]; then
     SIGNATURE_APP=$FAULT_ROOT/signature.app
     /usr/bin/ditto "$BASE_COPY" "$SIGNATURE_APP"
-    /usr/bin/plutil -insert EQMacRepVerifierFault -bool true "$SIGNATURE_APP/Contents/Info.plist"
+    /usr/bin/plutil -insert AuralisVerifierFault -bool true "$SIGNATURE_APP/Contents/Info.plist"
     expect_failure signature validate_app "$SIGNATURE_APP"
 
     expect_failure distribution-authority env \

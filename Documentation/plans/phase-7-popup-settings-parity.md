@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Bring the popup and settings experience close to FineTune usability while staying on the existing EQMacRep architecture.
+**Goal:** Bring the popup and settings experience close to FineTune usability while staying on the existing Auralis architecture.
 
 **Architecture:** Split settings into tabs, add reusable settings rows, add popup keyboard navigation, improve row controls, add edit mode for pin/ignore/order, and make popup dimensions safe on small screens. Keep all UI state backed by existing persisted settings and backend commands.
 
@@ -18,34 +18,34 @@ Phase 7 intentionally avoids media-key interception, HUD windows, input devices,
 
 ## File Structure
 
-- Create `Sources/EQMacRep/Views/Settings/SettingsRootView.swift`: tabbed settings root.
-- Create `Sources/EQMacRep/Views/Settings/SettingsSectionView.swift`: shared settings section and row components.
-- Create `Sources/EQMacRep/Views/Settings/GeneralSettingsTab.swift`: appearance, launch, popup size, reset.
-- Create `Sources/EQMacRep/Views/Settings/AudioSettingsTab.swift`: default volume, EQ range, backend, inactive apps.
-- Create `Sources/EQMacRep/Views/Settings/ShortcutsSettingsTab.swift`: volume step plus disabled Phase 8 controls with explanatory labels.
-- Create `Sources/EQMacRep/Views/Settings/UpdatesSettingsTab.swift`: version display and manual update label for the Phase 13 update path.
-- Create `Sources/EQMacRep/Views/Settings/AboutSettingsTab.swift`: app version, repository/license links.
-- Create `Sources/EQMacRep/Views/PopupKeyboardNavModel.swift`: pure keyboard row ordering.
-- Create `Sources/EQMacRep/Views/ScrollWheelStepModifier.swift`: scroll-wheel volume stepping.
-- Modify `Sources/EQMacRep/Views/SettingsView.swift`: replace old form with `SettingsRootView`.
-- Modify `Sources/EQMacRep/Views/MenuBarRootView.swift`: add edit mode, keyboard navigation, safe max height.
-- Modify `Sources/EQMacRep/Views/AppRowView.swift`: truncation, tooltips, editable percentage, scroll-wheel step.
-- Modify `Sources/EQMacRep/Domain/AppCustomization.swift`: add launch-at-login intent, popup max height, settings tab state support, and shared color-scheme mapping.
-- Modify `Sources/EQMacRep/Persistence/SettingsStore.swift`: add app display order.
-- Modify `Sources/EQMacRep/State/AudioControlStore.swift`: merge and persist app display order.
-- Test `Tests/EQMacRepTests/PopupKeyboardNavModelTests.swift`.
-- Test `Tests/EQMacRepTests/AudioControlStoreTests.swift`: app ordering and edit actions.
-- Test `Tests/EQMacRepTests/CustomizationTests.swift`: popup dimensions.
+- Create `Sources/Auralis/Views/Settings/SettingsRootView.swift`: tabbed settings root.
+- Create `Sources/Auralis/Views/Settings/SettingsSectionView.swift`: shared settings section and row components.
+- Create `Sources/Auralis/Views/Settings/GeneralSettingsTab.swift`: appearance, launch, popup size, reset.
+- Create `Sources/Auralis/Views/Settings/AudioSettingsTab.swift`: default volume, EQ range, backend, inactive apps.
+- Create `Sources/Auralis/Views/Settings/ShortcutsSettingsTab.swift`: volume step plus disabled Phase 8 controls with explanatory labels.
+- Create `Sources/Auralis/Views/Settings/UpdatesSettingsTab.swift`: version display and manual update label for the Phase 13 update path.
+- Create `Sources/Auralis/Views/Settings/AboutSettingsTab.swift`: app version, repository/license links.
+- Create `Sources/Auralis/Views/PopupKeyboardNavModel.swift`: pure keyboard row ordering.
+- Create `Sources/Auralis/Views/ScrollWheelStepModifier.swift`: scroll-wheel volume stepping.
+- Modify `Sources/Auralis/Views/SettingsView.swift`: replace old form with `SettingsRootView`.
+- Modify `Sources/Auralis/Views/MenuBarRootView.swift`: add edit mode, keyboard navigation, safe max height.
+- Modify `Sources/Auralis/Views/AppRowView.swift`: truncation, tooltips, editable percentage, scroll-wheel step.
+- Modify `Sources/Auralis/Domain/AppCustomization.swift`: add launch-at-login intent, popup max height, settings tab state support, and shared color-scheme mapping.
+- Modify `Sources/Auralis/Persistence/SettingsStore.swift`: add app display order.
+- Modify `Sources/Auralis/State/AudioControlStore.swift`: merge and persist app display order.
+- Test `Tests/AuralisTests/PopupKeyboardNavModelTests.swift`.
+- Test `Tests/AuralisTests/AudioControlStoreTests.swift`: app ordering and edit actions.
+- Test `Tests/AuralisTests/CustomizationTests.swift`: popup dimensions.
 - Update `Documentation/flows.md` and `Documentation/phase-tracker.md`.
 
 ## Task 1: Settings Tabs
 
 **Files:**
-- Create: `Sources/EQMacRep/Views/Settings/SettingsRootView.swift`
-- Create: `Sources/EQMacRep/Views/Settings/SettingsSectionView.swift`
+- Create: `Sources/Auralis/Views/Settings/SettingsRootView.swift`
+- Create: `Sources/Auralis/Views/Settings/SettingsSectionView.swift`
 - Create: tab files listed above
-- Modify: `Sources/EQMacRep/Views/SettingsView.swift`
-- Test: `Tests/EQMacRepTests/CustomizationTests.swift`
+- Modify: `Sources/Auralis/Views/SettingsView.swift`
+- Test: `Tests/AuralisTests/CustomizationTests.swift`
 
 - [ ] **Step 1: Write settings enum tests**
 
@@ -144,9 +144,9 @@ Expected: PASS and build succeeds.
 ## Task 2: Popup Dimensions And Safe Height
 
 **Files:**
-- Modify: `Sources/EQMacRep/Domain/AppCustomization.swift`
-- Modify: `Sources/EQMacRep/Views/MenuBarRootView.swift`
-- Test: `Tests/EQMacRepTests/CustomizationTests.swift`
+- Modify: `Sources/Auralis/Domain/AppCustomization.swift`
+- Modify: `Sources/Auralis/Views/MenuBarRootView.swift`
+- Test: `Tests/AuralisTests/CustomizationTests.swift`
 
 - [ ] **Step 1: Write dimensions test**
 
@@ -200,9 +200,9 @@ Expected: PASS.
 ## Task 3: Keyboard Navigation Model
 
 **Files:**
-- Create: `Sources/EQMacRep/Views/PopupKeyboardNavModel.swift`
-- Modify: `Sources/EQMacRep/Views/MenuBarRootView.swift`
-- Test: `Tests/EQMacRepTests/PopupKeyboardNavModelTests.swift`
+- Create: `Sources/Auralis/Views/PopupKeyboardNavModel.swift`
+- Modify: `Sources/Auralis/Views/MenuBarRootView.swift`
+- Test: `Tests/AuralisTests/PopupKeyboardNavModelTests.swift`
 
 - [ ] **Step 1: Write failing navigation tests**
 
@@ -210,7 +210,7 @@ Create `PopupKeyboardNavModelTests.swift`:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 @MainActor
 final class PopupKeyboardNavModelTests: XCTestCase {
@@ -303,9 +303,9 @@ Expected: PASS and build succeeds.
 ## Task 4: Scroll-Wheel Volume And Editable Percent
 
 **Files:**
-- Create: `Sources/EQMacRep/Views/ScrollWheelStepModifier.swift`
-- Modify: `Sources/EQMacRep/Views/AppRowView.swift`
-- Test: `Tests/EQMacRepTests/CustomizationTests.swift`
+- Create: `Sources/Auralis/Views/ScrollWheelStepModifier.swift`
+- Modify: `Sources/Auralis/Views/AppRowView.swift`
+- Test: `Tests/AuralisTests/CustomizationTests.swift`
 
 - [ ] **Step 1: Write clamp helper test**
 
@@ -360,11 +360,11 @@ Expected: PASS and build succeeds.
 ## Task 5: Edit Mode, Ignore, Pin, And Reorder
 
 **Files:**
-- Modify: `Sources/EQMacRep/Persistence/SettingsStore.swift`
-- Modify: `Sources/EQMacRep/State/AudioControlStore.swift`
-- Modify: `Sources/EQMacRep/Views/MenuBarRootView.swift`
-- Modify: `Sources/EQMacRep/Views/AppRowView.swift`
-- Test: `Tests/EQMacRepTests/AudioControlStoreTests.swift`
+- Modify: `Sources/Auralis/Persistence/SettingsStore.swift`
+- Modify: `Sources/Auralis/State/AudioControlStore.swift`
+- Modify: `Sources/Auralis/Views/MenuBarRootView.swift`
+- Modify: `Sources/Auralis/Views/AppRowView.swift`
+- Test: `Tests/AuralisTests/AudioControlStoreTests.swift`
 
 - [ ] **Step 1: Write order merge test**
 
@@ -493,7 +493,7 @@ Expected: tests pass, build succeeds, debug app bundle exists.
 Run:
 
 ```sh
-open .build/EQMacRep.app
+open .build/Auralis.app
 ```
 
 Manual checks:

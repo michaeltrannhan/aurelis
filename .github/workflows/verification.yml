@@ -32,7 +32,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 20
     env:
-      EQMACREP_STRESS_ITERATIONS: 100000
+      AURALIS_STRESS_ITERATIONS: 100000
     steps:
       - uses: actions/checkout@v4
       - run: Scripts/run-verification.sh stress

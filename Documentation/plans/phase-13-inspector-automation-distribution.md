@@ -18,29 +18,29 @@ Phase 13 does not add new realtime DSP. It packages and exposes the work already
 
 ## File Structure
 
-- Create `Sources/EQMacRep/Audio/Devices/DeviceInspectorInfo.swift`.
-- Create `Sources/EQMacRep/Audio/Devices/DeviceInspectorService.swift`.
-- Create `Sources/EQMacRep/Views/DeviceInspectorView.swift`.
-- Create `Sources/EQMacRep/Automation/URLAutomationCommand.swift`.
-- Create `Sources/EQMacRep/Automation/URLAutomationParser.swift`.
-- Create `Sources/EQMacRep/Automation/URLAutomationExecutor.swift`.
-- Modify `Sources/EQMacRep/EQMacRepApp.swift`: app delegate URL routing.
-- Modify `Sources/EQMacRep/Views/Settings/UpdatesSettingsTab.swift`: update status and check button.
-- Create `Sources/EQMacRep/Updates/UpdateManager.swift`.
+- Create `Sources/Auralis/Audio/Devices/DeviceInspectorInfo.swift`.
+- Create `Sources/Auralis/Audio/Devices/DeviceInspectorService.swift`.
+- Create `Sources/Auralis/Views/DeviceInspectorView.swift`.
+- Create `Sources/Auralis/Automation/URLAutomationCommand.swift`.
+- Create `Sources/Auralis/Automation/URLAutomationParser.swift`.
+- Create `Sources/Auralis/Automation/URLAutomationExecutor.swift`.
+- Modify `Sources/Auralis/AuralisApp.swift`: app delegate URL routing.
+- Modify `Sources/Auralis/Views/Settings/UpdatesSettingsTab.swift`: update status and check button.
+- Create `Sources/Auralis/Updates/UpdateManager.swift`.
 - Create `Scripts/package-release.sh`.
 - Create `Scripts/notarize-release.sh`.
 - Create `Documentation/release-checklist.md`.
-- Test `Tests/EQMacRepTests/DeviceInspectorInfoTests.swift`.
-- Test `Tests/EQMacRepTests/URLAutomationParserTests.swift`.
-- Test `Tests/EQMacRepTests/URLAutomationExecutorTests.swift`.
-- Test `Tests/EQMacRepTests/ReleaseConfigurationTests.swift`.
+- Test `Tests/AuralisTests/DeviceInspectorInfoTests.swift`.
+- Test `Tests/AuralisTests/URLAutomationParserTests.swift`.
+- Test `Tests/AuralisTests/URLAutomationExecutorTests.swift`.
+- Test `Tests/AuralisTests/ReleaseConfigurationTests.swift`.
 - Update `Documentation/flows.md` and `Documentation/phase-tracker.md`.
 
 ## Task 1: Device Inspector Info
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/Devices/DeviceInspectorInfo.swift`
-- Test: `Tests/EQMacRepTests/DeviceInspectorInfoTests.swift`
+- Create: `Sources/Auralis/Audio/Devices/DeviceInspectorInfo.swift`
+- Test: `Tests/AuralisTests/DeviceInspectorInfoTests.swift`
 
 - [ ] **Step 1: Write formatter tests**
 
@@ -49,7 +49,7 @@ Create:
 ```swift
 import CoreAudio
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class DeviceInspectorInfoTests: XCTestCase {
     func testFormatsSampleRates() {
@@ -115,10 +115,10 @@ Expected: PASS.
 ## Task 2: Inspector Service And View
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/Devices/DeviceInspectorService.swift`
-- Create: `Sources/EQMacRep/Views/DeviceInspectorView.swift`
-- Modify: `Sources/EQMacRep/Views/MenuBarRootView.swift`
-- Test: `Tests/EQMacRepTests/DeviceInspectorInfoTests.swift`
+- Create: `Sources/Auralis/Audio/Devices/DeviceInspectorService.swift`
+- Create: `Sources/Auralis/Views/DeviceInspectorView.swift`
+- Modify: `Sources/Auralis/Views/MenuBarRootView.swift`
+- Test: `Tests/AuralisTests/DeviceInspectorInfoTests.swift`
 
 - [ ] **Step 1: Implement CoreAudio operations**
 
@@ -168,9 +168,9 @@ Expected: build succeeds.
 ## Task 3: URL Automation Parser
 
 **Files:**
-- Create: `Sources/EQMacRep/Automation/URLAutomationCommand.swift`
-- Create: `Sources/EQMacRep/Automation/URLAutomationParser.swift`
-- Test: `Tests/EQMacRepTests/URLAutomationParserTests.swift`
+- Create: `Sources/Auralis/Automation/URLAutomationCommand.swift`
+- Create: `Sources/Auralis/Automation/URLAutomationParser.swift`
+- Test: `Tests/AuralisTests/URLAutomationParserTests.swift`
 
 - [ ] **Step 1: Write parser tests**
 
@@ -178,11 +178,11 @@ Create:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class URLAutomationParserTests: XCTestCase {
     func testParsesSetVolume() throws {
-        let url = URL(string: "eqmacrep://set-volume?app=com.example.Music&volume=25")!
+        let url = URL(string: "auralis://set-volume?app=com.example.Music&volume=25")!
 
         XCTAssertEqual(URLAutomationParser.parse(url), .setVolume(app: "com.example.Music", volume: 0.25))
     }
@@ -222,13 +222,13 @@ enum URLAutomationCommand: Equatable {
 
 Parser supports:
 
-- `eqmacrep://set-volume?app=<id>&volume=0..100`
-- `eqmacrep://step-volume?app=<id>&direction=up|down`
-- `eqmacrep://set-mute?app=<id>&muted=true|false`
-- `eqmacrep://toggle-mute?app=<id>`
-- `eqmacrep://set-route?app=<id>&device=<uid>|follow-default`
-- `eqmacrep://reset`
-- `eqmacrep://reset?app=<id>`
+- `auralis://set-volume?app=<id>&volume=0..100`
+- `auralis://step-volume?app=<id>&direction=up|down`
+- `auralis://set-mute?app=<id>&muted=true|false`
+- `auralis://toggle-mute?app=<id>`
+- `auralis://set-route?app=<id>&device=<uid>|follow-default`
+- `auralis://reset`
+- `auralis://reset?app=<id>`
 
 - [ ] **Step 4: Run parser tests**
 
@@ -243,9 +243,9 @@ Expected: PASS.
 ## Task 4: URL Automation Executor
 
 **Files:**
-- Create: `Sources/EQMacRep/Automation/URLAutomationExecutor.swift`
-- Modify: `Sources/EQMacRep/EQMacRepApp.swift`
-- Test: `Tests/EQMacRepTests/URLAutomationExecutorTests.swift`
+- Create: `Sources/Auralis/Automation/URLAutomationExecutor.swift`
+- Modify: `Sources/Auralis/AuralisApp.swift`
+- Test: `Tests/AuralisTests/URLAutomationExecutorTests.swift`
 
 - [ ] **Step 1: Write executor tests**
 
@@ -253,7 +253,7 @@ Create:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 @MainActor
 final class URLAutomationExecutorTests: XCTestCase {
@@ -285,7 +285,7 @@ Executor maps string app IDs to `AudioAppIdentity(rawValue:)`, calls existing st
 
 - [ ] **Step 4: Add app delegate URL handling**
 
-Add `NSApplicationDelegateAdaptor` to `EQMacRepApp`. In:
+Add `NSApplicationDelegateAdaptor` to `AuralisApp`. In:
 
 ```swift
 application(_:open:)
@@ -307,10 +307,10 @@ Expected: PASS and build succeeds.
 ## Task 5: Update Path
 
 **Files:**
-- Create: `Sources/EQMacRep/Updates/UpdateManager.swift`
+- Create: `Sources/Auralis/Updates/UpdateManager.swift`
 - Modify: `Package.swift`
-- Modify: `Sources/EQMacRep/Views/Settings/UpdatesSettingsTab.swift`
-- Test: `Tests/EQMacRepTests/ReleaseConfigurationTests.swift`
+- Modify: `Sources/Auralis/Views/Settings/UpdatesSettingsTab.swift`
+- Test: `Tests/AuralisTests/ReleaseConfigurationTests.swift`
 
 - [ ] **Step 1: Write update settings test**
 
@@ -375,7 +375,7 @@ Expected: PASS and build succeeds.
 - Create: `Scripts/notarize-release.sh`
 - Create: `Documentation/release-checklist.md`
 - Modify: package/app metadata files required by current build system
-- Test: `Tests/EQMacRepTests/ReleaseConfigurationTests.swift`
+- Test: `Tests/AuralisTests/ReleaseConfigurationTests.swift`
 
 - [ ] **Step 1: Write release file tests**
 
@@ -476,14 +476,14 @@ Expected: tests pass, build succeeds, debug app bundle exists.
 Run:
 
 ```sh
-open .build/EQMacRep.app
+open .build/Auralis.app
 ```
 
 Manual checks:
 
 - Expand device inspector and verify transport, sample rate, format, UID, and hog mode.
 - Change sample rate on a supported device and confirm UI refreshes.
-- Run `open 'eqmacrep://set-volume?app=com.example.Music&volume=25'` and confirm persisted volume.
+- Run `open 'auralis://set-volume?app=com.example.Music&volume=25'` and confirm persisted volume.
 - Run mute, route, and reset automation URLs.
 - Build release artifact.
 - Sign and notarize release artifact in a release environment.

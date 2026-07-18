@@ -28,24 +28,24 @@ Phase 4 intentionally excludes presets, AutoEQ, loudness compensation, device EQ
 
 ## File Structure
 
-- Create `Sources/EQMacRep/Audio/CoreAudio/CoreAudioBiquadMath.swift`: RBJ peaking coefficient generation and 10-band coefficient arrays.
-- Create `Sources/EQMacRep/Audio/CoreAudio/CoreAudioBiquadProcessor.swift`: realtime-safe stereo vDSP biquad cascade.
-- Create `Sources/EQMacRep/Audio/CoreAudio/CoreAudioGraphicEQProcessor.swift`: adapts `EQCurve` to coefficients and processor enable state.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapIOController.swift`: run EQ before gain in the IOProc callback.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessTapManager.swift`: store and forward per-app EQ curves.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`: route `.setEQ` into active controllers.
-- Test `Tests/EQMacRepTests/CoreAudioBiquadMathTests.swift`: coefficient shape and Nyquist bypass.
-- Test `Tests/EQMacRepTests/CoreAudioBiquadProcessorTests.swift`: bypass, flat passthrough, finite output.
-- Test `Tests/EQMacRepTests/CoreAudioGraphicEQProcessorTests.swift`: curve-to-DSP behavior.
-- Extend `Tests/EQMacRepTests/CoreAudioTapLifecycleTests.swift`: manager/backend EQ command wiring.
-- Test `Tests/EQMacRepTests/CoreAudioDiscoveryBackendTests.swift`: backend command forwarding.
+- Create `Sources/Auralis/Audio/CoreAudio/CoreAudioBiquadMath.swift`: RBJ peaking coefficient generation and 10-band coefficient arrays.
+- Create `Sources/Auralis/Audio/CoreAudio/CoreAudioBiquadProcessor.swift`: realtime-safe stereo vDSP biquad cascade.
+- Create `Sources/Auralis/Audio/CoreAudio/CoreAudioGraphicEQProcessor.swift`: adapts `EQCurve` to coefficients and processor enable state.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioTapIOController.swift`: run EQ before gain in the IOProc callback.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessTapManager.swift`: store and forward per-app EQ curves.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`: route `.setEQ` into active controllers.
+- Test `Tests/AuralisTests/CoreAudioBiquadMathTests.swift`: coefficient shape and Nyquist bypass.
+- Test `Tests/AuralisTests/CoreAudioBiquadProcessorTests.swift`: bypass, flat passthrough, finite output.
+- Test `Tests/AuralisTests/CoreAudioGraphicEQProcessorTests.swift`: curve-to-DSP behavior.
+- Extend `Tests/AuralisTests/CoreAudioTapLifecycleTests.swift`: manager/backend EQ command wiring.
+- Test `Tests/AuralisTests/CoreAudioDiscoveryBackendTests.swift`: backend command forwarding.
 - Update `Documentation/flows.md` and `Documentation/phase-tracker.md`.
 
 ## Task 1: Biquad Coefficient Math
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioBiquadMath.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioBiquadMathTests.swift`
+- Create: `Sources/Auralis/Audio/CoreAudio/CoreAudioBiquadMath.swift`
+- Test: `Tests/AuralisTests/CoreAudioBiquadMathTests.swift`
 
 - [ ] **Step 1: Write failing coefficient tests**
 
@@ -53,7 +53,7 @@ Create `CoreAudioBiquadMathTests.swift`:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class CoreAudioBiquadMathTests: XCTestCase {
     func testPeakingZeroGainCreatesPassthroughRelationship() {
@@ -180,8 +180,8 @@ Expected: PASS.
 ## Task 2: Realtime Biquad Processor
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioBiquadProcessor.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioBiquadProcessorTests.swift`
+- Create: `Sources/Auralis/Audio/CoreAudio/CoreAudioBiquadProcessor.swift`
+- Test: `Tests/AuralisTests/CoreAudioBiquadProcessorTests.swift`
 
 - [ ] **Step 1: Write failing processor tests**
 
@@ -189,7 +189,7 @@ Create `CoreAudioBiquadProcessorTests.swift`:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class CoreAudioBiquadProcessorTests: XCTestCase {
     func testDisabledProcessorCopiesInputToOutput() {
@@ -371,8 +371,8 @@ Expected: PASS.
 ## Task 3: Graphic EQ Processor Adapter
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioGraphicEQProcessor.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioGraphicEQProcessorTests.swift`
+- Create: `Sources/Auralis/Audio/CoreAudio/CoreAudioGraphicEQProcessor.swift`
+- Test: `Tests/AuralisTests/CoreAudioGraphicEQProcessorTests.swift`
 
 - [ ] **Step 1: Write failing graphic EQ tests**
 
@@ -380,7 +380,7 @@ Create `CoreAudioGraphicEQProcessorTests.swift`:
 
 ```swift
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class CoreAudioGraphicEQProcessorTests: XCTestCase {
     func testFlatCurveCopiesInput() {
@@ -501,8 +501,8 @@ Expected: PASS.
 ## Task 4: Insert EQ Into The Tap Render Path
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapIOController.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioTapLifecycleTests.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioTapIOController.swift`
+- Test: `Tests/AuralisTests/CoreAudioTapLifecycleTests.swift`
 
 - [ ] **Step 1: Add controller-level EQ test seam**
 
@@ -643,11 +643,11 @@ Expected: PASS.
 ## Task 5: Manager And Backend EQ Command Wiring
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessTapManager.swift`
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioTapLifecycleTests.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioDiscoveryBackendTests.swift`
-- Test: `Tests/EQMacRepTests/AudioControlStoreTests.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessTapManager.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`
+- Test: `Tests/AuralisTests/CoreAudioTapLifecycleTests.swift`
+- Test: `Tests/AuralisTests/CoreAudioDiscoveryBackendTests.swift`
+- Test: `Tests/AuralisTests/AudioControlStoreTests.swift`
 
 - [ ] **Step 1: Write failing manager/backend tests**
 
@@ -757,8 +757,8 @@ Expected: PASS.
 ## Task 6: Sample Rate And Format Safety
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapIOController.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioGraphicEQProcessorTests.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioTapIOController.swift`
+- Test: `Tests/AuralisTests/CoreAudioGraphicEQProcessorTests.swift`
 
 - [ ] **Step 1: Write sample-rate update test**
 
@@ -866,7 +866,7 @@ Expected: tests pass, build succeeds, debug app bundle exists.
 Run:
 
 ```sh
-open .build/EQMacRep.app
+open .build/Auralis.app
 ```
 
 Manual checks:
@@ -879,7 +879,7 @@ Manual checks:
 - Reset all EQ bands and confirm output returns to normal.
 - Change volume and boost while EQ is active and confirm limiter prevents harsh clipping.
 - Ignore app and confirm app returns to normal macOS output.
-- Quit EQMacRep and confirm system audio remains normal.
+- Quit Auralis and confirm system audio remains normal.
 
 ## Review Notes
 

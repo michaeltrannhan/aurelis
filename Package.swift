@@ -2,20 +2,20 @@
 import PackageDescription
 
 let package = Package(
-    name: "EQMacRep",
+    name: "Auralis",
     platforms: [
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "EQMacRep", targets: ["EQMacRep"]),
-        .library(name: "EQMacRepWidgetShared", targets: ["EQMacRepWidgetShared"])
+        .executable(name: "Auralis", targets: ["Auralis"]),
+        .library(name: "AuralisWidgetShared", targets: ["AuralisWidgetShared"])
     ],
     targets: [
-        .target(name: "EQMacRepWidgetShared"),
-        .executableTarget(name: "EQMacRep", dependencies: ["EQMacRepWidgetShared"]),
+        .target(name: "AuralisWidgetShared"),
+        .executableTarget(name: "Auralis", dependencies: ["AuralisWidgetShared"]),
         .testTarget(
-            name: "EQMacRepTests",
-            dependencies: ["EQMacRep", "EQMacRepWidgetShared"]
+            name: "AuralisTests",
+            dependencies: ["Auralis", "AuralisWidgetShared"]
         )
     ]
 )

@@ -1,6 +1,10 @@
-# EQMacRep
+# Auralis
 
-EQMacRep is a macOS SwiftUI menu-bar audio controller inspired by FineTune. Phases 0–8 and 10 are implemented in code, including CoreAudio discovery and process taps, per-app volume/mute/boost/EQ, single- and multi-device routing, global controls, typed recovery state, first-run guidance, and versioned JSON persistence.
+Auralis is a macOS SwiftUI menu-bar audio controller inspired by FineTune. Phases 0–8 and 10 are implemented in code, including CoreAudio discovery and process taps, per-app volume/mute/boost/EQ, single- and multi-device routing, global controls, typed recovery state, first-run guidance, and versioned JSON persistence.
+
+The application, executable, Swift/Xcode targets, widget, bundle identifiers, URL scheme, and release artifacts all use the Auralis identity. On first launch, Auralis imports compatible settings from the previous application identity when no Auralis settings file exists.
+
+Because the app and widget bundle identifiers changed, macOS treats Auralis as a new installation: grant Screen & System Audio Recording and Accessibility again, then remove and re-add any existing widget. After confirming that Auralis imported the expected settings, quit and remove any previously installed `EQMacRep.app`; macOS cannot replace it automatically because it has a different bundle identifier. Signed builds also require the `com.michaeltrannhan.Auralis`, `com.michaeltrannhan.Auralis.Widget`, and `group.com.michaeltrannhan.Auralis` capabilities in the selected Apple Developer team.
 
 ## Build
 
@@ -12,14 +16,14 @@ swift test
 Run the debug executable:
 
 ```sh
-swift run EQMacRep
+swift run Auralis
 ```
 
 For real per-app volume testing, run the debug app bundle so macOS can read `NSAudioCaptureUsageDescription` and request Screen & System Audio Recording permission:
 
 ```sh
 Scripts/build-debug-app.sh
-open .build/EQMacRep.app
+open .build/Auralis.app
 ```
 
 The bundle script regenerates the Xcode project via [xcodegen](https://github.com/yonaskolb/XcodeGen) and builds via `xcodebuild` so that the widget extension is properly signed and provisioned. Install xcodegen first:
@@ -30,7 +34,7 @@ brew install xcodegen
 
 ## Desktop Widget
 
-EQMacRep ships a macOS desktop widget (WidgetKit) with two families:
+Auralis ships a macOS desktop widget (WidgetKit) with two families:
 
 - **systemSmall** — output device volume + mute toggle + open-app link.
 - **systemMedium** — up to 3 app rows with mute toggle, volume up/down, boost cycle, and refresh (visual parity with the desktop mixer window).
@@ -56,9 +60,9 @@ AudioControlStore
 
 ### Adding the widget
 
-1. Build and launch the app: `Scripts/build-debug-app.sh && open .build/EQMacRep.app`
+1. Build and launch the app: `Scripts/build-debug-app.sh && open .build/Auralis.app`
 2. Open the widget gallery: click the date/time in the menu bar → **Edit Widgets** (or System Settings → Desktop & Dock → Widgets).
-3. Search for **EQMacRep** and drag the Mixer or EQ widget to your desktop.
+3. Search for **Auralis** and drag the Mixer or EQ widget to your desktop.
 
 ### Limitations
 
@@ -96,7 +100,7 @@ Scripts/run-verification.sh signed
 Scripts/run-verification.sh hardware
 ```
 
-The stress iteration count is configurable with `EQMACREP_STRESS_ITERATIONS`.
+The stress iteration count is configurable with `AURALIS_STRESS_ITERATIONS`.
 The Xcode gate renders the production small, medium, and large widget views and
 runs a product-verifier fault matrix. The `signed` gate additionally exercises
 live app/widget access to the shared app-group container and distribution
@@ -111,7 +115,7 @@ and the
 
 ## Current Scope
 
-- Menu-bar popup app named EQMacRep.
+- Menu-bar popup app named Auralis.
 - Desktop widget (systemSmall/Medium/Large) with interactive mute, volume, boost, and EQ controls via AppIntents.
 - CoreAudio active output app and output device discovery.
 - Per-app volume, mute, boost, pin, ignore, and 10-band EQ state.

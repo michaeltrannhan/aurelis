@@ -1,4 +1,4 @@
-# EQMacRep FineTune Parity Phase Tracker
+# Auralis FineTune Parity Phase Tracker
 
 This file is the goal loop state. Update it at every phase boundary.
 
@@ -89,7 +89,7 @@ Not yet manually verified on real audio hardware — that is the remaining gate.
 ### Implementation notes (2026-07-06 audit)
 
 - Phases 2–4 were implemented ahead of Phases 0–1. Phase 2's tap-only boundary was skipped: the current tap manager creates full IOProc/aggregate controllers (Phase 3 scope).
-- Phases 3–4 pass automated tests (`swift test`, 46 tests). Manual audio verification via `.build/EQMacRep.app` is still outstanding.
+- Phases 3–4 pass automated tests (`swift test`, 46 tests). Manual audio verification via `.build/Auralis.app` is still outstanding.
 - Phase 4 originally used a hardcoded 48 kHz EQ sample rate; Phase 10 now reads and observes the aggregate's nominal rate and rebuilds when physical rate signatures change.
 - Phase 7 has partial UI work (appearance, density, main window, EQ panel) but not tabbed settings or keyboard/scroll-wheel parity.
 
@@ -103,7 +103,7 @@ is still owned by the user. Phase 6 in progress next; Phase 8 after.
 - **Phase 0 (Discovery):** `CoreAudioDiscoveryEventSource` (HAL listeners on
   process/device/default-output), `AudioBackendUpdatePublishing`,
   `AudioControlStore.startBackendObservation/stop` (debounced), device
-  default-first `sortedSnapshots`. App starts observation in `EQMacRepApp`.
+  default-first `sortedSnapshots`. App starts observation in `AuralisApp`.
 - **Phase 1 (Permissions):** `Permissions/AudioCapturePermission` +
   `AudioCapturePermissionClient`, store `permissionState` + request/refresh/open,
   **tap sync gated on `allowsProcessTaps`** (tears down instead of creating when
@@ -117,7 +117,7 @@ is still owned by the user. Phase 6 in progress next; Phase 8 after.
   `PopupDimensions.maxContentHeight`, `PersistedSettings.appDisplayOrder` +
   `moveApp`/`mergeAppDisplayOrder`, keyboard nav wired in popup.
 - **Phase 6 (Stability) — code written this session, PENDING BUILD:**
-  `CoreAudioOrphanedAggregateCleanup` (destroy leftover `EQMacRep-` aggregates),
+  `CoreAudioOrphanedAggregateCleanup` (destroy leftover `Auralis-` aggregates),
   `CoreAudioAggregateCrashGuard` (signal-safe fixed-slot buffer + SIGABRT/SEGV/
   BUS/TRAP handlers, tracked in `CoreAudioTapResources`/IO controller),
   `CoreAudioTapFailurePolicy` + `CoreAudioTapHealth`, manager retry cap +
@@ -159,7 +159,7 @@ hardware / permission grants; cannot be automated):
    HUD appears; menu-bar icon tracks volume/mute (Phase 8).
 
 Build the debug bundle for manual checks: `bash Scripts/build-debug-app.sh` then
-`open .build/EQMacRep.app`.
+`open .build/Auralis.app`.
 
 Not started (out of this run's scope): Phases 9–13. Phase 13 (signing/
 notarization) needs an Apple Developer certificate.

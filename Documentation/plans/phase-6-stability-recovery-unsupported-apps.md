@@ -26,26 +26,26 @@ Phase 6 intentionally avoids adding new visible feature areas. UI changes are li
 
 ## File Structure
 
-- Create `Sources/EQMacRep/Audio/CoreAudio/CoreAudioOrphanedAggregateCleanup.swift`: startup cleanup for `EQMacRep-` aggregate devices.
-- Create `Sources/EQMacRep/Audio/CoreAudio/CoreAudioAggregateCrashGuard.swift`: track live aggregate IDs and destroy them from crash handlers.
-- Create `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapFailurePolicy.swift`: classify recoverable, unsupported, and fatal CoreAudio failures.
-- Create `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapHealth.swift`: per-app/backend health state.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapResources.swift`: track/untrack aggregate IDs.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessTapManager.swift`: add state machine, retry limits, stop-all, and stale-controller cleanup.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`: run startup cleanup, expose health status, and avoid tap attempts for unsupported apps.
-- Modify `Sources/EQMacRep/State/AudioControlStore.swift`: display recoverable backend health without losing persisted settings.
-- Modify `Sources/EQMacRep/Views/MenuBarRootView.swift`: show compact backend health/error banner.
-- Test `Tests/EQMacRepTests/CoreAudioOrphanedAggregateCleanupTests.swift`: cleanup filters only EQMacRep aggregates.
-- Test `Tests/EQMacRepTests/CoreAudioAggregateCrashGuardTests.swift`: tracking slots add/remove deterministically.
-- Test `Tests/EQMacRepTests/CoreAudioTapFailurePolicyTests.swift`: OSStatus classification.
-- Extend `Tests/EQMacRepTests/CoreAudioTapLifecycleTests.swift`: stale cleanup, retry cap, stop-all.
+- Create `Sources/Auralis/Audio/CoreAudio/CoreAudioOrphanedAggregateCleanup.swift`: startup cleanup for `Auralis-` aggregate devices.
+- Create `Sources/Auralis/Audio/CoreAudio/CoreAudioAggregateCrashGuard.swift`: track live aggregate IDs and destroy them from crash handlers.
+- Create `Sources/Auralis/Audio/CoreAudio/CoreAudioTapFailurePolicy.swift`: classify recoverable, unsupported, and fatal CoreAudio failures.
+- Create `Sources/Auralis/Audio/CoreAudio/CoreAudioTapHealth.swift`: per-app/backend health state.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioTapResources.swift`: track/untrack aggregate IDs.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessTapManager.swift`: add state machine, retry limits, stop-all, and stale-controller cleanup.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`: run startup cleanup, expose health status, and avoid tap attempts for unsupported apps.
+- Modify `Sources/Auralis/State/AudioControlStore.swift`: display recoverable backend health without losing persisted settings.
+- Modify `Sources/Auralis/Views/MenuBarRootView.swift`: show compact backend health/error banner.
+- Test `Tests/AuralisTests/CoreAudioOrphanedAggregateCleanupTests.swift`: cleanup filters only Auralis aggregates.
+- Test `Tests/AuralisTests/CoreAudioAggregateCrashGuardTests.swift`: tracking slots add/remove deterministically.
+- Test `Tests/AuralisTests/CoreAudioTapFailurePolicyTests.swift`: OSStatus classification.
+- Extend `Tests/AuralisTests/CoreAudioTapLifecycleTests.swift`: stale cleanup, retry cap, stop-all.
 - Update `Documentation/flows.md` and `Documentation/phase-tracker.md`.
 
 ## Task 1: Startup Orphan Aggregate Cleanup
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioOrphanedAggregateCleanup.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioOrphanedAggregateCleanupTests.swift`
+- Create: `Sources/Auralis/Audio/CoreAudio/CoreAudioOrphanedAggregateCleanup.swift`
+- Test: `Tests/AuralisTests/CoreAudioOrphanedAggregateCleanupTests.swift`
 
 - [ ] **Step 1: Write failing cleanup tests**
 
@@ -54,15 +54,15 @@ Create `CoreAudioOrphanedAggregateCleanupTests.swift`:
 ```swift
 import CoreAudio
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class CoreAudioOrphanedAggregateCleanupTests: XCTestCase {
-    func testCleanupDestroysOnlyEQMacRepAggregateDevices() {
+    func testCleanupDestroysOnlyAuralisAggregateDevices() {
         let operations = FakeAggregateCleanupOperations(records: [
-            .init(id: 1, name: "EQMacRep-Music", isAggregate: true),
+            .init(id: 1, name: "Auralis-Music", isAggregate: true),
             .init(id: 2, name: "FineTune-Music", isAggregate: true),
-            .init(id: 3, name: "EQMacRep-USB", isAggregate: false),
-            .init(id: 4, name: "EQMacRep-Browser", isAggregate: true)
+            .init(id: 3, name: "Auralis-USB", isAggregate: false),
+            .init(id: 4, name: "Auralis-Browser", isAggregate: true)
         ])
 
         let destroyed = CoreAudioOrphanedAggregateCleanup.destroyOrphans(using: operations)
@@ -111,7 +111,7 @@ Add:
 
 ```swift
 enum CoreAudioOrphanedAggregateCleanup {
-    static let aggregateNamePrefix = "EQMacRep-"
+    static let aggregateNamePrefix = "Auralis-"
 
     @discardableResult
     static func destroyOrphans(using operations: CoreAudioAggregateCleanupOperating = SystemAggregateCleanupOperations()) -> [AudioObjectID] {
@@ -136,9 +136,9 @@ Expected: PASS.
 ## Task 2: Aggregate Crash Guard
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioAggregateCrashGuard.swift`
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapResources.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioAggregateCrashGuardTests.swift`
+- Create: `Sources/Auralis/Audio/CoreAudio/CoreAudioAggregateCrashGuard.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioTapResources.swift`
+- Test: `Tests/AuralisTests/CoreAudioAggregateCrashGuardTests.swift`
 
 - [ ] **Step 1: Write failing tracking tests**
 
@@ -147,7 +147,7 @@ Create `CoreAudioAggregateCrashGuardTests.swift`:
 ```swift
 import CoreAudio
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class CoreAudioAggregateCrashGuardTests: XCTestCase {
     func testTrackerAddsAndRemovesAggregateIDs() {
@@ -238,9 +238,9 @@ Expected: PASS.
 ## Task 3: Failure Policy
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapFailurePolicy.swift`
-- Create: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapHealth.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioTapFailurePolicyTests.swift`
+- Create: `Sources/Auralis/Audio/CoreAudio/CoreAudioTapFailurePolicy.swift`
+- Create: `Sources/Auralis/Audio/CoreAudio/CoreAudioTapHealth.swift`
+- Test: `Tests/AuralisTests/CoreAudioTapFailurePolicyTests.swift`
 
 - [ ] **Step 1: Write failing failure-policy tests**
 
@@ -249,7 +249,7 @@ Create `CoreAudioTapFailurePolicyTests.swift`:
 ```swift
 import CoreAudio
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class CoreAudioTapFailurePolicyTests: XCTestCase {
     func testDeviceMissingIsRecoverable() {
@@ -343,8 +343,8 @@ Expected: PASS.
 ## Task 4: Tap Manager State Machine And Retry Cap
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessTapManager.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioTapLifecycleTests.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessTapManager.swift`
+- Test: `Tests/AuralisTests/CoreAudioTapLifecycleTests.swift`
 
 - [ ] **Step 1: Write failing retry and stale-cleanup tests**
 
@@ -440,11 +440,11 @@ Expected: PASS.
 ## Task 5: Backend Startup And Health Reporting
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`
-- Modify: `Sources/EQMacRep/State/AudioControlStore.swift`
-- Modify: `Sources/EQMacRep/Views/MenuBarRootView.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioDiscoveryBackendTests.swift`
-- Test: `Tests/EQMacRepTests/AudioControlStoreTests.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`
+- Modify: `Sources/Auralis/State/AudioControlStore.swift`
+- Modify: `Sources/Auralis/Views/MenuBarRootView.swift`
+- Test: `Tests/AuralisTests/CoreAudioDiscoveryBackendTests.swift`
+- Test: `Tests/AuralisTests/AudioControlStoreTests.swift`
 
 - [ ] **Step 1: Write failing health tests**
 
@@ -511,10 +511,10 @@ Expected: PASS.
 ## Task 6: Unsupported App And Ignore Policy
 
 **Files:**
-- Modify: `Sources/EQMacRep/State/AudioControlStore.swift`
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessTapManager.swift`
-- Test: `Tests/EQMacRepTests/AudioControlStoreTests.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioTapLifecycleTests.swift`
+- Modify: `Sources/Auralis/State/AudioControlStore.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessTapManager.swift`
+- Test: `Tests/AuralisTests/AudioControlStoreTests.swift`
+- Test: `Tests/AuralisTests/CoreAudioTapLifecycleTests.swift`
 
 - [ ] **Step 1: Write ignore teardown test**
 
@@ -614,19 +614,19 @@ Expected: tests pass, build succeeds, debug app bundle exists.
 Run:
 
 ```sh
-open .build/EQMacRep.app
+open .build/Auralis.app
 ```
 
 Manual checks:
 
-- Start and quit EQMacRep 10 times while Music or Safari plays audio.
+- Start and quit Auralis 10 times while Music or Safari plays audio.
 - Switch default output 20 times between built-in output and another output.
 - Connect and disconnect a USB or Bluetooth output while one app is routed to it.
 - Ignore an active app and confirm it returns to normal macOS output.
 - Unignore the app and confirm controls resume after refresh.
-- Force quit EQMacRep, relaunch, and confirm orphan cleanup restores normal audio.
+- Force quit Auralis, relaunch, and confirm orphan cleanup restores normal audio.
 - Confirm status message reports active taps and issues.
-- Confirm no EQMacRep aggregate devices remain after normal quit.
+- Confirm no Auralis aggregate devices remain after normal quit.
 
 ## Review Notes
 

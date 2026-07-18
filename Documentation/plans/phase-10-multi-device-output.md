@@ -20,23 +20,23 @@ Phase 10 intentionally uses destructive rebuild switching. Crossfade polish rema
 
 ## File Structure
 
-- Modify `Sources/EQMacRep/Domain/AudioModels.swift`: add multi-output route case.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioRouteResolver.swift`: resolve route to ordered output UID list.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioAggregateDeviceBuilder.swift`: build one tap with many output subdevices.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessTapManager.swift`: rebuild on route-set changes.
-- Modify `Sources/EQMacRep/Views/AppRowView.swift`: multi-output picker entry point.
-- Create `Sources/EQMacRep/Views/MultiOutputRoutePicker.swift`: selected-device checklist.
-- Test `Tests/EQMacRepTests/CoreAudioRouteResolverTests.swift`.
-- Test `Tests/EQMacRepTests/CoreAudioAggregateDeviceBuilderTests.swift`.
-- Test `Tests/EQMacRepTests/CoreAudioTapLifecycleTests.swift`.
-- Test `Tests/EQMacRepTests/AudioControlStoreTests.swift`.
+- Modify `Sources/Auralis/Domain/AudioModels.swift`: add multi-output route case.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioRouteResolver.swift`: resolve route to ordered output UID list.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioAggregateDeviceBuilder.swift`: build one tap with many output subdevices.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessTapManager.swift`: rebuild on route-set changes.
+- Modify `Sources/Auralis/Views/AppRowView.swift`: multi-output picker entry point.
+- Create `Sources/Auralis/Views/MultiOutputRoutePicker.swift`: selected-device checklist.
+- Test `Tests/AuralisTests/CoreAudioRouteResolverTests.swift`.
+- Test `Tests/AuralisTests/CoreAudioAggregateDeviceBuilderTests.swift`.
+- Test `Tests/AuralisTests/CoreAudioTapLifecycleTests.swift`.
+- Test `Tests/AuralisTests/AudioControlStoreTests.swift`.
 - Update `Documentation/flows.md` and `Documentation/phase-tracker.md`.
 
 ## Task 1: Route Model
 
 **Files:**
-- Modify: `Sources/EQMacRep/Domain/AudioModels.swift`
-- Test: `Tests/EQMacRepTests/CustomizationTests.swift`
+- Modify: `Sources/Auralis/Domain/AudioModels.swift`
+- Test: `Tests/AuralisTests/CustomizationTests.swift`
 
 - [x] **Step 1: Write route normalization test**
 
@@ -95,8 +95,8 @@ Expected: PASS.
 ## Task 2: Resolve Multi-Output Routes
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioRouteResolver.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioRouteResolverTests.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioRouteResolver.swift`
+- Test: `Tests/AuralisTests/CoreAudioRouteResolverTests.swift`
 
 - [x] **Step 1: Write resolver tests**
 
@@ -173,8 +173,8 @@ Expected: PASS.
 ## Task 3: Aggregate Builder For Many Outputs
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioAggregateDeviceBuilder.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioAggregateDeviceBuilderTests.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioAggregateDeviceBuilder.swift`
+- Test: `Tests/AuralisTests/CoreAudioAggregateDeviceBuilderTests.swift`
 
 - [x] **Step 1: Write builder test**
 
@@ -235,9 +235,9 @@ Expected: PASS.
 ## Task 4: Controller Rebuilds By Device Set
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessTapManager.swift`
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioTapIOController.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioTapLifecycleTests.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessTapManager.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioTapIOController.swift`
+- Test: `Tests/AuralisTests/CoreAudioTapLifecycleTests.swift`
 
 - [x] **Step 1: Write lifecycle test**
 
@@ -307,9 +307,9 @@ Expected: PASS.
 ## Task 5: Multi-Output Picker UI
 
 **Files:**
-- Create: `Sources/EQMacRep/Views/MultiOutputRoutePicker.swift`
-- Modify: `Sources/EQMacRep/Views/AppRowView.swift`
-- Test: `Tests/EQMacRepTests/CustomizationTests.swift`
+- Create: `Sources/Auralis/Views/MultiOutputRoutePicker.swift`
+- Modify: `Sources/Auralis/Views/AppRowView.swift`
+- Test: `Tests/AuralisTests/CustomizationTests.swift`
 
 - [x] **Step 1: Write picker state test**
 
@@ -413,7 +413,7 @@ Expected: tests pass, build succeeds, debug app bundle exists.
 Run:
 
 ```sh
-open .build/EQMacRep.app
+open .build/Auralis.app
 ```
 
 Manual checks:
@@ -424,7 +424,7 @@ Manual checks:
 - Confirm another app can stay on follow-default.
 - Disconnect one selected output and confirm remaining output or default fallback works.
 - Remove multi-output route and confirm old aggregate is destroyed.
-- Quit EQMacRep and confirm no EQMacRep aggregates remain.
+- Quit Auralis and confirm no Auralis aggregates remain.
 
 ## Review Notes
 

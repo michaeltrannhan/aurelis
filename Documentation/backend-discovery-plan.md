@@ -18,7 +18,7 @@ FineTune's backend has two separate responsibilities:
 1. Discover apps/devices that are producing or receiving audio.
 2. Create realtime process taps and mutate audio.
 
-EQMacRep already has the app state, UI, settings, EQ model, and mock backend. The next useful step is to replace fake snapshots with real CoreAudio snapshots while leaving the app-control commands as no-ops. That gives a functional, visible improvement without risking broken or silent system audio.
+Auralis already has the app state, UI, settings, EQ model, and mock backend. The next useful step is to replace fake snapshots with real CoreAudio snapshots while leaving the app-control commands as no-ops. That gives a functional, visible improvement without risking broken or silent system audio.
 
 ## Test Balance
 
@@ -60,7 +60,7 @@ Add `backendMode` to `AppCustomization` or a small `BackendSettings` model. Keep
 
 ### Backend Factory
 
-Add a small factory so `EQMacRepApp` does not hardcode one backend:
+Add a small factory so `AuralisApp` does not hardcode one backend:
 
 ```swift
 enum AudioBackendFactory {
@@ -80,10 +80,10 @@ Because backend mode is persisted, the app should choose the backend on launch f
 Create:
 
 ```text
-Sources/EQMacRep/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift
-Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessDiscovery.swift
-Sources/EQMacRep/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift
-Sources/EQMacRep/Audio/CoreAudio/CoreAudioPropertyReader.swift
+Sources/Auralis/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift
+Sources/Auralis/Audio/CoreAudio/CoreAudioProcessDiscovery.swift
+Sources/Auralis/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift
+Sources/Auralis/Audio/CoreAudio/CoreAudioPropertyReader.swift
 ```
 
 Responsibilities:
@@ -119,7 +119,7 @@ But real sound remains unchanged until the process-tap phase.
    - use localized app name when available
    - use bundle identifier as stable identity when available
    - fall back to `name:<displayName>`
-3. Filter out EQMacRep's own process.
+3. Filter out Auralis's own process.
 4. Filter obvious CoreAudio/system daemons.
 5. Emit `AudioAppSnapshot` values.
 
@@ -142,10 +142,10 @@ This does not need FineTune's full helper-process responsibility mapping yet. Ad
 
 Files:
 
-- `Sources/EQMacRep/Domain/AppCustomization.swift`
-- `Sources/EQMacRep/EQMacRepApp.swift`
-- `Sources/EQMacRep/Views/SettingsView.swift`
-- `Tests/EQMacRepTests/CustomizationTests.swift`
+- `Sources/Auralis/Domain/AppCustomization.swift`
+- `Sources/Auralis/AuralisApp.swift`
+- `Sources/Auralis/Views/SettingsView.swift`
+- `Tests/AuralisTests/CustomizationTests.swift`
 
 Steps:
 
@@ -158,8 +158,8 @@ Steps:
 
 Files:
 
-- `Sources/EQMacRep/Audio/AudioBackendFactory.swift`
-- `Tests/EQMacRepTests/AudioBackendFactoryTests.swift`
+- `Sources/Auralis/Audio/AudioBackendFactory.swift`
+- `Tests/AuralisTests/AudioBackendFactoryTests.swift`
 
 Steps:
 
@@ -172,7 +172,7 @@ Steps:
 
 Files:
 
-- `Sources/EQMacRep/Audio/CoreAudio/CoreAudioPropertyReader.swift`
+- `Sources/Auralis/Audio/CoreAudio/CoreAudioPropertyReader.swift`
 
 Steps:
 
@@ -189,8 +189,8 @@ Testing:
 
 Files:
 
-- `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift`
-- `Tests/EQMacRepTests/CoreAudioMappingTests.swift`
+- `Sources/Auralis/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift`
+- `Tests/AuralisTests/CoreAudioMappingTests.swift`
 
 Steps:
 
@@ -203,8 +203,8 @@ Steps:
 
 Files:
 
-- `Sources/EQMacRep/Audio/CoreAudio/CoreAudioProcessDiscovery.swift`
-- `Tests/EQMacRepTests/CoreAudioMappingTests.swift`
+- `Sources/Auralis/Audio/CoreAudio/CoreAudioProcessDiscovery.swift`
+- `Tests/AuralisTests/CoreAudioMappingTests.swift`
 
 Steps:
 
@@ -217,7 +217,7 @@ Steps:
 
 Files:
 
-- `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`
+- `Sources/Auralis/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`
 
 Steps:
 
@@ -230,8 +230,8 @@ Steps:
 
 Files:
 
-- `Sources/EQMacRep/EQMacRepApp.swift`
-- `Sources/EQMacRep/State/AudioControlStore.swift`
+- `Sources/Auralis/AuralisApp.swift`
+- `Sources/Auralis/State/AudioControlStore.swift`
 - `Documentation/flows.md`
 
 Steps:
@@ -250,7 +250,7 @@ Run:
 ```sh
 swift test
 swift build
-swift run EQMacRep
+swift run Auralis
 ```
 
 Then:
@@ -259,7 +259,7 @@ Then:
 2. Switch backend mode to `CoreAudio Discovery`.
 3. Relaunch the app if required.
 4. Play audio in Music, Safari, or another app.
-5. Open EQMacRep popup.
+5. Open Auralis popup.
 6. Confirm real app names appear.
 7. Confirm real output devices appear.
 8. Move sliders and toggle EQ to confirm state persists after app restart.

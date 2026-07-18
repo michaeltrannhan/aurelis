@@ -18,29 +18,29 @@ Phase 9 does not add process taps for microphone audio. It controls macOS input 
 
 ## File Structure
 
-- Modify `Sources/EQMacRep/Domain/AudioModels.swift`: add `AudioInputDeviceSnapshot`.
-- Modify `Sources/EQMacRep/Audio/AudioBackend.swift`: add input devices to snapshot and input commands.
-- Modify `Sources/EQMacRep/Audio/MockAudioBackend.swift`: mock input devices and record input commands.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift`: discover input device records and default input UID.
-- Create `Sources/EQMacRep/Audio/CoreAudio/CoreAudioInputDeviceController.swift`: read/write input volume, mute, default input.
-- Modify `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`: return input devices and route input commands.
-- Modify `Sources/EQMacRep/State/AudioControlStore.swift`: store input devices and apply input commands.
-- Create `Sources/EQMacRep/Views/InputDeviceRowView.swift`: input row controls.
-- Modify `Sources/EQMacRep/Views/MenuBarRootView.swift`: add Output/Input device segmented view.
-- Modify `Sources/EQMacRep/Views/Settings/AudioSettingsTab.swift`: lock input-device setting.
-- Modify `Sources/EQMacRep/Domain/AppCustomization.swift`: input lock preference and preferred input device ID.
-- Test `Tests/EQMacRepTests/CoreAudioInputDeviceMappingTests.swift`.
-- Test `Tests/EQMacRepTests/CoreAudioInputDeviceControllerTests.swift`.
-- Test `Tests/EQMacRepTests/AudioControlStoreTests.swift`.
+- Modify `Sources/Auralis/Domain/AudioModels.swift`: add `AudioInputDeviceSnapshot`.
+- Modify `Sources/Auralis/Audio/AudioBackend.swift`: add input devices to snapshot and input commands.
+- Modify `Sources/Auralis/Audio/MockAudioBackend.swift`: mock input devices and record input commands.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift`: discover input device records and default input UID.
+- Create `Sources/Auralis/Audio/CoreAudio/CoreAudioInputDeviceController.swift`: read/write input volume, mute, default input.
+- Modify `Sources/Auralis/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`: return input devices and route input commands.
+- Modify `Sources/Auralis/State/AudioControlStore.swift`: store input devices and apply input commands.
+- Create `Sources/Auralis/Views/InputDeviceRowView.swift`: input row controls.
+- Modify `Sources/Auralis/Views/MenuBarRootView.swift`: add Output/Input device segmented view.
+- Modify `Sources/Auralis/Views/Settings/AudioSettingsTab.swift`: lock input-device setting.
+- Modify `Sources/Auralis/Domain/AppCustomization.swift`: input lock preference and preferred input device ID.
+- Test `Tests/AuralisTests/CoreAudioInputDeviceMappingTests.swift`.
+- Test `Tests/AuralisTests/CoreAudioInputDeviceControllerTests.swift`.
+- Test `Tests/AuralisTests/AudioControlStoreTests.swift`.
 - Update `Documentation/flows.md` and `Documentation/phase-tracker.md`.
 
 ## Task 1: Input Snapshot Model
 
 **Files:**
-- Modify: `Sources/EQMacRep/Domain/AudioModels.swift`
-- Modify: `Sources/EQMacRep/Audio/AudioBackend.swift`
-- Modify: `Sources/EQMacRep/Audio/MockAudioBackend.swift`
-- Test: `Tests/EQMacRepTests/AudioControlStoreTests.swift`
+- Modify: `Sources/Auralis/Domain/AudioModels.swift`
+- Modify: `Sources/Auralis/Audio/AudioBackend.swift`
+- Modify: `Sources/Auralis/Audio/MockAudioBackend.swift`
+- Test: `Tests/AuralisTests/AudioControlStoreTests.swift`
 
 - [ ] **Step 1: Write failing store test**
 
@@ -126,8 +126,8 @@ Expected: PASS.
 ## Task 2: CoreAudio Input Discovery
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioInputDeviceMappingTests.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioDeviceDiscovery.swift`
+- Test: `Tests/AuralisTests/CoreAudioInputDeviceMappingTests.swift`
 
 - [ ] **Step 1: Write failing mapping tests**
 
@@ -136,7 +136,7 @@ Create `CoreAudioInputDeviceMappingTests.swift`:
 ```swift
 import CoreAudio
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class CoreAudioInputDeviceMappingTests: XCTestCase {
     func testInputMappingUsesUIDNameAndDefaultFlag() {
@@ -232,8 +232,8 @@ Expected: PASS.
 ## Task 3: Input Device Controller
 
 **Files:**
-- Create: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioInputDeviceController.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioInputDeviceControllerTests.swift`
+- Create: `Sources/Auralis/Audio/CoreAudio/CoreAudioInputDeviceController.swift`
+- Test: `Tests/AuralisTests/CoreAudioInputDeviceControllerTests.swift`
 
 - [ ] **Step 1: Write failing controller tests**
 
@@ -242,7 +242,7 @@ Create pure operation tests:
 ```swift
 import CoreAudio
 import XCTest
-@testable import EQMacRep
+@testable import Auralis
 
 final class CoreAudioInputDeviceControllerTests: XCTestCase {
     func testSetInputVolumeClampsAndWritesInputScope() {
@@ -337,11 +337,11 @@ Expected: PASS.
 ## Task 4: Backend Commands
 
 **Files:**
-- Modify: `Sources/EQMacRep/Audio/AudioBackend.swift`
-- Modify: `Sources/EQMacRep/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`
-- Modify: `Sources/EQMacRep/State/AudioControlStore.swift`
-- Test: `Tests/EQMacRepTests/AudioControlStoreTests.swift`
-- Test: `Tests/EQMacRepTests/CoreAudioDiscoveryBackendTests.swift`
+- Modify: `Sources/Auralis/Audio/AudioBackend.swift`
+- Modify: `Sources/Auralis/Audio/CoreAudio/CoreAudioDiscoveryBackend.swift`
+- Modify: `Sources/Auralis/State/AudioControlStore.swift`
+- Test: `Tests/AuralisTests/AudioControlStoreTests.swift`
+- Test: `Tests/AuralisTests/CoreAudioDiscoveryBackendTests.swift`
 
 - [ ] **Step 1: Write failing command test**
 
@@ -417,9 +417,9 @@ Expected: PASS.
 ## Task 5: Popup Input Device UI
 
 **Files:**
-- Create: `Sources/EQMacRep/Views/InputDeviceRowView.swift`
-- Modify: `Sources/EQMacRep/Views/MenuBarRootView.swift`
-- Test: `Tests/EQMacRepTests/CustomizationTests.swift`
+- Create: `Sources/Auralis/Views/InputDeviceRowView.swift`
+- Modify: `Sources/Auralis/Views/MenuBarRootView.swift`
+- Test: `Tests/AuralisTests/CustomizationTests.swift`
 
 - [ ] **Step 1: Write view-state helper test**
 
@@ -498,10 +498,10 @@ Expected: PASS and build succeeds.
 ## Task 6: Input Lock Preference
 
 **Files:**
-- Modify: `Sources/EQMacRep/Domain/AppCustomization.swift`
-- Modify: `Sources/EQMacRep/State/AudioControlStore.swift`
-- Modify: `Sources/EQMacRep/Views/Settings/AudioSettingsTab.swift`
-- Test: `Tests/EQMacRepTests/CustomizationTests.swift`
+- Modify: `Sources/Auralis/Domain/AppCustomization.swift`
+- Modify: `Sources/Auralis/State/AudioControlStore.swift`
+- Modify: `Sources/Auralis/Views/Settings/AudioSettingsTab.swift`
+- Test: `Tests/AuralisTests/CustomizationTests.swift`
 
 - [ ] **Step 1: Write input lock defaults test**
 
@@ -600,7 +600,7 @@ Expected: tests pass, build succeeds, debug app bundle exists.
 Run:
 
 ```sh
-open .build/EQMacRep.app
+open .build/Auralis.app
 ```
 
 Manual checks:

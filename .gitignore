@@ -4,3 +4,7 @@ DerivedData/
 *.xcuserstate
 .DS_Store
 Auralis.xcodeproj/
+
+# Personal working notes; intentionally kept out of the repository.
+Documentation/
+ULTIMATE_REFACTORING_PLAN.md

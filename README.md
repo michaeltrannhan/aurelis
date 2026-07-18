@@ -113,10 +113,8 @@ rejection paths. The read-only `hardware` gate verifies that physical outputs
 are available and the aggregate/journal starting state is clean; it does not
 replace the hands-on hardware matrix.
 Certificate-backed Release packaging and notarization use
-`Scripts/package-release.sh`; see
-[`Documentation/verification/RELEASE_CHECKLIST.md`](Documentation/verification/RELEASE_CHECKLIST.md)
-and the
-[`physical hardware matrix`](Documentation/verification/HARDWARE_MATRIX.md).
+`Scripts/package-release.sh`. Before distributing, verify the signed artifact,
+notarization, permissions, audio routes, and widget behavior on physical hardware.
 
 ## Current Scope
 
@@ -129,7 +127,7 @@ and the
 - Customizable appearance, popup density, default new-app volume, EQ gain range, volume step, and inactive app visibility.
 - JSON settings under Application Support by default.
 - First-run permission guidance, actionable failures, ignored-app restoration, and safe reset confirmation.
-- Flow docs in `Documentation/flows.md`.
+- Local engineering notes are intentionally not versioned.
 
 ## Remaining external release gates
 

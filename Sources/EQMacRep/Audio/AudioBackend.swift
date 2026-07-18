@@ -1,6 +1,6 @@
 import Foundation
 
-struct AudioBackendSnapshot: Equatable {
+struct AudioBackendSnapshot: Equatable, Sendable {
     var apps: [AudioAppSnapshot]
     var devices: [AudioDeviceSnapshot]
 
@@ -10,7 +10,7 @@ struct AudioBackendSnapshot: Equatable {
     }
 }
 
-enum AudioBackendCommand: Equatable {
+enum AudioBackendCommand: Equatable, Sendable {
     case setVolume(AudioAppIdentity, Double)
     case setMuted(AudioAppIdentity, Bool)
     case setBoost(AudioAppIdentity, BoostLevel)
@@ -25,6 +25,12 @@ protocol AudioBackend: AnyObject {
 
 protocol AudioBackendStatusProviding {
     func statusMessage(appCount: Int, deviceCount: Int) -> String
+}
+
+/// Lightweight real-time meter read that avoids repeating process/device
+/// discovery for every UI meter tick.
+protocol AudioBackendAppLevelProviding {
+    func consumeAppLevels() -> [AudioAppIdentity: Double]
 }
 
 protocol AudioBackendTapSynchronizing {
@@ -43,15 +49,42 @@ protocol AudioBackendUpdatePublishing {
 /// hardware volume and mute state. The store surfaces this as a top-level
 /// output volume section so the user can adjust the sound output without
 /// touching per-app mixers.
-struct OutputVolumeState: Equatable {
+struct OutputControlCapabilities: Equatable, Sendable {
+    var canReadVolume: Bool
+    var canSetVolume: Bool
+    var canReadMute: Bool
+    var canSetMute: Bool
+
+    static let unavailable = OutputControlCapabilities(
+        canReadVolume: false,
+        canSetVolume: false,
+        canReadMute: false,
+        canSetMute: false
+    )
+    static let controllable = OutputControlCapabilities(
+        canReadVolume: true,
+        canSetVolume: true,
+        canReadMute: true,
+        canSetMute: true
+    )
+}
+
+struct OutputVolumeState: Equatable, Sendable {
     var volume: Double
     var isMuted: Bool
     var deviceName: String?
+    var capabilities: OutputControlCapabilities
 
-    init(volume: Double = 1, isMuted: Bool = false, deviceName: String? = nil) {
+    init(
+        volume: Double = 1,
+        isMuted: Bool = false,
+        deviceName: String? = nil,
+        capabilities: OutputControlCapabilities = .unavailable
+    ) {
         self.volume = min(max(volume.isFinite ? volume : 1, 0), 1)
         self.isMuted = isMuted
         self.deviceName = deviceName
+        self.capabilities = capabilities
     }
 }
 

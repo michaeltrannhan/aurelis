@@ -1,6 +1,6 @@
 import Foundation
 
-enum AppAppearance: String, CaseIterable, Codable, Identifiable {
+enum AppAppearance: String, CaseIterable, Codable, Identifiable, Sendable {
     case system
     case light
     case dark
@@ -23,7 +23,7 @@ struct PopupDimensions: Codable, Equatable {
     var maxContentHeight: Double
 }
 
-enum PopupDensity: String, CaseIterable, Codable, Identifiable {
+enum PopupDensity: String, CaseIterable, Codable, Identifiable, Sendable {
     case compact
     case comfortable
     case spacious
@@ -66,7 +66,6 @@ enum PopupDensity: String, CaseIterable, Codable, Identifiable {
 /// the nominal density row height alone underestimates both and clips expansions.
 struct PopupContentLayoutModel {
     static let popupChromeHeight = 112.0
-    static let minimumContentHeight = 220.0
     static let compactRowMinimumHeight = 72.0
     static let permissionBannerHeight = 132.0
     static let issueBannerHeight = 64.0
@@ -75,6 +74,7 @@ struct PopupContentLayoutModel {
     static let eqHintHeight = 34.0
     static let rowSpacing = 8.0
     static let sectionSpacing = 10.0
+    static let popupScreenInset = 40.0
     /// Height reserved by the output-volume section above the scroll view.
     /// Computed from the device count: per-row + spacing.
     static func outputVolumeSectionHeight(deviceCount: Int) -> Double {
@@ -88,18 +88,21 @@ struct PopupContentLayoutModel {
         dimensions: PopupDimensions,
         rowCount: Int,
         includesPermissionBanner: Bool,
-        includesIssueBanner: Bool,
+        issueCount: Int,
         includesExpandedEQ: Bool,
         availableScreenHeight: Double,
         deviceCount: Int = 1
     ) -> Double {
         let safeRowCount = max(rowCount, 0)
         let safeScreenHeight = availableScreenHeight.isFinite ? availableScreenHeight : 700
-        let screenLimit = max(minimumContentHeight, safeScreenHeight - popupChromeHeight - outputVolumeSectionHeight(deviceCount: deviceCount))
+        let screenLimit = max(
+            0,
+            safeScreenHeight - popupChromeHeight - outputVolumeSectionHeight(deviceCount: deviceCount)
+        )
         var sections: [Double] = []
 
         if includesPermissionBanner { sections.append(permissionBannerHeight) }
-        if includesIssueBanner { sections.append(issueBannerHeight) }
+        sections.append(contentsOf: repeatElement(issueBannerHeight, count: max(issueCount, 0)))
 
         if safeRowCount == 0 {
             sections.append(emptyStateHeight)
@@ -118,6 +121,11 @@ struct PopupContentLayoutModel {
             + (includesExpandedEQ ? expandedEQHeight : 0)
         return min(screenLimit, min(naturalHeight, densityLimit))
     }
+
+    static func popupMaxHeight(availableScreenHeight: Double) -> Double {
+        let safeHeight = availableScreenHeight.isFinite ? max(availableScreenHeight, 0) : 700
+        return max(safeHeight - popupScreenInset, 0)
+    }
 }
 
 /// Settings window tabs. `label`/`systemImage` drive the `TabView` items.
@@ -125,7 +133,6 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case audio
     case shortcuts
-    case updates
     case about
 
     var id: String { rawValue }
@@ -135,7 +142,6 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: return "General"
         case .audio: return "Audio"
         case .shortcuts: return "Shortcuts"
-        case .updates: return "Updates"
         case .about: return "About"
         }
     }
@@ -145,13 +151,12 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: return "gearshape"
         case .audio: return "speaker.wave.2"
         case .shortcuts: return "command"
-        case .updates: return "arrow.triangle.2.circlepath"
         case .about: return "info.circle"
         }
     }
 }
 
-enum VolumeStep: Double, CaseIterable, Codable, Identifiable {
+enum VolumeStep: Double, CaseIterable, Codable, Identifiable, Sendable {
     case onePercent = 0.01
     case twoPercent = 0.02
     case fivePercent = 0.05
@@ -165,7 +170,7 @@ enum VolumeStep: Double, CaseIterable, Codable, Identifiable {
     }
 }
 
-enum BackendMode: String, CaseIterable, Codable, Identifiable {
+enum BackendMode: String, CaseIterable, Codable, Identifiable, Sendable {
     case mock
     case coreAudioDiscovery
 
@@ -179,20 +184,7 @@ enum BackendMode: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-enum HUDStyle: String, CaseIterable, Codable, Identifiable {
-    case compact
-    case classic
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .compact: return "Compact"
-        case .classic: return "Classic"
-        }
-    }
-}
-
-enum MenuBarIconStyle: String, CaseIterable, Codable, Identifiable {
+enum MenuBarIconStyle: String, CaseIterable, Codable, Identifiable, Sendable {
     case speaker
     case equalizer
     case waveform
@@ -207,7 +199,7 @@ enum MenuBarIconStyle: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-struct AppCustomization: Codable, Equatable {
+struct AppCustomization: Codable, Equatable, Sendable {
     var appearance: AppAppearance
     var popupDensity: PopupDensity
     var defaultNewAppVolume: Double
@@ -217,7 +209,6 @@ struct AppCustomization: Codable, Equatable {
     var backendMode: BackendMode
     var mediaKeysEnabled: Bool
     var hotkeysEnabled: Bool
-    var hudStyle: HUDStyle
     var menuBarIconStyle: MenuBarIconStyle
 
     init(
@@ -230,7 +221,6 @@ struct AppCustomization: Codable, Equatable {
         backendMode: BackendMode = .coreAudioDiscovery,
         mediaKeysEnabled: Bool = true,
         hotkeysEnabled: Bool = true,
-        hudStyle: HUDStyle = .compact,
         menuBarIconStyle: MenuBarIconStyle = .speaker
     ) {
         self.appearance = appearance
@@ -242,7 +232,6 @@ struct AppCustomization: Codable, Equatable {
         self.backendMode = backendMode
         self.mediaKeysEnabled = mediaKeysEnabled
         self.hotkeysEnabled = hotkeysEnabled
-        self.hudStyle = hudStyle
         self.menuBarIconStyle = menuBarIconStyle
     }
 
@@ -256,29 +245,42 @@ struct AppCustomization: Codable, Equatable {
         case backendMode
         case mediaKeysEnabled
         case hotkeysEnabled
-        case hudStyle
         case menuBarIconStyle
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
-            appearance: try values.decodeIfPresent(AppAppearance.self, forKey: .appearance) ?? .system,
-            popupDensity: try values.decodeIfPresent(PopupDensity.self, forKey: .popupDensity) ?? .comfortable,
-            defaultNewAppVolume: try values.decodeIfPresent(Double.self, forKey: .defaultNewAppVolume) ?? 1,
-            eqGainRange: try values.decodeIfPresent(EQGainRange.self, forKey: .eqGainRange) ?? .db12,
-            volumeStep: try values.decodeIfPresent(VolumeStep.self, forKey: .volumeStep) ?? .fivePercent,
-            showInactiveApps: try values.decodeIfPresent(Bool.self, forKey: .showInactiveApps) ?? true,
-            backendMode: try values.decodeIfPresent(BackendMode.self, forKey: .backendMode) ?? .coreAudioDiscovery,
-            mediaKeysEnabled: try values.decodeIfPresent(Bool.self, forKey: .mediaKeysEnabled) ?? true,
-            hotkeysEnabled: try values.decodeIfPresent(Bool.self, forKey: .hotkeysEnabled) ?? true,
-            hudStyle: try values.decodeIfPresent(HUDStyle.self, forKey: .hudStyle) ?? .compact,
-            menuBarIconStyle: try values.decodeIfPresent(MenuBarIconStyle.self, forKey: .menuBarIconStyle) ?? .speaker
+            appearance: values.tolerant(AppAppearance.self, forKey: .appearance) ?? .system,
+            popupDensity: values.tolerant(PopupDensity.self, forKey: .popupDensity) ?? .comfortable,
+            defaultNewAppVolume: values.tolerantDouble(forKey: .defaultNewAppVolume) ?? 1,
+            eqGainRange: values.tolerant(EQGainRange.self, forKey: .eqGainRange) ?? .db12,
+            volumeStep: values.tolerant(VolumeStep.self, forKey: .volumeStep) ?? .fivePercent,
+            showInactiveApps: values.tolerant(Bool.self, forKey: .showInactiveApps) ?? true,
+            backendMode: values.tolerant(BackendMode.self, forKey: .backendMode) ?? .coreAudioDiscovery,
+            mediaKeysEnabled: values.tolerant(Bool.self, forKey: .mediaKeysEnabled) ?? true,
+            hotkeysEnabled: values.tolerant(Bool.self, forKey: .hotkeysEnabled) ?? true,
+            menuBarIconStyle: values.tolerant(MenuBarIconStyle.self, forKey: .menuBarIconStyle) ?? .speaker
         )
     }
 
     mutating func setDefaultNewAppVolume(_ volume: Double) {
         defaultNewAppVolume = Self.clampedVolume(volume, fallback: defaultNewAppVolume)
+    }
+
+    var normalized: AppCustomization {
+        AppCustomization(
+            appearance: appearance,
+            popupDensity: popupDensity,
+            defaultNewAppVolume: defaultNewAppVolume,
+            eqGainRange: eqGainRange,
+            volumeStep: volumeStep,
+            showInactiveApps: showInactiveApps,
+            backendMode: backendMode,
+            mediaKeysEnabled: mediaKeysEnabled,
+            hotkeysEnabled: hotkeysEnabled,
+            menuBarIconStyle: menuBarIconStyle
+        )
     }
 
     static func clampedVolume(_ volume: Double, fallback: Double) -> Double {

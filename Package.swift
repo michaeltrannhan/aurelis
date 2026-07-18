@@ -7,10 +7,15 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "EQMacRep", targets: ["EQMacRep"])
+        .executable(name: "EQMacRep", targets: ["EQMacRep"]),
+        .library(name: "EQMacRepWidgetShared", targets: ["EQMacRepWidgetShared"])
     ],
     targets: [
-        .executableTarget(name: "EQMacRep"),
-        .testTarget(name: "EQMacRepTests", dependencies: ["EQMacRep"])
+        .target(name: "EQMacRepWidgetShared"),
+        .executableTarget(name: "EQMacRep", dependencies: ["EQMacRepWidgetShared"]),
+        .testTarget(
+            name: "EQMacRepTests",
+            dependencies: ["EQMacRep", "EQMacRepWidgetShared"]
+        )
     ]
 )

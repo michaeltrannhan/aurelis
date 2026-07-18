@@ -22,12 +22,12 @@ struct PermissionPresentation {
     init(state: AudioCapturePermissionState) {
         isReady = state.allowsProcessTaps
 
-        if state.audioUsageDescription == .missing && state.screenCapture == .granted {
+        if state.audioUsageDescription == .missing {
             title = "Audio capture unavailable"
-            detail = "Screen Recording is granted, but this build is missing its audio-capture usage description. Launch EQMacRep from the packaged .app bundle."
+            detail = "This build is missing its audio-capture usage description. System Settings cannot repair it; launch EQMacRep from the packaged .app bundle."
             systemImage = "xmark.seal.fill"
             tint = .red
-            primary = .openSettings
+            primary = nil
             secondary = nil
             return
         }

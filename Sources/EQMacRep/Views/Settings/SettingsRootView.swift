@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Tabbed settings root (General, Audio, Shortcuts, Updates, About).
+/// Tabbed settings root. Updates returns only when a real updater exists.
 struct SettingsRootView: View {
     @ObservedObject var store: AudioControlStore
     @State private var selection: SettingsTab = .general
@@ -16,9 +16,6 @@ struct SettingsRootView: View {
             ShortcutsSettingsTab(store: store)
                 .tabItem { Label(SettingsTab.shortcuts.label, systemImage: SettingsTab.shortcuts.systemImage) }
                 .tag(SettingsTab.shortcuts)
-            UpdatesSettingsTab()
-                .tabItem { Label(SettingsTab.updates.label, systemImage: SettingsTab.updates.systemImage) }
-                .tag(SettingsTab.updates)
             AboutSettingsTab()
                 .tabItem { Label(SettingsTab.about.label, systemImage: SettingsTab.about.systemImage) }
                 .tag(SettingsTab.about)

@@ -1,16 +1,34 @@
 import Combine
 import Foundation
 
+private enum AudioControlStoreError: LocalizedError {
+    case appUnavailable(String)
+    case outputVolumeUnsupported(String)
+    case outputMuteUnsupported(String)
+    case shuttingDown
+
+    var errorDescription: String? {
+        switch self {
+        case let .appUnavailable(identity): "The audio app \(identity) is unavailable."
+        case let .outputVolumeUnsupported(device): "\(device) does not expose a settable output volume."
+        case let .outputMuteUnsupported(device): "\(device) does not expose a settable mute control."
+        case .shuttingDown: "The audio engine is shutting down."
+        }
+    }
+}
+
+private enum SettingsEngineReceipt: Sendable {
+    case none
+    case backendSwitch(AudioBackendSwitchToken)
+}
+
 @MainActor
 final class AudioControlStore: ObservableObject {
-    private enum ContinuousControl: Hashable {
-        case volume(AudioAppIdentity)
-        case eq(AudioAppIdentity)
-    }
     let settingsStore: SettingsStore
-    private let settingsRepository: AudioSettingsRepository
-    private let session: AudioSessionCoordinator
+    private let persistence: SettingsPersistenceActor
+    private let engine: AudioEngineActor
     private let permissions: AudioPermissionCoordinator
+    private let mutationGate = AudioMutationGate()
 
     @Published var settings: PersistedSettings
     @Published private(set) var appSnapshots: [AudioAppSnapshot] = []
@@ -20,18 +38,24 @@ final class AudioControlStore: ObservableObject {
     @Published private(set) var issues: [AudioIssue] = []
     @Published private(set) var permissionState: AudioCapturePermissionState = .unknown
     @Published private(set) var outputVolumeState: OutputVolumeState = .init()
-    /// Per-device output volume state keyed by device UID. Refreshed alongside
-    /// the system default and after any HAL volume/mute notification. Drives
-    /// the top-level device volume list so each selected output source can be
-    /// adjusted independently.
     @Published private(set) var deviceVolumeStates: [String: OutputVolumeState] = [:]
-    private var activeContinuousControls: Set<ContinuousControl> = []
-    private var continuousBaselines: [ContinuousControl: AppAudioSettings?] = [:]
-    private var continuousTasks: [ContinuousControl: Task<Void, Never>] = [:]
-    /// Identities whose persisted state has been seeded into the current backend.
-    /// Seeding happens before tap reconciliation so a newly-created controller
-    /// starts on the stored route and DSP state instead of using defaults.
-    private var restoredBackendIdentities: Set<AudioAppIdentity> = []
+
+    private var bootstrapTask: Task<Void, Never>?
+    private var topologyObservationTask: Task<Void, Never>?
+    private var outputObservationTask: Task<Void, Never>?
+    private var levelObservationTask: Task<Void, Never>?
+    private var intentTasks: [UUID: Task<Void, Never>] = [:]
+    private var editSessions: [AudioEditSessionKey: PersistedSettings] = [:]
+    private var activeEditKeys: [EditLookup: AudioEditSessionKey] = [:]
+    private var editTasks: [AudioEditSessionKey: Task<Void, Never>] = [:]
+    private var shutdownTask: Task<AudioShutdownReport, Never>?
+    private var completedShutdownReport: AudioShutdownReport?
+    private(set) var topologyRefreshCount = 0
+
+    private struct EditLookup: Hashable {
+        let app: AudioAppIdentity
+        let control: AudioEditControl
+    }
 
     var statusMessage: String { operationState.message }
 
@@ -39,746 +63,1236 @@ final class AudioControlStore: ObservableObject {
         permissions.requirements
     }
 
+    var activeEditSessionKeys: Set<AudioEditSessionKey> {
+        Set(editSessions.keys)
+    }
+
     init(
         settingsStore: SettingsStore = SettingsStore(),
-        backend: (any AudioBackend)? = nil,
-        backendFactory: @escaping (BackendMode) -> any AudioBackend = { AudioBackendFactory.makeBackend(mode: $0) },
+        backend: sending (any AudioBackend)? = nil,
+        backendFactory: @escaping @Sendable (BackendMode) -> any AudioBackend = { AudioBackendFactory.makeBackend(mode: $0) },
         permissionClient: any AudioCapturePermissionClient = SystemAudioCapturePermissionClient()
     ) throws {
-        let repository = AudioSettingsRepository(store: settingsStore)
-        let loadedSettings = try repository.load()
+        let defaults = settingsStore.defaultSettings()
         self.settingsStore = settingsStore
-        self.settingsRepository = repository
-        self.session = AudioSessionCoordinator(
-            backend: backend ?? backendFactory(loadedSettings.customization.backendMode),
+        self.persistence = SettingsPersistenceActor(store: settingsStore)
+        self.engine = AudioEngineActor(
+            backend: backend,
+            initialMode: defaults.customization.backendMode,
             backendFactory: backendFactory
         )
         self.permissions = AudioPermissionCoordinator(client: permissionClient)
-        self.settings = loadedSettings
+        self.settings = defaults
         self.permissionState = permissions.state
+        rebuildDisplayRows()
+        bootstrapTask = Task { [weak self] in
+            await self?.performBootstrap()
+        }
+    }
+
+    func waitUntilReady() async {
+        let task = bootstrapTask
+        await task?.value
+    }
+
+    func waitForPendingPersistence() async {
+        await persistence.waitForScheduledWork()
+    }
+
+    private func performBootstrap() async {
+        defer { bootstrapTask = nil }
+        do {
+            let result = try await persistence.loadWithRecovery()
+            settings = result.settings
+            await engine.selectInitialMode(result.settings.customization.backendMode)
+            if let notice = result.recoveryNotice {
+                reportIssue(
+                    id: "settings-recovery",
+                    domain: .persistence,
+                    message: notice.message,
+                    severity: .warning
+                )
+                operationState = .degraded(notice.message)
+            }
+        } catch let error as SettingsStoreError {
+            if case .futureVersion = error {
+                await persistence.blockWrites(because: error)
+                settings = settingsStore.defaultSettings()
+                let message = "This app cannot read the newer settings file at \(settingsStore.settingsURL.path). It was left unchanged; update EQMacRep before saving settings."
+                reportIssue(id: "settings-version", domain: .persistence, message: message, severity: .error)
+                operationState = .degraded(message)
+            } else {
+                reportPersistenceFailure(error, id: "settings-load")
+            }
+        } catch {
+            reportPersistenceFailure(error, id: "settings-load")
+        }
         rebuildDisplayRows()
     }
 
-    func refresh() throws {
+    // MARK: - Engine refresh and observation
+
+    func refresh() async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            try await refreshUnlocked()
+        }
+    }
+
+    private func refreshUnlocked() async throws {
+        guard completedShutdownReport == nil else { throw AudioControlStoreError.shuttingDown }
         operationState = .refreshing
+        let engineSnapshot: AudioEngineSnapshot
         do {
-            let snapshot = try session.fetchSnapshot()
-            appSnapshots = snapshot.apps.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
-            devices = snapshot.devices
-            for app in appSnapshots {
-                ensureSettings(for: app)
-            }
-            mergeAppDisplayOrder()
-            let restoreError = restoreBackendStateCapturingError()
-            let tapError = synchronizeBackendTapsCapturingError()
-            refreshOutputVolumeState()
-            refreshDeviceVolumeStates()
-            try persist()
-            dismissIssue(id: "refresh")
-
-            if let restoreError {
-                let message = "Audio settings restore error: \(restoreError.localizedDescription)"
-                operationState = .degraded(message)
-                reportIssue(id: "backend-restore", message: message, recovery: .retry)
-            } else {
-                dismissIssue(id: "backend-restore")
-            }
-
-            if let tapError {
-                let message = "Tap setup error: \(tapError.localizedDescription)"
-                operationState = .degraded(message)
-                reportIssue(id: "tap-synchronization", message: message, recovery: .retry)
-            } else if restoreError == nil,
-                      let message = session.statusMessage(appCount: appSnapshots.count, deviceCount: devices.count) {
-                operationState = .ready(message)
-                dismissIssue(id: "tap-synchronization")
-            } else if restoreError == nil {
-                operationState = .ready("Loaded \(appSnapshots.count) app\(appSnapshots.count == 1 ? "" : "s")")
-                dismissIssue(id: "tap-synchronization")
-            } else {
-                dismissIssue(id: "tap-synchronization")
-            }
+            engineSnapshot = try await engine.fetchSnapshot(
+                settings: settings,
+                permissionAllowsTaps: permissionState.allowsProcessTaps
+            )
         } catch {
             let message = "Backend error: \(error.localizedDescription)"
             operationState = .failed(message)
-            reportIssue(id: "refresh", message: message, severity: .error, recovery: .retry)
+            reportIssue(id: "refresh", domain: .backend, message: message, severity: .error, recovery: .retry)
             throw error
         }
+
+        appSnapshots = Self.deduplicatedSnapshots(engineSnapshot.backend.apps)
+            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        devices = engineSnapshot.backend.devices
+        outputVolumeState = engineSnapshot.output.defaultOutput
+        deviceVolumeStates = engineSnapshot.output.devices
+        let beforeDiscoveryMerge = settings
+        for app in appSnapshots { ensureSettings(for: app, in: &settings) }
+        mergeAppDisplayOrder()
+
+        var persistenceIssue: String?
+        if settings != beforeDiscoveryMerge {
+            do {
+                _ = try await persistence.commit(settings)
+                dismissIssue(id: "refresh-persistence")
+            } catch {
+                persistenceIssue = error.localizedDescription
+                reportPersistenceFailure(error, id: "refresh-persistence")
+            }
+        }
+        dismissIssue(id: "refresh")
+
+        if let restoreIssue = engineSnapshot.restoreIssue {
+            reportIssue(
+                id: "backend-restore",
+                domain: .backend,
+                message: "Audio settings restore error: \(restoreIssue)",
+                recovery: .retry
+            )
+        } else {
+            dismissIssue(id: "backend-restore")
+        }
+        if let tapIssue = engineSnapshot.tapIssue {
+            reportIssue(
+                id: "tap-synchronization",
+                domain: .tap,
+                message: "Tap setup error: \(tapIssue)",
+                recovery: .retry
+            )
+        } else {
+            dismissIssue(id: "tap-synchronization")
+        }
+
+        if let persistenceIssue {
+            operationState = .degraded("Couldn’t save discovered audio state: \(persistenceIssue)")
+        } else if let tapIssue = engineSnapshot.tapIssue {
+            operationState = .degraded("Tap setup error: \(tapIssue)")
+        } else if let restoreIssue = engineSnapshot.restoreIssue {
+            operationState = .degraded("Audio settings restore error: \(restoreIssue)")
+        } else {
+            operationState = .ready(engineSnapshot.statusMessage)
+        }
         rebuildDisplayRows()
-        #if DEBUG
-        let dump = "snapshots=\(appSnapshots.count) active=\(appSnapshots.filter(\.isActive).count) devices=\(devices.count) rows=\(displayRows.count) showInactive=\(settings.customization.showInactiveApps) ignored=\(settings.ignoredAppIDs.count) pinned=\(settings.pinnedAppIDs.count)\n"
-        if let data = dump.data(using: .utf8) {
-            let url = URL(fileURLWithPath: "/tmp/eqmacrep-diag.log")
-            if let handle = try? FileHandle(forWritingTo: url) {
-                handle.seekToEndOfFile(); handle.write(data); try? handle.close()
-            } else {
-                try? data.write(to: url)
-            }
-        }
-        #endif
     }
 
-    /// Begins observing backend update events (HAL listeners on the CoreAudio
-    /// path) and refreshes after a debounce interval. Coalesces event bursts so a
-    /// flurry of HAL notifications results in a single refresh.
-    func startBackendObservation(debounceNanoseconds: UInt64 = 250_000_000) {
-        session.startObservation(debounceNanoseconds: debounceNanoseconds) { [weak self] in
-            self?.refreshIntent()
-        }
-        session.startOutputVolumeObservation { [weak self] in
-            Task { @MainActor in
-                self?.refreshOutputVolumeState()
-                self?.refreshDeviceVolumeStates()
+    func startBackendObservation(
+        debounceNanoseconds: UInt64 = 250_000_000,
+        meterIntervalNanoseconds: UInt64 = 100_000_000
+    ) async {
+        await waitUntilReady()
+        guard topologyObservationTask == nil,
+              outputObservationTask == nil,
+              levelObservationTask == nil else { return }
+
+        let topologyEvents = engine.topologyEvents
+        topologyObservationTask = Task { [weak self] in
+            for await _ in topologyEvents {
+                guard !Task.isCancelled, let self else { return }
+                topologyRefreshCount += 1
+                try? await refresh()
             }
         }
+        let outputEvents = engine.outputEvents
+        outputObservationTask = Task { [weak self] in
+            for await output in outputEvents {
+                guard !Task.isCancelled, let self else { return }
+                outputVolumeState = output.defaultOutput
+                deviceVolumeStates = output.devices
+            }
+        }
+        let levelEvents = engine.levelEvents
+        levelObservationTask = Task { [weak self] in
+            for await levels in levelEvents {
+                guard !Task.isCancelled, let self else { return }
+                applyAppLevels(levels)
+            }
+        }
+        await engine.startObservation(
+            debounceNanoseconds: debounceNanoseconds,
+            meterIntervalNanoseconds: meterIntervalNanoseconds
+        )
     }
 
-    func stopBackendObservation() {
-        session.stopObservation()
+    func stopBackendObservation() async {
+        cancelObservationConsumers()
+        await engine.stopObservation()
     }
+
+    private func cancelObservationConsumers() {
+        topologyObservationTask?.cancel()
+        topologyObservationTask = nil
+        outputObservationTask?.cancel()
+        outputObservationTask = nil
+        levelObservationTask?.cancel()
+        levelObservationTask = nil
+    }
+
+    private func applyAppLevels(_ levels: [AudioAppIdentity: Double]) {
+        var changed = false
+        for index in appSnapshots.indices {
+            let level = min(max(levels[appSnapshots[index].identity] ?? 0, 0), 1)
+            if abs(appSnapshots[index].level - level) > 0.0001 {
+                appSnapshots[index].level = level
+                changed = true
+            }
+        }
+        if changed { rebuildDisplayRows() }
+    }
+
+    // MARK: - Permission lifecycle
 
     func refreshPermissionState() {
         permissionState = permissions.refresh()
         if !permissionState.allowsProcessTaps {
             operationState = .degraded(permissionState.summary)
+            reportIssue(
+                id: "audio-permission",
+                domain: .permission,
+                message: permissionState.summary,
+                recovery: .requestAudioPermission
+            )
+        } else {
+            dismissIssue(id: "audio-permission")
         }
     }
 
     func requestAudioCapturePermission() {
         permissionState = permissions.requestAudioCapture()
-        operationState = permissionState.allowsProcessTaps ? .ready(permissionState.summary) : .degraded(permissionState.summary)
-        do {
-            try synchronizeBackendTaps()
-        } catch {
-            reportIssue(id: "permission-tap-sync", message: error.localizedDescription, recovery: .retry)
+        operationState = permissionState.allowsProcessTaps
+            ? .ready(permissionState.summary)
+            : .degraded(permissionState.summary)
+        launchIntent { store in
+            do {
+                try await store.withMutationGate {
+                    try await store.engine.synchronizeTaps(
+                        activeAppIDs: Set(store.appSnapshots.map(\.identity)),
+                        ignoredAppIDs: store.settings.ignoredAppIDs,
+                        permissionAllowsTaps: store.permissionState.allowsProcessTaps
+                    )
+                }
+                store.dismissIssue(id: "permission-tap-sync")
+            } catch {
+                store.reportIssue(
+                    id: "permission-tap-sync",
+                    domain: .tap,
+                    message: error.localizedDescription,
+                    recovery: .retry
+                )
+            }
         }
         rebuildDisplayRows()
     }
 
-    func openAudioCapturePrivacySettings() {
-        permissions.openAudioPrivacySettings()
-    }
-
-    /// True once the user has answered the Screen Recording prompt but macOS still
-    /// requires an app relaunch before the grant takes effect.
-    var needsRelaunchForPermission: Bool {
-        permissionState.screenCapture == .pendingRestart
-    }
-
+    func openAudioCapturePrivacySettings() { permissions.openAudioPrivacySettings() }
+    var needsRelaunchForPermission: Bool { permissionState.screenCapture == .pendingRestart }
     func relaunchForPermission() {
-        permissions.relaunchApp()
+        launchIntent { store in
+            do {
+                try await store.permissions.relaunchApp()
+                store.dismissIssue(id: "permission-relaunch")
+            } catch {
+                store.reportIssue(
+                    id: "permission-relaunch",
+                    domain: .permission,
+                    message: "Couldn’t relaunch EQMacRep: \(error.localizedDescription)",
+                    severity: .error,
+                    recovery: .retry
+                )
+            }
+        }
     }
+
+    // MARK: - Intent entry points
 
     func refreshIntent() {
-        do { try refresh() } catch { }
+        launchIntent { store in try? await store.refresh() }
     }
 
     func setOutputVolumeIntent(_ volume: Double) {
-        let clamped = min(max(volume.isFinite ? volume : outputVolumeState.volume, 0), 1)
-        do {
-            try session.setOutputVolume(clamped)
-            outputVolumeState.volume = clamped
-        } catch {
-            reportMutationFailure(error, id: "output-volume")
-        }
+        launchIntent { store in try? await store.setOutputVolume(volume) }
     }
 
     func setOutputMutedIntent(_ muted: Bool) {
-        do {
-            try session.setOutputMuted(muted)
-            outputVolumeState.isMuted = muted
-        } catch {
-            reportMutationFailure(error, id: "output-mute")
-        }
+        launchIntent { store in try? await store.setOutputMuted(muted) }
     }
 
-    func toggleOutputMuteIntent() {
-        setOutputMutedIntent(!outputVolumeState.isMuted)
-    }
+    func toggleOutputMuteIntent() { setOutputMutedIntent(!outputVolumeState.isMuted) }
 
-    /// Sets volume for a specific output device by UID. The slider binds here.
     func setDeviceVolumeIntent(_ volume: Double, for deviceUID: String) {
-        let clamped = min(max(volume.isFinite ? volume : (deviceVolumeStates[deviceUID]?.volume ?? 1), 0), 1)
-        do {
-            try session.setOutputVolume(clamped, forUID: deviceUID)
-            deviceVolumeStates[deviceUID]?.volume = clamped
-        } catch {
-            reportMutationFailure(error, id: "device-volume-\(deviceUID)")
-        }
+        launchIntent { store in try? await store.setDeviceVolume(volume, for: deviceUID) }
     }
 
-    /// Sets mute for a specific output device by UID.
     func setDeviceMutedIntent(_ muted: Bool, for deviceUID: String) {
-        do {
-            try session.setOutputMuted(muted, forUID: deviceUID)
-            deviceVolumeStates[deviceUID]?.isMuted = muted
-        } catch {
-            reportMutationFailure(error, id: "device-mute-\(deviceUID)")
-        }
+        launchIntent { store in try? await store.setDeviceMuted(muted, for: deviceUID) }
     }
 
     func toggleDeviceMuteIntent(for deviceUID: String) {
-        let isMuted = deviceVolumeStates[deviceUID]?.isMuted ?? false
-        setDeviceMutedIntent(!isMuted, for: deviceUID)
-    }
-
-    private func refreshOutputVolumeState() {
-        do {
-            outputVolumeState = try session.readOutputVolume()
-        } catch {
-            // Some devices (optical, aggregated) don't expose a hardware
-            // volume scalar; leave the previous state in place rather than
-            // clearing the slider.
-        }
-    }
-
-    private func refreshDeviceVolumeStates() {
-        var states: [String: OutputVolumeState] = [:]
-        for device in devices {
-            states[device.id] = (try? session.readOutputVolume(forUID: device.id))
-                ?? deviceVolumeStates[device.id]
-                ?? OutputVolumeState(deviceName: device.name)
-        }
-        deviceVolumeStates = states
+        setDeviceMutedIntent(!(deviceVolumeStates[deviceUID]?.isMuted ?? false), for: deviceUID)
     }
 
     func setVolumeIntent(_ volume: Double, for identity: AudioAppIdentity) {
-        let control = ContinuousControl.volume(identity)
-        guard activeContinuousControls.contains(control) else {
-            do { try setVolume(volume, for: identity) } catch { }
-            return
+        let lookup = EditLookup(app: identity, control: .volume)
+        if let key = activeEditKeys[lookup] {
+            ensureSettings(for: identity, in: &settings)
+            settings.appSettings[identity]?.setVolume(volume)
+            rebuildDisplayRows()
+            scheduleEditPreview(key)
+        } else {
+            launchIntent { store in try? await store.setVolume(volume, for: identity) }
         }
-        ensureSettings(for: identity)
-        settings.appSettings[identity]?.setVolume(volume)
-        rebuildDisplayRows()
-        scheduleContinuousApply(control)
     }
 
     func setMutedIntent(_ muted: Bool, for identity: AudioAppIdentity) {
-        do { try setMuted(muted, for: identity) } catch { }
+        launchIntent { store in try? await store.setMuted(muted, for: identity) }
     }
 
     func setBoostIntent(_ boost: BoostLevel, for identity: AudioAppIdentity) {
-        do { try setBoost(boost, for: identity) } catch { }
+        launchIntent { store in try? await store.setBoost(boost, for: identity) }
     }
 
     func setEQGainIntent(_ gain: Double, band: Int, for identity: AudioAppIdentity) {
-        let control = ContinuousControl.eq(identity)
-        guard activeContinuousControls.contains(control) else {
-            do { try setEQGain(gain, band: band, for: identity) } catch { }
-            return
+        let lookup = EditLookup(app: identity, control: .eqBand(band))
+        if let key = activeEditKeys[lookup] {
+            ensureSettings(for: identity, in: &settings)
+            settings.appSettings[identity]?.eq.setGain(gain, at: band)
+            rebuildDisplayRows()
+            scheduleEditPreview(key)
+        } else {
+            launchIntent { store in try? await store.setEQGain(gain, band: band, for: identity) }
         }
-        ensureSettings(for: identity)
-        settings.appSettings[identity]?.eq.setGain(gain, at: band)
-        rebuildDisplayRows()
-        scheduleContinuousApply(control)
     }
 
-    func beginVolumeEditing(for identity: AudioAppIdentity) { beginContinuous(.volume(identity), identity: identity) }
-    func endVolumeEditing(for identity: AudioAppIdentity) { endContinuous(.volume(identity)) }
-    func beginEQEditing(band: Int, for identity: AudioAppIdentity) { beginContinuous(.eq(identity), identity: identity) }
-    func endEQEditing(band: Int, for identity: AudioAppIdentity) { endContinuous(.eq(identity)) }
+    @discardableResult
+    func beginVolumeEditing(for identity: AudioAppIdentity) -> UUID {
+        beginEdit(app: identity, control: .volume)
+    }
+
+    func endVolumeEditing(for identity: AudioAppIdentity) {
+        endEdit(app: identity, control: .volume)
+    }
+
+    @discardableResult
+    func beginEQEditing(band: Int, for identity: AudioAppIdentity) -> UUID {
+        beginEdit(app: identity, control: .eqBand(band))
+    }
+
+    func endEQEditing(band: Int, for identity: AudioAppIdentity) {
+        endEdit(app: identity, control: .eqBand(band))
+    }
 
     func endContinuousEdits(for identity: AudioAppIdentity) {
-        endContinuous(.volume(identity))
-        endContinuous(.eq(identity))
-    }
-
-    func setRouteIntent(_ route: DeviceRoute, for identity: AudioAppIdentity) {
-        do { try setRoute(route, for: identity) } catch { }
+        let lookups = activeEditKeys.keys.filter { $0.app == identity }
+        for lookup in lookups { endEdit(app: lookup.app, control: lookup.control) }
     }
 
     func applyCustomizationIntent(_ customization: AppCustomization) {
-        do { try applyCustomization(customization) } catch { reportMutationFailure(error, id: "customization") }
+        launchIntent { store in try? await store.applyCustomization(customization) }
     }
 
     func resetIntent() {
-        do { try reset() } catch { reportMutationFailure(error, id: "reset") }
-    }
-
-    func completeOnboardingIntent() {
-        settings.hasCompletedOnboarding = true
-        do { try persistAndRebuild() }
-        catch { reportMutationFailure(error, id: "onboarding") }
+        launchIntent { store in try? await store.reset() }
     }
 
     func resetEQIntent(for identity: AudioAppIdentity) {
-        let previous = settings
-        ensureSettings(for: identity)
-        guard let baseline = settings.appSettings[identity] else { return }
-        settings.appSettings[identity]?.eq.reset()
-        guard let eq = settings.appSettings[identity]?.eq else { return }
-        do {
-            try applyPersistedMutation(
-                .setEQ(identity, eq),
-                compensatingWith: .setEQ(identity, baseline.eq),
-                restoring: previous,
-                issueID: "eq-\(identity.rawValue)",
-                app: identity
-            )
-        } catch { }
+        launchIntent { store in try? await store.resetEQ(for: identity) }
     }
 
     func pinIntent(_ pinned: Bool, identity: AudioAppIdentity) {
-        do { try pinned ? pin(identity) : unpin(identity) } catch { reportMutationFailure(error, id: "pin-\(identity.rawValue)") }
+        launchIntent { store in
+            do {
+                if pinned { try await store.pin(identity) }
+                else { try await store.unpin(identity) }
+            }
+            catch { }
+        }
     }
 
     func ignoreIntent(_ identity: AudioAppIdentity) {
-        do { try ignore(identity) } catch { reportMutationFailure(error, id: "ignore-\(identity.rawValue)") }
+        launchIntent { store in try? await store.ignore(identity) }
     }
 
     func unignoreIntent(_ identity: AudioAppIdentity) {
-        do { try unignore(identity) } catch { reportMutationFailure(error, id: "unignore-\(identity.rawValue)") }
+        launchIntent { store in try? await store.unignore(identity) }
     }
 
-    func pin(_ identity: AudioAppIdentity) throws {
-        settings.pinnedAppIDs.insert(identity)
-        try persistAndRebuild()
+    func restoreAllIgnoredIntent() {
+        launchIntent { store in try? await store.restoreAllIgnoredApps() }
     }
 
-    func unpin(_ identity: AudioAppIdentity) throws {
-        settings.pinnedAppIDs.remove(identity)
-        try persistAndRebuild()
-    }
+    // MARK: - Output mutations
 
-    func ignore(_ identity: AudioAppIdentity) throws {
-        settings.ignoredAppIDs.insert(identity)
-        settings.pinnedAppIDs.remove(identity)
-        try session.tearDownTap(for: identity)
-        try synchronizeBackendTaps()
-        try persistAndRebuild()
-    }
-
-    func unignore(_ identity: AudioAppIdentity) throws {
-        settings.ignoredAppIDs.remove(identity)
-        try synchronizeBackendTaps()
-        try persistAndRebuild()
-    }
-
-    func setVolume(_ volume: Double, for identity: AudioAppIdentity) throws {
-        let previous = settings
-        ensureSettings(for: identity)
-        guard let baseline = settings.appSettings[identity] else { return }
-        settings.appSettings[identity]?.setVolume(volume)
-        let applied = settings.appSettings[identity]?.volume ?? 1
-        try applyPersistedMutation(
-            .setVolume(identity, applied),
-            compensatingWith: .setVolume(identity, baseline.volume),
-            restoring: previous,
-            issueID: "volume-\(identity.rawValue)",
-            app: identity
-        )
-    }
-
-    func setMuted(_ muted: Bool, for identity: AudioAppIdentity) throws {
-        let previous = settings
-        ensureSettings(for: identity)
-        guard let baseline = settings.appSettings[identity] else { return }
-        settings.appSettings[identity]?.isMuted = muted
-        try applyPersistedMutation(
-            .setMuted(identity, muted),
-            compensatingWith: .setMuted(identity, baseline.isMuted),
-            restoring: previous,
-            issueID: "mute-\(identity.rawValue)",
-            app: identity
-        )
-    }
-
-    func setBoost(_ boost: BoostLevel, for identity: AudioAppIdentity) throws {
-        let previous = settings
-        ensureSettings(for: identity)
-        guard let baseline = settings.appSettings[identity] else { return }
-        settings.appSettings[identity]?.boost = boost
-        try applyPersistedMutation(
-            .setBoost(identity, boost),
-            compensatingWith: .setBoost(identity, baseline.boost),
-            restoring: previous,
-            issueID: "boost-\(identity.rawValue)",
-            app: identity
-        )
-    }
-
-    func setEQGain(_ gain: Double, band: Int, for identity: AudioAppIdentity) throws {
-        let previous = settings
-        ensureSettings(for: identity)
-        guard let baseline = settings.appSettings[identity] else { return }
-        settings.appSettings[identity]?.eq.setGain(gain, at: band)
-        guard let eq = settings.appSettings[identity]?.eq else { return }
-        try applyPersistedMutation(
-            .setEQ(identity, eq),
-            compensatingWith: .setEQ(identity, baseline.eq),
-            restoring: previous,
-            issueID: "eq-\(identity.rawValue)",
-            app: identity
-        )
-    }
-
-    func setRoute(_ route: DeviceRoute, for identity: AudioAppIdentity) throws {
-        let previous = settings
-        ensureSettings(for: identity)
-        guard let baseline = settings.appSettings[identity] else { return }
-        let normalizedRoute = route.normalized
-        settings.appSettings[identity]?.route = normalizedRoute
-        try applyPersistedMutation(
-            .setRoute(identity, normalizedRoute),
-            compensatingWith: .setRoute(identity, baseline.route.normalized),
-            restoring: previous,
-            issueID: "route-\(identity.rawValue)",
-            app: identity
-        )
-    }
-
-    /// Moves `identity` directly before `target` in the persisted display order.
-    func moveApp(_ identity: AudioAppIdentity, before target: AudioAppIdentity) throws {
-        var order = settings.appDisplayOrder
-        if !order.contains(identity) { order.append(identity) }
-        if !order.contains(target) { order.append(target) }
-        order.removeAll { $0 == identity }
-        if let targetIndex = order.firstIndex(of: target) {
-            order.insert(identity, at: targetIndex)
-        } else {
-            order.append(identity)
-        }
-        settings.appDisplayOrder = order
-        try persistAndRebuild()
-    }
-
-    /// Appends any newly-discovered or pinned apps to the end of the display
-    /// order, preserving the user's existing arrangement.
-    private func mergeAppDisplayOrder() {
-        var order = settings.appDisplayOrder
-        let known = Set(order)
-        var candidates = appSnapshots.map(\.identity)
-        for pinned in settings.pinnedAppIDs where !candidates.contains(pinned) {
-            candidates.append(pinned)
-        }
-        for id in candidates where !known.contains(id) {
-            order.append(id)
-        }
-        settings.appDisplayOrder = order
-    }
-
-    func applyCustomization(_ customization: AppCustomization) throws {
-        let previousSettings = settings
-        let previousBackendMode = settings.customization.backendMode
-        let previousRange = settings.customization.eqGainRange
-        settings.customization = customization
-        if previousRange != customization.eqGainRange {
-            for identity in settings.appSettings.keys {
-                settings.appSettings[identity]?.eq.applyRange(customization.eqGainRange)
+    func setOutputVolume(_ volume: Double) async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            guard outputVolumeState.capabilities.canSetVolume else {
+                throw AudioControlStoreError.outputVolumeUnsupported(outputVolumeState.deviceName ?? "The default output")
             }
-        }
-
-        if previousBackendMode != customization.backendMode {
-            let wasObserving = session.isObserving
-            stopBackendObservation()
-            defer { if wasObserving { startBackendObservation() } }
+            let clamped = min(max(volume.isFinite ? volume : outputVolumeState.volume, 0), 1)
             do {
-                try session.switchBackend(to: customization.backendMode)
-                restoredBackendIdentities.removeAll()
+                try await engine.setOutputVolume(clamped)
+                outputVolumeState.volume = clamped
+                dismissIssue(id: "output-volume")
             } catch {
-                settings = previousSettings
-                rebuildDisplayRows()
+                reportMutationFailure(error, id: "output-volume", domain: .backend)
                 throw error
             }
+        }
+    }
+
+    func setOutputMuted(_ muted: Bool) async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            guard outputVolumeState.capabilities.canSetMute else {
+                throw AudioControlStoreError.outputMuteUnsupported(outputVolumeState.deviceName ?? "The default output")
+            }
+            do {
+                try await engine.setOutputMuted(muted)
+                outputVolumeState.isMuted = muted
+                dismissIssue(id: "output-mute")
+            } catch {
+                reportMutationFailure(error, id: "output-mute", domain: .backend)
+                throw error
+            }
+        }
+    }
+
+    func setDeviceVolume(_ volume: Double, for deviceUID: String) async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            let state = deviceVolumeStates[deviceUID] ?? OutputVolumeState()
+            guard state.capabilities.canSetVolume else {
+                throw AudioControlStoreError.outputVolumeUnsupported(state.deviceName ?? deviceUID)
+            }
+            let clamped = min(max(volume.isFinite ? volume : state.volume, 0), 1)
+            do {
+                try await engine.setOutputVolume(clamped, forUID: deviceUID)
+                deviceVolumeStates[deviceUID]?.volume = clamped
+                dismissIssue(id: "device-volume-\(deviceUID)")
+            } catch {
+                reportMutationFailure(error, id: "device-volume-\(deviceUID)", domain: .backend, device: deviceUID)
+                throw error
+            }
+        }
+    }
+
+    func setDeviceMuted(_ muted: Bool, for deviceUID: String) async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            let state = deviceVolumeStates[deviceUID] ?? OutputVolumeState()
+            guard state.capabilities.canSetMute else {
+                throw AudioControlStoreError.outputMuteUnsupported(state.deviceName ?? deviceUID)
+            }
+            do {
+                try await engine.setOutputMuted(muted, forUID: deviceUID)
+                deviceVolumeStates[deviceUID]?.isMuted = muted
+                dismissIssue(id: "device-mute-\(deviceUID)")
+            } catch {
+                reportMutationFailure(error, id: "device-mute-\(deviceUID)", domain: .backend, device: deviceUID)
+                throw error
+            }
+        }
+    }
+
+    // MARK: - Durable settings transactions
+
+    func pin(_ identity: AudioAppIdentity) async throws {
+        try await updatePin(identity, pinned: true)
+    }
+
+    func unpin(_ identity: AudioAppIdentity) async throws {
+        try await updatePin(identity, pinned: false)
+    }
+
+    private func updatePin(_ identity: AudioAppIdentity, pinned: Bool) async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            let previous = settings
+            var desired = previous
+            if pinned { desired.pinnedAppIDs.insert(identity) }
+            else { desired.pinnedAppIDs.remove(identity) }
+            try await performSettingsTransaction(
+                desired: desired,
+                issueID: "pin-\(identity.rawValue)",
+                engineDomain: .backend,
+                app: identity,
+                engineWork: { () },
+                finalize: { _ in },
+                compensate: { _ in }
+            )
+        }
+    }
+
+    func ignore(_ identity: AudioAppIdentity) async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            let previous = settings
+            var desired = previous
+            desired.ignoredAppIDs.insert(identity)
+            desired.pinnedAppIDs.remove(identity)
+            let active = Set(appSnapshots.map(\.identity))
+            let allowsTaps = permissionState.allowsProcessTaps
+            try await performSettingsTransaction(
+                desired: desired,
+                issueID: "ignore-\(identity.rawValue)",
+                engineDomain: .tap,
+                app: identity,
+                engineWork: { [engine] in
+                    try await engine.tearDownTap(for: identity)
+                    try await engine.synchronizeTaps(
+                        activeAppIDs: active,
+                        ignoredAppIDs: desired.ignoredAppIDs,
+                        permissionAllowsTaps: allowsTaps
+                    )
+                },
+                finalize: { _ in },
+                compensate: { [engine] _ in
+                    try await engine.synchronizeTaps(
+                        activeAppIDs: active,
+                        ignoredAppIDs: previous.ignoredAppIDs,
+                        permissionAllowsTaps: allowsTaps
+                    )
+                }
+            )
+        }
+    }
+
+    func unignore(_ identity: AudioAppIdentity) async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            let previous = settings
+            var desired = previous
+            desired.ignoredAppIDs.remove(identity)
+            try await performIgnoredSetTransaction(previous: previous, desired: desired, issueID: "unignore-\(identity.rawValue)", app: identity)
+        }
+    }
+
+    func restoreAllIgnoredApps() async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            let previous = settings
+            var desired = previous
+            desired.ignoredAppIDs.removeAll()
+            try await performIgnoredSetTransaction(previous: previous, desired: desired, issueID: "restore-all-ignored", app: nil)
+        }
+    }
+
+    private func performIgnoredSetTransaction(
+        previous: PersistedSettings,
+        desired: PersistedSettings,
+        issueID: String,
+        app: AudioAppIdentity?
+    ) async throws {
+        let active = Set(appSnapshots.map(\.identity))
+        let allowsTaps = permissionState.allowsProcessTaps
+        try await performSettingsTransaction(
+            desired: desired,
+            issueID: issueID,
+            engineDomain: .tap,
+            app: app,
+            engineWork: { [engine] in
+                try await engine.synchronizeTaps(
+                    activeAppIDs: active,
+                    ignoredAppIDs: desired.ignoredAppIDs,
+                    permissionAllowsTaps: allowsTaps
+                )
+            },
+            finalize: { _ in },
+            compensate: { [engine] _ in
+                try await engine.synchronizeTaps(
+                    activeAppIDs: active,
+                    ignoredAppIDs: previous.ignoredAppIDs,
+                    permissionAllowsTaps: allowsTaps
+                )
+            }
+        )
+    }
+
+    func setVolume(_ volume: Double, for identity: AudioAppIdentity) async throws {
+        try await mutateAppSetting(identity, issuePrefix: "volume") { $0.setVolume(volume) }
+    }
+
+    func setMuted(_ muted: Bool, for identity: AudioAppIdentity) async throws {
+        try await mutateAppSetting(identity, issuePrefix: "mute") { $0.isMuted = muted }
+    }
+
+    func setBoost(_ boost: BoostLevel, for identity: AudioAppIdentity) async throws {
+        try await mutateAppSetting(identity, issuePrefix: "boost") { $0.boost = boost }
+    }
+
+    func setEQGain(_ gain: Double, band: Int, for identity: AudioAppIdentity) async throws {
+        try await mutateAppSetting(identity, issuePrefix: "eq") { $0.eq.setGain(gain, at: band) }
+    }
+
+    func resetEQ(for identity: AudioAppIdentity) async throws {
+        try await mutateAppSetting(identity, issuePrefix: "eq") { $0.eq.reset() }
+    }
+
+    func setRoute(_ route: DeviceRoute, for identity: AudioAppIdentity) async throws {
+        try await mutateAppSetting(identity, issuePrefix: "route") { $0.route = route.normalized }
+    }
+
+    private func mutateAppSetting(
+        _ identity: AudioAppIdentity,
+        issuePrefix: String,
+        mutation: (inout AppAudioSettings) -> Void
+    ) async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            let previous = settings
+            var desired = previous
+            ensureSettings(for: identity, in: &desired)
+            guard var desiredApp = desired.appSettings[identity],
+                  let previousApp = desired.appSettings[identity] else {
+                throw AudioControlStoreError.appUnavailable(identity.rawValue)
+            }
+            mutation(&desiredApp)
+            desired.appSettings[identity] = desiredApp.normalized
+            let command = Self.backendCommand(for: identity, settings: desiredApp, issuePrefix: issuePrefix)
+            let compensation = Self.backendCommand(for: identity, settings: previous.appSettings[identity] ?? previousApp, issuePrefix: issuePrefix)
+            try await performSettingsTransaction(
+                desired: desired,
+                issueID: "\(issuePrefix)-\(identity.rawValue)",
+                engineDomain: issuePrefix == "route" ? .tap : .backend,
+                app: identity,
+                engineWork: { [engine] in try await engine.apply(command) },
+                finalize: { _ in },
+                compensate: { [engine] _ in try await engine.apply(compensation) }
+            )
+        }
+    }
+
+    func moveApp(_ identity: AudioAppIdentity, before target: AudioAppIdentity) async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            var desired = settings
+            var order = desired.appDisplayOrder
+            if !order.contains(identity) { order.append(identity) }
+            if !order.contains(target) { order.append(target) }
+            order.removeAll { $0 == identity }
+            if let index = order.firstIndex(of: target) { order.insert(identity, at: index) }
+            else { order.append(identity) }
+            desired.appDisplayOrder = order
+            try await performSettingsTransaction(
+                desired: desired,
+                issueID: "app-order",
+                engineDomain: .backend,
+                app: identity,
+                engineWork: { () },
+                finalize: { _ in },
+                compensate: { _ in }
+            )
+        }
+    }
+
+    func applyCustomization(_ customization: AppCustomization) async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            let previous = settings
+            var desired = previous
+            let normalized = customization.normalized
+            let backendChanged = previous.customization.backendMode != normalized.backendMode
+            let rangeChanged = previous.customization.eqGainRange != normalized.eqGainRange
+            desired.customization = normalized
+            if rangeChanged {
+                for identity in desired.appSettings.keys {
+                    desired.appSettings[identity]?.eq.applyRange(normalized.eqGainRange)
+                }
+            }
+            let desiredEQ = rangeChanged
+                ? desired.appSettings.compactMap { identity, value in AudioBackendCommand.setEQ(identity, value.eq) }
+                : []
+            let previousEQ = rangeChanged
+                ? previous.appSettings.compactMap { identity, value in AudioBackendCommand.setEQ(identity, value.eq) }
+                : []
+
+            try await performSettingsTransaction(
+                desired: desired,
+                issueID: "customization",
+                engineDomain: backendChanged ? .backend : .tap,
+                app: nil,
+                engineWork: { [engine] () async throws -> SettingsEngineReceipt in
+                    if backendChanged {
+                        return SettingsEngineReceipt.backendSwitch(
+                            try await engine.beginBackendSwitch(to: normalized.backendMode)
+                        )
+                    }
+                    if !desiredEQ.isEmpty { try await engine.apply(desiredEQ) }
+                    return SettingsEngineReceipt.none
+                },
+                finalize: { [engine] (receipt: SettingsEngineReceipt) in
+                    if case let .backendSwitch(token) = receipt {
+                        try await engine.commitBackendSwitch(token)
+                    }
+                },
+                compensate: { [engine] (receipt: SettingsEngineReceipt?) in
+                    if case let .backendSwitch(token)? = receipt {
+                        try await engine.rollbackBackendSwitch(token)
+                    } else if !previousEQ.isEmpty {
+                        try await engine.apply(previousEQ)
+                    }
+                }
+            )
+
+            if backendChanged {
+                appSnapshots = []
+                devices = []
+                displayRows = []
+                try await refreshUnlocked()
+            }
+        }
+    }
+
+    func reset() async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            let desired = settingsStore.defaultSettings()
+            try await performSettingsTransaction(
+                desired: desired,
+                issueID: "reset",
+                engineDomain: .backend,
+                app: nil,
+                engineWork: { [engine] in
+                    try await engine.beginBackendSwitch(
+                        to: desired.customization.backendMode,
+                        forceRecreate: true
+                    )
+                },
+                finalize: { [engine] token in try await engine.commitBackendSwitch(token) },
+                compensate: { [engine] token in
+                    if let token { try await engine.rollbackBackendSwitch(token) }
+                }
+            )
             appSnapshots = []
             devices = []
             displayRows = []
-            try persist()
-            try refresh()
-            return
+            try await refreshUnlocked()
         }
-
-        try persistAndRebuild()
     }
 
-    func reset() throws {
-        let wasObserving = session.isObserving
-        stopBackendObservation()
-        defer { if wasObserving { startBackendObservation() } }
-        let defaultSettings = PersistedSettings()
-        try session.switchBackend(to: defaultSettings.customization.backendMode)
-        restoredBackendIdentities.removeAll()
-        settings = defaultSettings
-        appSnapshots = []
-        devices = []
-        displayRows = []
-        try persist()
-        try refresh()
-    }
-
-    func shutdown() {
-        for control in Array(activeContinuousControls) { endContinuous(control) }
-        stopBackendObservation()
-        try? settingsRepository.flush()
-        try? session.shutdown()
-    }
-
-    private func ensureSettings(for app: AudioAppSnapshot) {
-        if settings.appSettings[app.identity] == nil {
-            settings.appSettings[app.identity] = AppAudioSettings(
-                displayName: app.displayName,
-                volume: settings.customization.defaultNewAppVolume,
-                eq: EQCurve(range: settings.customization.eqGainRange)
+    func completeOnboarding() async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            var desired = settings
+            desired.hasCompletedOnboarding = true
+            try await performSettingsTransaction(
+                desired: desired,
+                issueID: "onboarding",
+                engineDomain: .backend,
+                app: nil,
+                engineWork: { () },
+                finalize: { _ in },
+                compensate: { _ in }
             )
-        } else {
-            settings.appSettings[app.identity]?.displayName = app.displayName
-            if let route = settings.appSettings[app.identity]?.route {
-                settings.appSettings[app.identity]?.route = route.normalized
-            }
         }
     }
 
-    private func ensureSettings(for identity: AudioAppIdentity) {
-        if settings.appSettings[identity] != nil { return }
-        let snapshot = appSnapshots.first { $0.identity == identity }
-        settings.appSettings[identity] = AppAudioSettings(
-            displayName: snapshot?.displayName ?? identity.rawValue,
-            volume: settings.customization.defaultNewAppVolume,
-            eq: EQCurve(range: settings.customization.eqGainRange)
+    private func performSettingsTransaction<Receipt: Sendable>(
+        desired: PersistedSettings,
+        issueID: String,
+        engineDomain: AudioIssueDomain,
+        app: AudioAppIdentity?,
+        engineWork: @escaping () async throws -> Receipt,
+        finalize: @escaping (Receipt) async throws -> Void,
+        compensate: @escaping (Receipt?) async throws -> Void
+    ) async throws {
+        let previous = settings
+        let transaction = AudioMutationTransaction(
+            previousState: previous,
+            desiredState: desired,
+            issueID: issueID,
+            engineIssueDomain: engineDomain,
+            affectedApp: app,
+            engineWork: engineWork,
+            durableCommit: { [persistence] state in _ = try await persistence.commit(state) },
+            finalizeEngineWork: finalize,
+            compensation: compensate
         )
+        try await execute(transaction)
     }
 
-    private func rebuildDisplayRows() {
-        let snapshotsByID = Dictionary(uniqueKeysWithValues: appSnapshots.map { ($0.identity, $0) })
-        let orderIndex = Dictionary(uniqueKeysWithValues: settings.appDisplayOrder.enumerated().map { ($1, $0) })
-        var identities = Set(appSnapshots.map(\.identity))
-        identities.formUnion(settings.pinnedAppIDs)
-
-        displayRows = identities
-            .compactMap { identity -> DisplayableAppRow? in
-                guard !settings.ignoredAppIDs.contains(identity),
-                      let appSettings = settings.appSettings[identity] else {
-                    return nil
-                }
-
-                let snapshot = snapshotsByID[identity]
-                let isActive = snapshot?.isActive ?? false
-                let isPinned = settings.pinnedAppIDs.contains(identity)
-                guard settings.customization.showInactiveApps || isActive || isPinned else {
-                    return nil
-                }
-
-                return DisplayableAppRow(
-                    identity: identity,
-                    displayName: snapshot?.displayName ?? appSettings.displayName,
-                    isActive: isActive,
-                    isPinned: isPinned,
-                    level: snapshot?.level ?? 0,
-                    settings: appSettings
+    private func execute<Receipt: Sendable>(_ transaction: AudioMutationTransaction<Receipt>) async throws {
+        settings = transaction.desiredState
+        rebuildDisplayRows()
+        let receipt: Receipt
+        do {
+            receipt = try await transaction.engineWork()
+        } catch {
+            let engineError = error
+            do { try await transaction.compensation(nil) }
+            catch {
+                reportIssue(
+                    id: "\(transaction.issueID)-compensation",
+                    domain: transaction.engineIssueDomain,
+                    message: "Engine work failed and compensation also failed: \(engineError.localizedDescription) Compensation: \(error.localizedDescription)",
+                    severity: .error,
+                    app: transaction.affectedApp,
+                    recovery: .retry
                 )
             }
-            .sorted { lhs, rhs in
-                // Persisted display order wins; identities not yet ordered fall
-                // back to pinned-first, active-first, then name.
-                let lhsOrder = orderIndex[lhs.identity] ?? Int.max
-                let rhsOrder = orderIndex[rhs.identity] ?? Int.max
-                if lhsOrder != rhsOrder { return lhsOrder < rhsOrder }
-                if lhs.isPinned != rhs.isPinned { return lhs.isPinned && !rhs.isPinned }
-                if lhs.isActive != rhs.isActive { return lhs.isActive && !rhs.isActive }
-                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
-            }
-    }
-
-    private func persistAndRebuild() throws {
-        try persist()
-        rebuildDisplayRows()
-    }
-
-    /// Applies a backend command and persists its matching UI state as one
-    /// logical transaction. If saving fails after the backend accepted the
-    /// command, restore the previous backend value before rolling UI state back.
-    private func applyPersistedMutation(
-        _ command: AudioBackendCommand,
-        compensatingWith compensation: AudioBackendCommand,
-        restoring previousSettings: PersistedSettings,
-        issueID: String,
-        app: AudioAppIdentity
-    ) throws {
-        do {
-            try session.apply(command)
-        } catch {
-            settings = previousSettings
+            settings = transaction.previousState
             rebuildDisplayRows()
-            reportMutationFailure(error, id: issueID, app: app)
-            throw error
+            reportMutationFailure(
+                engineError,
+                id: transaction.issueID,
+                domain: transaction.engineIssueDomain,
+                app: transaction.affectedApp
+            )
+            throw engineError
         }
 
         do {
-            try persistAndRebuild()
+            try await transaction.durableCommit(transaction.desiredState)
         } catch {
             let persistenceError = error
             do {
-                try session.apply(compensation)
-            } catch {
-                // The new value is still the best representation of backend
-                // state. Keep it visible and queue another persistence attempt.
-                settingsRepository.scheduleSave(settings)
+                try await transaction.compensation(receipt)
+                settings = transaction.previousState
+                await persistence.schedule(transaction.previousState)
                 rebuildDisplayRows()
-                let message = "Couldn’t save settings or restore the previous audio value: \(persistenceError.localizedDescription) Restore error: \(error.localizedDescription)"
-                operationState = .degraded(message)
-                reportIssue(id: issueID, message: message, severity: .error, app: app, recovery: .retry)
-                throw persistenceError
+            } catch {
+                settings = transaction.desiredState
+                await persistence.schedule(transaction.desiredState)
+                rebuildDisplayRows()
+                reportIssue(
+                    id: "\(transaction.issueID)-compensation",
+                    domain: transaction.engineIssueDomain,
+                    message: "Couldn’t restore the previous audio state after persistence failed: \(error.localizedDescription)",
+                    severity: .error,
+                    app: transaction.affectedApp,
+                    recovery: .retry
+                )
             }
-
-            settings = previousSettings
-            rebuildDisplayRows()
-            reportMutationFailure(persistenceError, id: issueID, app: app)
+            reportPersistenceFailure(persistenceError, id: "\(transaction.issueID)-persistence", app: transaction.affectedApp)
             throw persistenceError
         }
+
+        do {
+            try await transaction.finalizeEngineWork(receipt)
+        } catch {
+            reportMutationFailure(
+                error,
+                id: "\(transaction.issueID)-finalize",
+                domain: transaction.engineIssueDomain,
+                app: transaction.affectedApp
+            )
+            throw error
+        }
+        dismissIssue(id: transaction.issueID)
+        dismissIssue(id: "\(transaction.issueID)-persistence")
+        dismissIssue(id: "\(transaction.issueID)-compensation")
     }
 
-    /// Replays non-default persisted state exactly once per discovered app and
-    /// backend lifetime. The tap manager records route/gain intent even when no
-    /// controller exists yet, then consumes it while constructing the controller.
-    private func restoreBackendStateCapturingError() -> Error? {
-        var firstError: Error?
-        for app in appSnapshots where !restoredBackendIdentities.contains(app.identity) {
-            guard let appSettings = settings.appSettings[app.identity] else { continue }
-            do {
-                for command in backendRestoreCommands(for: app.identity, settings: appSettings) {
-                    try session.apply(command)
+    // MARK: - Edit sessions
+
+    private func beginEdit(app: AudioAppIdentity, control: AudioEditControl) -> UUID {
+        let lookup = EditLookup(app: app, control: control)
+        if let existing = activeEditKeys[lookup] { return existing.gestureToken }
+        let key = AudioEditSessionKey(app: app, control: control, gestureToken: UUID())
+        editSessions[key] = settings
+        activeEditKeys[lookup] = key
+        return key.gestureToken
+    }
+
+    private func endEdit(app: AudioAppIdentity, control: AudioEditControl) {
+        let lookup = EditLookup(app: app, control: control)
+        guard let key = activeEditKeys[lookup] else { return }
+        editTasks[key]?.cancel()
+        editTasks[key] = nil
+        launchIntent { store in try? await store.flushEditSession(key, isFinal: true) }
+    }
+
+    private func scheduleEditPreview(
+        _ key: AudioEditSessionKey,
+        debounceNanoseconds: UInt64 = 100_000_000
+    ) {
+        editTasks[key]?.cancel()
+        editTasks[key] = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: debounceNanoseconds) }
+            catch { return }
+            guard !Task.isCancelled, let self else { return }
+            try? await flushEditSession(key, isFinal: false)
+        }
+    }
+
+    private func flushEditSession(_ key: AudioEditSessionKey, isFinal: Bool) async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            guard let baseline = editSessions[key],
+                  let currentApp = settings.appSettings[key.app],
+                  let baselineApp = baseline.appSettings[key.app] else { return }
+            let desiredCommand: AudioBackendCommand
+            let compensation: AudioBackendCommand
+            switch key.control {
+            case .volume:
+                desiredCommand = .setVolume(key.app, currentApp.volume)
+                compensation = .setVolume(key.app, baselineApp.volume)
+            case .eqBand:
+                desiredCommand = .setEQ(key.app, currentApp.eq)
+                compensation = .setEQ(key.app, baselineApp.eq)
+            }
+
+            if isFinal {
+                do {
+                    try await performSettingsTransaction(
+                        desired: settings,
+                        issueID: "edit-\(key.app.rawValue)-\(key.gestureToken.uuidString)",
+                        engineDomain: .backend,
+                        app: key.app,
+                        engineWork: { [engine] in try await engine.apply(desiredCommand) },
+                        finalize: { _ in },
+                        compensate: { [engine] _ in try await engine.apply(compensation) }
+                    )
+                } catch {
+                    removeEditSession(key)
+                    throw error
                 }
-                restoredBackendIdentities.insert(app.identity)
-            } catch {
-                if firstError == nil { firstError = error }
+                removeEditSession(key)
+            } else {
+                do {
+                    try await engine.apply(desiredCommand)
+                    await persistence.schedule(settings)
+                } catch {
+                    try? await engine.apply(compensation)
+                    settings = baseline
+                    await persistence.schedule(baseline)
+                    rebuildDisplayRows()
+                    removeEditSession(key)
+                    reportMutationFailure(error, id: "edit-\(key.app.rawValue)", domain: .backend, app: key.app)
+                    throw error
+                }
             }
         }
-        return firstError
     }
 
-    private func backendRestoreCommands(
-        for identity: AudioAppIdentity,
-        settings appSettings: AppAudioSettings
-    ) -> [AudioBackendCommand] {
-        var commands: [AudioBackendCommand] = []
-        let route = appSettings.route.normalized
-        if route != .followDefault { commands.append(.setRoute(identity, route)) }
-        if appSettings.volume != 1 { commands.append(.setVolume(identity, appSettings.volume)) }
-        if appSettings.isMuted { commands.append(.setMuted(identity, true)) }
-        if appSettings.boost != .x1 { commands.append(.setBoost(identity, appSettings.boost)) }
-        if appSettings.eq.gains.contains(where: { $0 != 0 }) { commands.append(.setEQ(identity, appSettings.eq)) }
-        return commands
+    private func removeEditSession(_ key: AudioEditSessionKey) {
+        editTasks[key]?.cancel()
+        editTasks[key] = nil
+        editSessions[key] = nil
+        activeEditKeys[EditLookup(app: key.app, control: key.control)] = nil
     }
 
-    private func synchronizeBackendTaps() throws {
-        try session.synchronizeTaps(
-            activeAppIDs: Set(appSnapshots.map(\.identity)),
-            ignoredAppIDs: settings.ignoredAppIDs,
-            permissionAllowsTaps: permissionState.allowsProcessTaps
+    // MARK: - Shutdown
+
+    func shutdown() async -> AudioShutdownReport {
+        if let completedShutdownReport { return completedShutdownReport }
+        if let shutdownTask { return await shutdownTask.value }
+        let task = Task { @MainActor [weak self] in
+            guard let self else {
+                return AudioShutdownReport(
+                    editSessionErrorDescriptions: [],
+                    persistenceErrorDescription: nil,
+                    engineReport: AudioEngineShutdownReport(
+                        stoppedTopologyObservation: false,
+                        stoppedOutputObservation: false,
+                        stoppedMeterObservation: false,
+                        teardownErrorDescription: nil
+                    )
+                )
+            }
+            return await performShutdown()
+        }
+        shutdownTask = task
+        let report = await task.value
+        completedShutdownReport = report
+        return report
+    }
+
+    private func performShutdown() async -> AudioShutdownReport {
+        var editErrors: [String] = []
+        let keys = Array(editSessions.keys)
+        for key in keys {
+            editTasks[key]?.cancel()
+            do { try await flushEditSession(key, isFinal: true) }
+            catch { editErrors.append(error.localizedDescription) }
+        }
+        // Stop the main-actor consumers now; let engine.shutdown() stop and
+        // report its owned HAL/output/meter observations as one operation.
+        cancelObservationConsumers()
+
+        let persistenceError: String?
+        do {
+            try await persistence.flush()
+            persistenceError = nil
+        } catch {
+            persistenceError = error.localizedDescription
+            reportPersistenceFailure(error, id: "shutdown-persistence")
+        }
+
+        // Always attempt engine teardown even when edit or persistence cleanup
+        // failed. Tap teardown retains/journals unresolved Core Audio handles.
+        let engineReport = await engine.shutdown()
+        if let teardown = engineReport.teardownErrorDescription {
+            reportIssue(
+                id: "shutdown-taps",
+                domain: .tap,
+                message: "Audio shutdown left recoverable tap resources: \(teardown)",
+                severity: .error,
+                recovery: .retry
+            )
+        }
+        return AudioShutdownReport(
+            editSessionErrorDescriptions: editErrors,
+            persistenceErrorDescription: persistenceError,
+            engineReport: engineReport
         )
     }
 
-    private func synchronizeBackendTapsCapturingError() -> Error? {
-        do {
-            try synchronizeBackendTaps()
-            return nil
-        } catch {
-            return error
-        }
-    }
+    // MARK: - State derivation
 
-    private func persist() throws {
-        try settingsRepository.saveNow(settings)
-    }
-
-    private func beginContinuous(_ control: ContinuousControl, identity: AudioAppIdentity) {
-        guard activeContinuousControls.insert(control).inserted else { return }
-        continuousBaselines[control] = settings.appSettings[identity]
-    }
-
-    private func scheduleContinuousApply(_ control: ContinuousControl, debounceNanoseconds: UInt64 = 100_000_000) {
-        continuousTasks[control]?.cancel()
-        continuousTasks[control] = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: debounceNanoseconds)
-            guard !Task.isCancelled else { return }
-            self?.flushContinuous(control, isFinal: false)
-        }
-    }
-
-    private func endContinuous(_ control: ContinuousControl) {
-        guard activeContinuousControls.contains(control) || continuousTasks[control] != nil else { return }
-        continuousTasks[control]?.cancel()
-        continuousTasks[control] = nil
-        flushContinuous(control, isFinal: true)
-    }
-
-    private func flushContinuous(_ control: ContinuousControl, isFinal: Bool) {
-        let identity: AudioAppIdentity
-        let command: AudioBackendCommand
-        switch control {
-        case let .volume(appID):
-            identity = appID
-            guard let volume = settings.appSettings[appID]?.volume else { return }
-            command = .setVolume(appID, volume)
-        case let .eq(appID):
-            identity = appID
-            guard let eq = settings.appSettings[appID]?.eq else { return }
-            command = .setEQ(appID, eq)
-        }
-
-        do {
-            try session.apply(command)
-        } catch {
-            let baseline = continuousBaselines[control] ?? nil
-            if let baseline {
-                settings.appSettings[identity] = baseline
-                let compensation: AudioBackendCommand = switch control {
-                case .volume: .setVolume(identity, baseline.volume)
-                case .eq: .setEQ(identity, baseline.eq)
-                }
-                try? session.apply(compensation)
-            } else {
-                settings.appSettings.removeValue(forKey: identity)
-            }
-            do { try settingsRepository.saveNow(settings) }
-            catch { settingsRepository.scheduleSave(settings) }
-            activeContinuousControls.remove(control)
-            continuousBaselines[control] = nil
-            continuousTasks[control]?.cancel()
-            continuousTasks[control] = nil
-            rebuildDisplayRows()
-            reportMutationFailure(error, id: "continuous-\(identity.rawValue)", app: identity)
-            return
-        }
-
-        if isFinal {
-            activeContinuousControls.remove(control)
-            continuousBaselines[control] = nil
-            continuousTasks[control] = nil
-            do {
-                try settingsRepository.saveNow(settings)
-            } catch {
-                // Audio already accepted the final value. Keep UI state aligned
-                // with audio and retain a pending copy for shutdown/retry.
-                settingsRepository.scheduleSave(settings)
-                let message = "Couldn’t save settings: \(error.localizedDescription)"
-                operationState = .degraded(message)
-                reportIssue(id: "persistence", message: message, severity: .error, recovery: .retry)
-            }
+    private func ensureSettings(for app: AudioAppSnapshot, in state: inout PersistedSettings) {
+        if state.appSettings[app.identity] == nil {
+            state.appSettings[app.identity] = AppAudioSettings(
+                displayName: app.displayName,
+                volume: state.customization.defaultNewAppVolume,
+                eq: EQCurve(range: state.customization.eqGainRange)
+            )
         } else {
-            settingsRepository.scheduleSave(settings)
+            state.appSettings[app.identity]?.displayName = app.displayName
+            if let route = state.appSettings[app.identity]?.route {
+                state.appSettings[app.identity]?.route = route.normalized
+            }
         }
     }
 
-    private func reportMutationFailure(_ error: Error, id: String, app: AudioAppIdentity? = nil) {
+    private func ensureSettings(for identity: AudioAppIdentity, in state: inout PersistedSettings) {
+        if state.appSettings[identity] != nil { return }
+        let snapshot = appSnapshots.first { $0.identity == identity }
+        state.appSettings[identity] = AppAudioSettings(
+            displayName: snapshot?.displayName ?? identity.rawValue,
+            volume: state.customization.defaultNewAppVolume,
+            eq: EQCurve(range: state.customization.eqGainRange)
+        )
+    }
+
+    private func mergeAppDisplayOrder() {
+        var known: Set<AudioAppIdentity> = []
+        var order = settings.appDisplayOrder.filter { $0.isPersistable && known.insert($0).inserted }
+        var candidates = appSnapshots.map(\.identity)
+        for pinned in settings.pinnedAppIDs where !candidates.contains(pinned) { candidates.append(pinned) }
+        for id in candidates where id.isPersistable && known.insert(id).inserted { order.append(id) }
+        settings.appDisplayOrder = order
+    }
+
+    private func rebuildDisplayRows() {
+        let snapshotsByID = Dictionary(appSnapshots.map { ($0.identity, $0) }, uniquingKeysWith: Self.mergedSnapshot)
+        var orderIndex: [AudioAppIdentity: Int] = [:]
+        for (index, identity) in settings.appDisplayOrder.enumerated() where orderIndex[identity] == nil {
+            orderIndex[identity] = index
+        }
+        var identities = Set(appSnapshots.map(\.identity))
+        identities.formUnion(settings.pinnedAppIDs)
+        displayRows = identities.compactMap { identity -> DisplayableAppRow? in
+            guard !settings.ignoredAppIDs.contains(identity),
+                  let appSettings = settings.appSettings[identity] else { return nil }
+            let snapshot = snapshotsByID[identity]
+            let active = snapshot?.isActive ?? false
+            let pinned = settings.pinnedAppIDs.contains(identity)
+            guard settings.customization.showInactiveApps || active || pinned else { return nil }
+            return DisplayableAppRow(
+                identity: identity,
+                displayName: snapshot?.displayName ?? appSettings.displayName,
+                isActive: active,
+                isPinned: pinned,
+                level: snapshot?.level ?? 0,
+                settings: appSettings
+            )
+        }.sorted { lhs, rhs in
+            let lhsOrder = orderIndex[lhs.identity] ?? Int.max
+            let rhsOrder = orderIndex[rhs.identity] ?? Int.max
+            if lhsOrder != rhsOrder { return lhsOrder < rhsOrder }
+            if lhs.isPinned != rhs.isPinned { return lhs.isPinned && !rhs.isPinned }
+            if lhs.isActive != rhs.isActive { return lhs.isActive && !rhs.isActive }
+            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
+    }
+
+    private static func deduplicatedSnapshots(_ snapshots: [AudioAppSnapshot]) -> [AudioAppSnapshot] {
+        var indices: [AudioAppIdentity: Int] = [:]
+        var result: [AudioAppSnapshot] = []
+        for snapshot in snapshots where snapshot.identity.isPersistable {
+            if let index = indices[snapshot.identity] { result[index] = mergedSnapshot(result[index], snapshot) }
+            else { indices[snapshot.identity] = result.count; result.append(snapshot) }
+        }
+        return result
+    }
+
+    private static func mergedSnapshot(_ first: AudioAppSnapshot, _ second: AudioAppSnapshot) -> AudioAppSnapshot {
+        AudioAppSnapshot(
+            identity: first.identity,
+            displayName: first.displayName.isEmpty ? second.displayName : first.displayName,
+            bundleIdentifier: first.bundleIdentifier ?? second.bundleIdentifier,
+            isActive: first.isActive || second.isActive,
+            level: max(first.level, second.level)
+        )
+    }
+
+    private static func backendCommand(
+        for identity: AudioAppIdentity,
+        settings: AppAudioSettings,
+        issuePrefix: String
+    ) -> AudioBackendCommand {
+        switch issuePrefix {
+        case "volume": .setVolume(identity, settings.volume)
+        case "mute": .setMuted(identity, settings.isMuted)
+        case "boost": .setBoost(identity, settings.boost)
+        case "eq": .setEQ(identity, settings.eq)
+        case "route": .setRoute(identity, settings.route.normalized)
+        default: .setVolume(identity, settings.volume)
+        }
+    }
+
+    // MARK: - Coordination helpers and issues
+
+    private func withMutationGate<Value>(_ operation: () async throws -> Value) async rethrows -> Value {
+        await mutationGate.acquire()
+        do {
+            let value = try await operation()
+            await mutationGate.release()
+            return value
+        } catch {
+            await mutationGate.release()
+            throw error
+        }
+    }
+
+    private func launchIntent(_ operation: @escaping @MainActor (AudioControlStore) async -> Void) {
+        guard completedShutdownReport == nil else { return }
+        let id = UUID()
+        intentTasks[id] = Task { [weak self] in
+            guard let self else { return }
+            await operation(self)
+            intentTasks[id] = nil
+        }
+    }
+
+    func waitForPendingOperations() async {
+        while true {
+            let tasks = Array(intentTasks.values)
+            if tasks.isEmpty { return }
+            for task in tasks { await task.value }
+        }
+    }
+
+    func persistenceDiagnostics() async -> SettingsPersistenceDiagnostics {
+        await persistence.diagnostics()
+    }
+
+    private func reportMutationFailure(
+        _ error: Error,
+        id: String,
+        domain: AudioIssueDomain,
+        app: AudioAppIdentity? = nil,
+        device: String? = nil
+    ) {
         let message = "Couldn’t apply change: \(error.localizedDescription)"
         operationState = .degraded(message)
-        reportIssue(id: id, message: message, severity: .error, app: app, recovery: .retry)
+        reportIssue(
+            id: id,
+            domain: domain,
+            message: message,
+            severity: .error,
+            app: app,
+            device: device,
+            recovery: .retry
+        )
+    }
+
+    private func reportPersistenceFailure(
+        _ error: Error,
+        id: String,
+        app: AudioAppIdentity? = nil
+    ) {
+        let message = "Couldn’t save settings: \(error.localizedDescription)"
+        operationState = .degraded(message)
+        reportIssue(
+            id: id,
+            domain: .persistence,
+            message: message,
+            severity: .error,
+            app: app,
+            recovery: .retry
+        )
     }
 
     private func reportIssue(
         id: String,
+        domain: AudioIssueDomain,
         message: String,
         severity: AudioIssueSeverity = .warning,
         app: AudioAppIdentity? = nil,
+        device: String? = nil,
         recovery: AudioRecoveryAction? = nil
     ) {
         issues.removeAll { $0.id == id }
-        issues.append(AudioIssue(id: id, severity: severity, affectedApp: app, affectedDeviceID: nil, message: message, recovery: recovery))
+        issues.append(AudioIssue(
+            id: id,
+            domain: domain,
+            severity: severity,
+            affectedApp: app,
+            affectedDeviceID: device,
+            message: message,
+            recovery: recovery
+        ))
     }
 
-    func dismissIssue(id: String) {
-        issues.removeAll { $0.id == id }
+    func dismissIssue(id: String) { issues.removeAll { $0.id == id } }
+
+    func reportWidgetIPCConfigurationError(_ message: String?) {
+        let id = "widget-ipc-configuration"
+        guard let message else { dismissIssue(id: id); return }
+        reportIssue(id: id, domain: .widget, message: message, severity: .error)
+    }
+
+    func reportExternalControlIssue(
+        id: String,
+        message: String?,
+        severity: AudioIssueSeverity = .error,
+        recovery: AudioRecoveryAction? = .retryExternalControls
+    ) {
+        guard let message else {
+            dismissIssue(id: id)
+            return
+        }
+        reportIssue(
+            id: id,
+            domain: .externalControl,
+            message: message,
+            severity: severity,
+            recovery: recovery
+        )
     }
 }

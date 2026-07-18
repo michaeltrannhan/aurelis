@@ -2,6 +2,10 @@ import CoreAudio
 import Foundation
 
 enum CoreAudioAggregateDeviceBuilder {
+    static func aggregateUID(tapUUID: UUID) -> String {
+        "\(CoreAudioOrphanedAggregateCleanup.aggregateUIDPrefix)\(tapUUID.uuidString)"
+    }
+
     static func singleOutputDescription(
         outputDeviceUID: String,
         tapUUID: UUID,
@@ -30,7 +34,7 @@ enum CoreAudioAggregateDeviceBuilder {
 
         return [
             kAudioAggregateDeviceNameKey: "EQMacRep-\(appName)",
-            kAudioAggregateDeviceUIDKey: "EQMacRep-\(tapUUID.uuidString)",
+            kAudioAggregateDeviceUIDKey: aggregateUID(tapUUID: tapUUID),
             kAudioAggregateDeviceMainSubDeviceKey: clockDeviceUID,
             kAudioAggregateDeviceClockDeviceKey: clockDeviceUID,
             kAudioAggregateDeviceIsPrivateKey: true,
@@ -45,7 +49,10 @@ enum CoreAudioAggregateDeviceBuilder {
             kAudioAggregateDeviceTapListKey: [
                 [
                     kAudioSubTapUIDKey: tapUUID.uuidString,
-                    kAudioSubTapDriftCompensationKey: false
+                    // The physical output is the aggregate clock. A process
+                    // tap can advertise a different source rate, so HAL must
+                    // clock-align the subtap before its frames reach IOProc.
+                    kAudioSubTapDriftCompensationKey: true
                 ]
             ]
         ]

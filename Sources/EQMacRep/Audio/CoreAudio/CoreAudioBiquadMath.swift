@@ -2,6 +2,10 @@ import Foundation
 
 enum CoreAudioBiquadMath {
     static let graphicEQQ: Double = 1.4
+    private static let maximumAbsoluteGainDB = 60.0
+    private static let minimumQ = 0.05
+    private static let maximumQ = 100.0
+    private static let coefficientMagnitudeLimit = 64.0
     static let frequencies: [Double] = [
         31.25, 62.5, 125, 250, 500, 1000, 2000, 4000, 8000, 16000
     ]
@@ -18,8 +22,10 @@ enum CoreAudioBiquadMath {
               q.isFinite,
               sampleRate.isFinite,
               frequency > 0,
-              q > 0,
-              sampleRate > 0,
+              abs(gainDB) <= maximumAbsoluteGainDB,
+              (minimumQ...maximumQ).contains(q),
+              (CoreAudioPCMFormat.minimumSampleRate...CoreAudioPCMFormat.maximumSampleRate)
+                .contains(sampleRate),
               frequency < sampleRate / 2 else {
             return unityCoefficients
         }
@@ -37,10 +43,26 @@ enum CoreAudioBiquadMath {
         let a1 = -2 * cosine
         let a2 = 1 - alpha / amplitude
 
-        return [b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0]
+        guard amplitude.isFinite,
+              a0.isFinite,
+              abs(a0) > Double.leastNormalMagnitude else {
+            return unityCoefficients
+        }
+        let coefficients = [b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0]
+        guard coefficients.allSatisfy({
+            $0.isFinite && abs($0) <= coefficientMagnitudeLimit
+        }) else {
+            return unityCoefficients
+        }
+        return coefficients
     }
 
     static func coefficientsForEQCurve(_ curve: EQCurve, sampleRate: Double) -> [Double] {
+        guard sampleRate.isFinite,
+              (CoreAudioPCMFormat.minimumSampleRate...CoreAudioPCMFormat.maximumSampleRate)
+                .contains(sampleRate) else {
+            return unityCoefficientsForSections(EQCurve.bandCount)
+        }
         let normalized = EQCurve.normalized(curve.gains, range: curve.range)
         return frequencies.enumerated().flatMap { index, frequency in
             peakingEQCoefficients(

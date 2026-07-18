@@ -25,16 +25,29 @@ enum AudioIssueSeverity: String, Equatable {
     case error
 }
 
+enum AudioIssueDomain: String, Equatable, Sendable {
+    case backend
+    case tap
+    case permission
+    case persistence
+    case widget
+    case externalControl
+}
+
 enum AudioRecoveryAction: Equatable {
     case retry
+    case retryExternalControls
     case requestAudioPermission
     case openAudioPrivacySettings
+    case requestAccessibilityPermission
+    case openAccessibilitySettings
     case followDefaultOutput(AudioAppIdentity)
     case ignoreApp(AudioAppIdentity)
 }
 
 struct AudioIssue: Identifiable, Equatable {
     let id: String
+    let domain: AudioIssueDomain
     let severity: AudioIssueSeverity
     let affectedApp: AudioAppIdentity?
     let affectedDeviceID: String?

@@ -50,4 +50,14 @@ final class CoreAudioRealtimeGainTests: XCTestCase {
         XCTAssertLessThanOrEqual(abs(output[2]), 1.0)
         XCTAssertLessThanOrEqual(abs(output[3]), 1.0)
     }
+
+    func testInvalidRampInputsAreSanitizedAndTinyOutputsAreFlushed() {
+        XCTAssertEqual(CoreAudioGainRamp.coefficient(sampleRate: .nan), 1)
+        XCTAssertEqual(CoreAudioGainRamp.coefficient(sampleRate: 48_000, rampMilliseconds: .infinity), 1)
+
+        var ramp = CoreAudioGainRamp(currentGain: .nan, coefficient: .nan)
+        XCTAssertEqual(ramp.next(targetGain: .nan), 1)
+        XCTAssertEqual(CoreAudioSoftLimiter.apply(.nan), 0)
+        XCTAssertEqual(CoreAudioSoftLimiter.apply(1.0e-30), 0)
+    }
 }

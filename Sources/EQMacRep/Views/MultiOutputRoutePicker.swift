@@ -1,5 +1,10 @@
 import SwiftUI
 
+enum RoutePriorityMove: Equatable, Sendable {
+    case up
+    case down
+}
+
 /// Pure draft state used by ``MultiOutputRoutePicker``. Route changes stay here
 /// until the user applies them, so checking several devices causes one Core Audio
 /// rebuild instead of one rebuild per click.
@@ -44,6 +49,17 @@ struct MultiOutputRoutePickerModel: Equatable {
             selectedIDs.append(deviceID)
         }
         draftRoute = DeviceRoute.multiOutput(selectedIDs).normalized
+    }
+
+    @discardableResult
+    mutating func moveMultiOutputDevice(_ deviceID: String, _ move: RoutePriorityMove) -> Bool {
+        var selectedIDs = multiOutputDeviceIDs
+        guard let index = selectedIDs.firstIndex(of: deviceID) else { return false }
+        let destination = move == .up ? index - 1 : index + 1
+        guard selectedIDs.indices.contains(destination) else { return false }
+        selectedIDs.swapAt(index, destination)
+        draftRoute = .multiOutput(selectedIDs)
+        return true
     }
 
     func multiOutputSelectionIndex(for deviceID: String) -> Int? {
@@ -128,15 +144,17 @@ struct MultiOutputRouteSummary: Equatable {
 struct MultiOutputRoutePicker: View {
     let route: DeviceRoute
     let devices: [AudioDeviceSnapshot]
-    let onApply: (DeviceRoute) -> Void
+    let onApply: @MainActor (DeviceRoute) async throws -> Void
     let onDismiss: () -> Void
 
     @State private var model: MultiOutputRoutePickerModel
+    @State private var isApplying = false
+    @State private var applyErrorMessage: String?
 
     init(
         route: DeviceRoute,
         devices: [AudioDeviceSnapshot],
-        onApply: @escaping (DeviceRoute) -> Void,
+        onApply: @escaping @MainActor (DeviceRoute) async throws -> Void,
         onDismiss: @escaping () -> Void
     ) {
         self.route = route
@@ -148,10 +166,6 @@ struct MultiOutputRoutePicker: View {
 
     private var availableDevices: [AudioDeviceSnapshot] {
         MultiOutputRoutePickerModel.uniqueDevices(devices)
-    }
-
-    private var missingDeviceIDs: [String] {
-        model.missingMultiOutputDeviceIDs(devices: availableDevices)
     }
 
     private var missingSingleDeviceID: String? {
@@ -187,6 +201,7 @@ struct MultiOutputRoutePicker: View {
                         subtitle: availableDevices.first(where: \.isDefault)?.name ?? "System Output",
                         isSelected: model.draftRoute == .followDefault
                     ) {
+                        applyErrorMessage = nil
                         model.selectFollowDefault()
                     }
 
@@ -197,6 +212,7 @@ struct MultiOutputRoutePicker: View {
                             subtitle: device.isDefault ? "System default" : nil,
                             isSelected: model.draftRoute == .selectedDevice(device.id)
                         ) {
+                            applyErrorMessage = nil
                             model.selectSingleDevice(device.id)
                         }
                     }
@@ -206,6 +222,7 @@ struct MultiOutputRoutePicker: View {
                             subtitle: missingSingleDeviceID,
                             isSelected: true
                         ) {
+                            applyErrorMessage = nil
                             model.selectSingleDevice(missingSingleDeviceID)
                         }
                     }
@@ -219,36 +236,38 @@ struct MultiOutputRoutePicker: View {
                         if model.selectedDeviceCount > 0 {
                             countBadge(model.selectedDeviceCount)
                         }
-                        if !missingDeviceIDs.isEmpty {
-                            missingBadge(missingDeviceIDs.count)
+                        if summary.missingCount > 0 {
+                            missingBadge(summary.missingCount)
                         }
                     }
 
-                    Text("Select outputs in clock priority order. Changes apply together.")
+                    Text("Selected outputs are tried in the priority order below. Changes apply together.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    ForEach(availableDevices) { device in
+                    if model.multiOutputDeviceIDs.isEmpty {
+                        Text("No multi-output devices selected")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 4)
+                    } else {
+                        ForEach(Array(model.multiOutputDeviceIDs.enumerated()), id: \.element) { index, deviceID in
+                            priorityChoice(deviceID: deviceID, index: index)
+                        }
+                    }
+
+                    sectionLabel("Available Outputs")
+                    ForEach(availableDevices.filter { model.multiOutputSelectionIndex(for: $0.id) == nil }) { device in
                         multiOutputChoice(
                             title: device.name,
                             subtitle: device.isDefault ? "System default" : nil,
-                            deviceID: device.id,
-                            isMissing: false
+                            deviceID: device.id
                         )
                     }
 
-                    ForEach(missingDeviceIDs, id: \.self) { deviceID in
-                        multiOutputChoice(
-                            title: "Missing Device",
-                            subtitle: deviceID,
-                            deviceID: deviceID,
-                            isMissing: true
-                        )
-                    }
-
-                    if availableDevices.isEmpty && missingDeviceIDs.isEmpty {
-                        Text("No output devices available")
+                    if availableDevices.allSatisfy({ model.multiOutputSelectionIndex(for: $0.id) != nil }) {
+                        Text(availableDevices.isEmpty ? "No output devices available" : "All available outputs are selected")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .padding(.vertical, 6)
@@ -269,15 +288,19 @@ struct MultiOutputRoutePicker: View {
                             .font(.caption2)
                             .foregroundStyle(.orange)
                     }
+                    if let applyErrorMessage {
+                        Text(applyErrorMessage)
+                            .font(.caption2)
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 Button(model.hasChanges ? "Apply" : "Done") {
-                    if model.hasChanges {
-                        onApply(model.draftRoute.normalized)
-                    }
-                    onDismiss()
+                    applyOrDismiss()
                 }
+                .disabled(isApplying)
                 .keyboardShortcut(.defaultAction)
                 .help(model.hasChanges ? "Apply this output route" : "Close output picker")
             }
@@ -285,10 +308,36 @@ struct MultiOutputRoutePicker: View {
         .padding(12)
         .frame(width: 300)
         .onChange(of: route) { _, newRoute in
+            // The store publishes the desired route optimistically while its
+            // engine/persistence transaction runs. Ignore that transient value
+            // so a later rejection keeps the user's draft intact for retry.
+            guard !isApplying else { return }
             model = MultiOutputRoutePickerModel(route: newRoute)
+            applyErrorMessage = nil
         }
+        .disabled(isApplying)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Output route picker")
+    }
+
+    private func applyOrDismiss() {
+        guard model.hasChanges else {
+            onDismiss()
+            return
+        }
+        guard !isApplying else { return }
+        isApplying = true
+        applyErrorMessage = nil
+        let desiredRoute = model.draftRoute.normalized
+        Task { @MainActor in
+            do {
+                try await onApply(desiredRoute)
+                onDismiss()
+            } catch {
+                applyErrorMessage = "Couldn’t apply route: \(error.localizedDescription)"
+                isApplying = false
+            }
+        }
     }
 
     private func routeChoice(
@@ -320,36 +369,19 @@ struct MultiOutputRoutePicker: View {
     private func multiOutputChoice(
         title: String,
         subtitle: String?,
-        deviceID: String,
-        isMissing: Bool
+        deviceID: String
     ) -> some View {
-        let selectionIndex = model.multiOutputSelectionIndex(for: deviceID)
-        let isSelected = selectionIndex != nil
-
         return Button {
+            applyErrorMessage = nil
             model.toggleMultiOutputDevice(deviceID)
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
-                    .foregroundStyle(isMissing ? Color.orange : (isSelected ? Color.accentColor : Color.secondary))
+                Image(systemName: "plus.square")
+                    .foregroundStyle(Color.secondary)
                     .frame(width: 16)
                     .accessibilityHidden(true)
                 routeText(title: title, subtitle: subtitle)
                 Spacer(minLength: 4)
-                if isMissing {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                        .accessibilityHidden(true)
-                }
-                if let selectionIndex {
-                    Text("\(selectionIndex + 1)")
-                        .font(.caption2.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(minWidth: 16, minHeight: 16)
-                        .background(Color.secondary.opacity(0.12), in: Circle())
-                        .accessibilityHidden(true)
-                }
             }
             .contentShape(Rectangle())
             .padding(.horizontal, 5)
@@ -357,11 +389,58 @@ struct MultiOutputRoutePicker: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
-        .accessibilityValue(multiOutputAccessibilityValue(
-            selectionIndex: selectionIndex,
-            isMissing: isMissing
-        ))
-        .help(isMissing ? "Remove this unavailable output from the route" : "Add or remove this output")
+        .accessibilityValue("Not selected")
+        .help("Add this output")
+    }
+
+    private func priorityChoice(deviceID: String, index: Int) -> some View {
+        let device = availableDevices.first { $0.id == deviceID }
+        let isMissing = device == nil
+        let title = device?.name ?? "Missing Device"
+        let subtitle = isMissing ? deviceID : (device?.isDefault == true ? "System default" : nil)
+
+        return HStack(spacing: 6) {
+            Text("\(index + 1)")
+                .font(.caption2.monospacedDigit().weight(.semibold))
+                .frame(width: 18, height: 18)
+                .background(Color.secondary.opacity(0.12), in: Circle())
+            routeText(title: title, subtitle: subtitle)
+            Spacer(minLength: 4)
+            Button {
+                applyErrorMessage = nil
+                model.moveMultiOutputDevice(deviceID, .up)
+            } label: {
+                Image(systemName: "chevron.up")
+            }
+            .buttonStyle(.borderless)
+            .disabled(index == 0)
+            .help("Move earlier")
+            .accessibilityLabel("Move \(title) earlier")
+            Button {
+                applyErrorMessage = nil
+                model.moveMultiOutputDevice(deviceID, .down)
+            } label: {
+                Image(systemName: "chevron.down")
+            }
+            .buttonStyle(.borderless)
+            .disabled(index == model.multiOutputDeviceIDs.count - 1)
+            .help("Move later")
+            .accessibilityLabel("Move \(title) later")
+            Button {
+                applyErrorMessage = nil
+                model.toggleMultiOutputDevice(deviceID)
+            } label: {
+                Image(systemName: "minus.circle")
+                    .foregroundStyle(isMissing ? Color.orange : Color.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help("Remove output")
+            .accessibilityLabel("Remove \(title)")
+        }
+        .padding(.horizontal, 5)
+        .padding(.vertical, 3)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Priority \(index + 1), \(title)\(isMissing ? ", missing" : "")")
     }
 
     private func routeText(title: String, subtitle: String?) -> some View {
@@ -405,12 +484,4 @@ struct MultiOutputRoutePicker: View {
             .background(Color.orange.opacity(0.10), in: Capsule())
     }
 
-    private func multiOutputAccessibilityValue(
-        selectionIndex: Int?,
-        isMissing: Bool
-    ) -> String {
-        var parts = [selectionIndex.map { "Selected, priority \($0 + 1)" } ?? "Not selected"]
-        if isMissing { parts.append("Missing") }
-        return parts.joined(separator: ", ")
-    }
 }

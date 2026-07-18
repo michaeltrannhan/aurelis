@@ -45,6 +45,26 @@ final class MultiOutputRoutePickerTests: XCTestCase {
         XCTAssertTrue(model.hasChanges)
     }
 
+    func testSelectedOutputsCanBeReorderedWithoutRemoveAndReadd() {
+        var model = MultiOutputRoutePickerModel(route: .multiOutput(["usb", "built-in", "hdmi"]))
+
+        XCTAssertTrue(model.moveMultiOutputDevice("built-in", .up))
+        XCTAssertEqual(model.multiOutputDeviceIDs, ["built-in", "usb", "hdmi"])
+        XCTAssertTrue(model.moveMultiOutputDevice("usb", .down))
+        XCTAssertEqual(model.multiOutputDeviceIDs, ["built-in", "hdmi", "usb"])
+        XCTAssertTrue(model.hasChanges)
+    }
+
+    func testPriorityMoveRejectsBoundsAndUnknownDevices() {
+        var model = MultiOutputRoutePickerModel(route: .multiOutput(["usb", "hdmi"]))
+
+        XCTAssertFalse(model.moveMultiOutputDevice("usb", .up))
+        XCTAssertFalse(model.moveMultiOutputDevice("hdmi", .down))
+        XCTAssertFalse(model.moveMultiOutputDevice("missing", .up))
+        XCTAssertEqual(model.multiOutputDeviceIDs, ["usb", "hdmi"])
+        XCTAssertFalse(model.hasChanges)
+    }
+
     func testFollowDefaultAndSingleDeviceChoicesAreAlsoStaged() {
         var model = MultiOutputRoutePickerModel(route: .multiOutput(["usb", "hdmi"]))
 

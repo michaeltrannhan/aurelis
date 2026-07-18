@@ -14,7 +14,9 @@ struct CoreAudioRealtimeGainState: Equatable {
     }
 
     var targetGain: Float {
-        isMuted ? 0 : volume * Float(boost.rawValue)
+        guard !isMuted else { return 0 }
+        let gain = volume * Float(boost.rawValue)
+        return gain.isFinite ? max(gain, 0) : 1
     }
 }
 
@@ -23,13 +25,24 @@ struct CoreAudioGainRamp {
     var coefficient: Float
 
     mutating func next(targetGain: Float) -> Float {
-        currentGain += (targetGain - currentGain) * coefficient
+        let target = targetGain.isFinite ? max(targetGain, 0) : 1
+        if !currentGain.isFinite { currentGain = target }
+        let coefficient = coefficient.isFinite ? min(max(coefficient, 0), 1) : 1
+        currentGain += (target - currentGain) * coefficient
+        if abs(target - currentGain) < 1.0e-7 { currentGain = target }
         return currentGain
     }
 
     static func coefficient(sampleRate: Double, rampMilliseconds: Double = 30) -> Float {
-        let rampSeconds = max(rampMilliseconds, 1) / 1000
-        return Float(1 - exp(-1 / (sampleRate * rampSeconds)))
+        guard sampleRate.isFinite,
+              (CoreAudioPCMFormat.minimumSampleRate...CoreAudioPCMFormat.maximumSampleRate)
+                .contains(sampleRate),
+              rampMilliseconds.isFinite,
+              rampMilliseconds > 0 else { return 1 }
+        let rampSeconds = min(max(rampMilliseconds, 1), 5_000) / 1_000
+        let coefficient = 1 - exp(-1 / (sampleRate * rampSeconds))
+        guard coefficient.isFinite else { return 1 }
+        return Float(min(max(coefficient, 0), 1))
     }
 }
 
@@ -40,6 +53,7 @@ enum CoreAudioSoftLimiter {
     static func apply(_ sample: Float) -> Float {
         guard sample.isFinite else { return 0 }
         let absolute = abs(sample)
+        guard absolute >= 1.0e-20 else { return 0 }
         guard absolute > threshold else { return sample }
         let headroom = ceiling - threshold
         let overshoot = absolute - threshold
@@ -57,6 +71,7 @@ enum CoreAudioRealtimeGainProcessor {
         ramp: inout CoreAudioGainRamp
     ) {
         guard sampleCount > 0 else { return }
+        let targetGain = targetGain.isFinite ? max(targetGain, 0) : 1
 
         for index in 0..<sampleCount {
             let gain = ramp.next(targetGain: targetGain)

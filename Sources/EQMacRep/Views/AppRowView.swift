@@ -21,7 +21,7 @@ struct AppRowView: View {
     let onPin: (Bool) -> Void
     let onIgnore: () -> Void
     var devices: [AudioDeviceSnapshot] = []
-    var onRoute: (DeviceRoute) -> Void = { _ in }
+    var onRoute: @MainActor (DeviceRoute) async throws -> Void = { _ in }
     var volumeStep: Double = 0.05
     var layout: Layout = .desktop
 
@@ -84,8 +84,12 @@ struct AppRowView: View {
 
             Slider(value: Binding(get: { row.settings.volume }, set: { onVolume($0) }), in: 0...1, onEditingChanged: onVolumeEditingChanged)
                 .frame(width: 190)
-                .scrollWheelStep(step: volumeStep) { deltaY in
-                    onVolume(ScrollWheelStepModel.nextValue(current: row.settings.volume, deltaY: deltaY, step: volumeStep))
+                .scrollWheelSteps(onEditingChanged: onVolumeEditingChanged) { logicalSteps in
+                    onVolume(ScrollWheelStepModel.nextValue(
+                        current: row.settings.volume,
+                        logicalSteps: logicalSteps,
+                        step: volumeStep
+                    ))
                 }
             Text("\(Int((row.settings.volume * 100).rounded()))%")
                 .font(.callout.monospacedDigit().weight(.medium))
@@ -329,8 +333,12 @@ struct AppRowView: View {
                     set: { onVolume($0) }
                 ), in: 0...1, onEditingChanged: onVolumeEditingChanged)
                 .controlSize(.mini)
-                .scrollWheelStep(step: volumeStep) { deltaY in
-                    onVolume(ScrollWheelStepModel.nextValue(current: row.settings.volume, deltaY: deltaY, step: volumeStep))
+                .scrollWheelSteps(onEditingChanged: onVolumeEditingChanged) { logicalSteps in
+                    onVolume(ScrollWheelStepModel.nextValue(
+                        current: row.settings.volume,
+                        logicalSteps: logicalSteps,
+                        step: volumeStep
+                    ))
                 }
                 .accessibilityLabel("Volume for \(row.displayName)")
 
@@ -359,9 +367,9 @@ struct AppRowView: View {
             }
             if !devices.isEmpty {
                 Menu("Output") {
-                    Button("Follow Default") { onRoute(.followDefault) }
+                    Button("Follow Default") { Task { try? await onRoute(.followDefault) } }
                     ForEach(devices) { device in
-                        Button(device.name) { onRoute(.selectedDevice(device.id)) }
+                        Button(device.name) { Task { try? await onRoute(.selectedDevice(device.id)) } }
                     }
                 }
             }
@@ -372,22 +380,145 @@ struct AppRowView: View {
     }
 }
 
+/// Binds the presentation-only row to the main-actor store with small,
+/// explicitly typed actions. Keeping this adapter out of the parent list
+/// prevents SwiftUI's result-builder type checker from having to infer a
+/// dozen nested mutation closures for every row.
+struct ConnectedAppRowView: View {
+    @ObservedObject var store: AudioControlStore
+    let row: DisplayableAppRow
+    let rowHeight: Double
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let layout: AppRowView.Layout
+
+    var body: some View {
+        AppRowView(
+            row: row,
+            rowHeight: rowHeight,
+            isSelected: isSelected,
+            onSelect: onSelect,
+            onVolume: setVolume,
+            onVolumeEditingChanged: setVolumeEditing,
+            onMute: setMuted,
+            onBoost: setBoost,
+            onPin: setPinned,
+            onIgnore: ignore,
+            devices: store.devices,
+            onRoute: setRoute,
+            volumeStep: store.settings.customization.volumeStep.fraction,
+            layout: layout
+        )
+    }
+
+    private func setVolume(_ volume: Double) {
+        store.setVolumeIntent(volume, for: row.identity)
+    }
+
+    private func setVolumeEditing(_ editing: Bool) {
+        if editing {
+            store.beginVolumeEditing(for: row.identity)
+        } else {
+            store.endVolumeEditing(for: row.identity)
+        }
+    }
+
+    private func setMuted(_ muted: Bool) {
+        store.setMutedIntent(muted, for: row.identity)
+    }
+
+    private func setBoost(_ boost: BoostLevel) {
+        store.setBoostIntent(boost, for: row.identity)
+    }
+
+    private func setPinned(_ pinned: Bool) {
+        store.pinIntent(pinned, identity: row.identity)
+    }
+
+    private func ignore() {
+        store.ignoreIntent(row.identity)
+    }
+
+    private func setRoute(_ route: DeviceRoute) async throws {
+        try await store.setRoute(route, for: row.identity)
+    }
+}
+
 /// Rows update frequently as live levels arrive, so avoid asking Launch Services
 /// to resolve and load the same icon on every SwiftUI body evaluation.
 @MainActor
 private enum AppIconProvider {
-    private static let cache = NSCache<NSString, NSImage>()
+    private static let cache = AppIconCache()
 
     static func icon(forBundleID bundleID: String) -> NSImage? {
-        if let cached = cache.object(forKey: bundleID as NSString) {
-            return cached
+        cache.icon(forBundleID: bundleID)
+    }
+}
+
+/// Caches both successful Launch Services lookups and misses. Live level
+/// updates can reevaluate a row many times per second; a missing bundle must not
+/// repeat synchronous workspace resolution on every evaluation.
+@MainActor
+final class AppIconCache {
+    typealias Resolver = @MainActor (String) -> NSImage?
+
+    private enum Entry {
+        case image(NSImage)
+        case missing
+    }
+
+    private let capacity: Int
+    private var entries: [String: Entry] = [:]
+    private var leastRecentlyUsedBundleIDs: [String] = []
+    private let resolver: Resolver
+
+    init(
+        capacity: Int = 256,
+        resolver: @escaping Resolver = AppIconCache.resolveWorkspaceIcon
+    ) {
+        self.capacity = max(capacity, 1)
+        self.resolver = resolver
+    }
+
+    func icon(forBundleID bundleID: String) -> NSImage? {
+        guard !bundleID.isEmpty else { return nil }
+        if let cached = entries[bundleID] {
+            markRecentlyUsed(bundleID)
+            switch cached {
+            case let .image(image): return image
+            case .missing: return nil
+            }
         }
+
+        let icon = resolver(bundleID)
+        insert(icon.map(Entry.image) ?? .missing, for: bundleID)
+        return icon
+    }
+
+    func invalidate(bundleID: String) {
+        entries.removeValue(forKey: bundleID)
+        leastRecentlyUsedBundleIDs.removeAll { $0 == bundleID }
+    }
+
+    private func insert(_ entry: Entry, for bundleID: String) {
+        if entries.count == capacity, let evicted = leastRecentlyUsedBundleIDs.first {
+            entries.removeValue(forKey: evicted)
+            leastRecentlyUsedBundleIDs.removeFirst()
+        }
+        entries[bundleID] = entry
+        leastRecentlyUsedBundleIDs.append(bundleID)
+    }
+
+    private func markRecentlyUsed(_ bundleID: String) {
+        leastRecentlyUsedBundleIDs.removeAll { $0 == bundleID }
+        leastRecentlyUsedBundleIDs.append(bundleID)
+    }
+
+    private static func resolveWorkspaceIcon(_ bundleID: String) -> NSImage? {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
             return nil
         }
-        let icon = NSWorkspace.shared.icon(forFile: url.path)
-        cache.setObject(icon, forKey: bundleID as NSString)
-        return icon
+        return NSWorkspace.shared.icon(forFile: url.path)
     }
 }
 

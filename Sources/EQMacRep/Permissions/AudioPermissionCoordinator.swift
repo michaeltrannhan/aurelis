@@ -36,7 +36,7 @@ final class AudioPermissionCoordinator {
 
     func openAudioPrivacySettings() { client.openPrivacySettings() }
 
-    func relaunchApp() { client.relaunchApp() }
+    func relaunchApp() async throws { try await client.relaunchApp() }
 
     var requirements: [PermissionRequirement] {
         let requirementState: PermissionRequirementState

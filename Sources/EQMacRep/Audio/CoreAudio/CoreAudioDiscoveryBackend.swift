@@ -23,18 +23,19 @@ final class CoreAudioDiscoveryBackend: AudioBackend {
         self.eventSource = eventSource
         self.outputVolumeController = outputVolumeController
         if runStartupRecovery {
-            // Real app path only: install the crash guard and clear any aggregate
-            // devices orphaned by a previous crash. Never runs under unit tests.
+            // Real app path only: the signal guard re-raises without attempting
+            // cleanup; durable ownership is recovered safely in normal context.
             CoreAudioAggregateCrashGuard.install()
             CoreAudioOrphanedAggregateCleanup.destroyOrphans()
         }
     }
 
     func fetchSnapshot() throws -> AudioBackendSnapshot {
-        let targets = try processDiscovery.discoverTapTargets()
+        let targets = Self.coalescedTargets(try processDiscovery.discoverTapTargets())
+        let peakLevels = (tapManager as? CoreAudioTapLevelReporting)?.consumePeakLevels() ?? [:]
         let deviceState = try deviceDiscovery.discoverOutputDeviceState()
         eventSource.refreshDeviceListeners()
-        tapTargetsByIdentity = Dictionary(uniqueKeysWithValues: targets.map { ($0.identity, $0) })
+        tapTargetsByIdentity = Dictionary(targets.map { ($0.identity, $0) }, uniquingKeysWith: Self.mergedTarget)
         if let routeManager = tapManager as? CoreAudioRouteControlling {
             routeManager.setAvailableOutputUIDs(
                 deviceState.devices.map(\.id),
@@ -50,7 +51,7 @@ final class CoreAudioDiscoveryBackend: AudioBackend {
                     displayName: $0.displayName,
                     bundleIdentifier: $0.identity.rawValue.hasPrefix("name:") ? nil : $0.identity.rawValue,
                     isActive: true,
-                    level: 0
+                    level: peakLevels[$0.identity] ?? 0
                 )
             },
             devices: deviceState.devices
@@ -73,7 +74,40 @@ final class CoreAudioDiscoveryBackend: AudioBackend {
     }
 
     func replaceTapTargetsForTesting(_ targets: [CoreAudioTapTarget]) {
-        tapTargetsByIdentity = Dictionary(uniqueKeysWithValues: targets.map { ($0.identity, $0) })
+        tapTargetsByIdentity = Dictionary(
+            Self.coalescedTargets(targets).map { ($0.identity, $0) },
+            uniquingKeysWith: Self.mergedTarget
+        )
+    }
+
+    private static func coalescedTargets(_ targets: [CoreAudioTapTarget]) -> [CoreAudioTapTarget] {
+        var indices: [AudioAppIdentity: Int] = [:]
+        var result: [CoreAudioTapTarget] = []
+        for target in targets where target.identity.isPersistable {
+            if let index = indices[target.identity] {
+                result[index] = mergedTarget(result[index], target)
+            } else {
+                indices[target.identity] = result.count
+                result.append(target)
+            }
+        }
+        return result
+    }
+
+    private static func mergedTarget(_ first: CoreAudioTapTarget, _ second: CoreAudioTapTarget) -> CoreAudioTapTarget {
+        var seen = Set(first.processObjectIDs)
+        let processObjectIDs = first.processObjectIDs + second.processObjectIDs.filter { seen.insert($0).inserted }
+        return CoreAudioTapTarget(
+            identity: first.identity,
+            displayName: first.displayName.isEmpty ? second.displayName : first.displayName,
+            processObjectIDs: processObjectIDs
+        )
+    }
+}
+
+extension CoreAudioDiscoveryBackend: AudioBackendAppLevelProviding {
+    func consumeAppLevels() -> [AudioAppIdentity: Double] {
+        (tapManager as? CoreAudioTapLevelReporting)?.consumePeakLevels() ?? [:]
     }
 }
 

@@ -37,4 +37,15 @@ final class CoreAudioTapFailurePolicyTests: XCTestCase {
             .recoverable("Tap create failed with OSStatus -10863")
         )
     }
+
+    func testFatalFailureRemainsFatalAndOnlyRecoverableDecisionRetries() {
+        XCTAssertEqual(
+            CoreAudioTapFailurePolicy.classify(.fatal("HAL invariant failed")),
+            .fatal("HAL invariant failed")
+        )
+        XCTAssertTrue(CoreAudioTapFailureDecision.recoverable("retry").shouldRetry)
+        XCTAssertFalse(CoreAudioTapFailureDecision.disabled("disabled").shouldRetry)
+        XCTAssertFalse(CoreAudioTapFailureDecision.unsupported("unsupported").shouldRetry)
+        XCTAssertFalse(CoreAudioTapFailureDecision.fatal("fatal").shouldRetry)
+    }
 }

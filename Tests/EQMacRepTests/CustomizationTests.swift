@@ -57,10 +57,15 @@ final class CustomizationTests: XCTestCase {
         )
         XCTAssertEqual(DeviceRoute.multiOutput([]).normalized, .followDefault)
         XCTAssertEqual(DeviceRoute.multiOutput(["", "usb", ""]).normalized, .multiOutput(["usb"]))
+        XCTAssertEqual(
+            DeviceRoute.multiOutput([" usb ", "\n", "usb", " hdmi "]).normalized,
+            .multiOutput(["usb", "hdmi"])
+        )
+        XCTAssertEqual(DeviceRoute.selectedDevice("  ").normalized, .followDefault)
     }
 
     func testSettingsTabsExposeExpectedSections() {
-        XCTAssertEqual(SettingsTab.allCases.map(\.label), ["General", "Audio", "Shortcuts", "Updates", "About"])
+        XCTAssertEqual(SettingsTab.allCases.map(\.label), ["General", "Audio", "Shortcuts", "About"])
         XCTAssertEqual(SettingsTab.general.systemImage, "gearshape")
         XCTAssertEqual(SettingsTab.audio.systemImage, "speaker.wave.2")
     }
@@ -76,7 +81,7 @@ final class CustomizationTests: XCTestCase {
             dimensions: dimensions,
             rowCount: 1,
             includesPermissionBanner: false,
-            includesIssueBanner: false,
+            issueCount: 0,
             includesExpandedEQ: false,
             availableScreenHeight: 700
         )
@@ -84,7 +89,7 @@ final class CustomizationTests: XCTestCase {
             dimensions: dimensions,
             rowCount: 1,
             includesPermissionBanner: false,
-            includesIssueBanner: false,
+            issueCount: 0,
             includesExpandedEQ: true,
             availableScreenHeight: 700
         )
@@ -100,7 +105,7 @@ final class CustomizationTests: XCTestCase {
             dimensions: dimensions,
             rowCount: 10,
             includesPermissionBanner: false,
-            includesIssueBanner: false,
+            issueCount: 0,
             includesExpandedEQ: false,
             availableScreenHeight: 700
         )
@@ -108,7 +113,7 @@ final class CustomizationTests: XCTestCase {
             dimensions: dimensions,
             rowCount: 1,
             includesPermissionBanner: false,
-            includesIssueBanner: false,
+            issueCount: 0,
             includesExpandedEQ: true,
             availableScreenHeight: 420
         )
@@ -120,10 +125,48 @@ final class CustomizationTests: XCTestCase {
         XCTAssertEqual(shortScreenWithEQ, 280)
     }
 
+    func testPopupContentHeightNeverExceedsExtremelyShortScreen() {
+        let height = PopupContentLayoutModel.contentHeight(
+            dimensions: PopupDensity.compact.dimensions,
+            rowCount: 3,
+            includesPermissionBanner: true,
+            issueCount: 2,
+            includesExpandedEQ: true,
+            availableScreenHeight: 100,
+            deviceCount: 2
+        )
+
+        XCTAssertEqual(height, 0)
+        XCTAssertEqual(PopupContentLayoutModel.popupMaxHeight(availableScreenHeight: 100), 60)
+    }
+
     func testScrollWheelStepClampsVolume() {
-        XCTAssertEqual(ScrollWheelStepModel.nextValue(current: 0.5, deltaY: -1, step: 0.05), 0.55, accuracy: 0.0001)
-        XCTAssertEqual(ScrollWheelStepModel.nextValue(current: 1, deltaY: -1, step: 0.05), 1, accuracy: 0.0001)
-        XCTAssertEqual(ScrollWheelStepModel.nextValue(current: 0, deltaY: 1, step: 0.05), 0, accuracy: 0.0001)
+        XCTAssertEqual(ScrollWheelStepModel.nextValue(current: 0.5, logicalSteps: 1, step: 0.05), 0.55, accuracy: 0.0001)
+        XCTAssertEqual(ScrollWheelStepModel.nextValue(current: 1, logicalSteps: 2, step: 0.05), 1, accuracy: 0.0001)
+        XCTAssertEqual(ScrollWheelStepModel.nextValue(current: 0, logicalSteps: -1, step: 0.05), 0, accuracy: 0.0001)
+        XCTAssertEqual(ScrollWheelStepModel.nextValue(current: 0.5, logicalSteps: 0, step: 0.05), 0.5, accuracy: 0.0001)
+    }
+
+    func testPreciseScrollDeltasAccumulateAndIgnoreIrrelevantEvents() {
+        var accumulator = ScrollWheelAccumulator(preciseThreshold: 8)
+
+        XCTAssertEqual(accumulator.consume(deltaX: 0, deltaY: -2, hasPreciseDeltas: true), 0)
+        XCTAssertEqual(accumulator.consume(deltaX: 0, deltaY: -3, hasPreciseDeltas: true), 0)
+        XCTAssertEqual(accumulator.consume(deltaX: 0, deltaY: -3, hasPreciseDeltas: true), 1)
+        XCTAssertEqual(accumulator.accumulatedDeltaY, 0)
+        XCTAssertEqual(accumulator.consume(deltaX: 5, deltaY: 1, hasPreciseDeltas: true), 0)
+        XCTAssertEqual(accumulator.consume(deltaX: 0, deltaY: 0, hasPreciseDeltas: true), 0)
+        XCTAssertEqual(accumulator.consume(deltaX: 0, deltaY: .nan, hasPreciseDeltas: true), 0)
+    }
+
+    func testDiscreteScrollEventsProduceOneLogicalStepAndResetClearsRemainder() {
+        var accumulator = ScrollWheelAccumulator(preciseThreshold: 8)
+
+        XCTAssertEqual(accumulator.consume(deltaX: 0, deltaY: -0.1, hasPreciseDeltas: false), 1)
+        XCTAssertEqual(accumulator.consume(deltaX: 0, deltaY: 2, hasPreciseDeltas: false), -1)
+        _ = accumulator.consume(deltaX: 0, deltaY: -4, hasPreciseDeltas: true)
+        accumulator.reset()
+        XCTAssertEqual(accumulator.accumulatedDeltaY, 0)
     }
 
     func testControlSettingsDefaultToEnabledSafeValues() {
@@ -131,12 +174,93 @@ final class CustomizationTests: XCTestCase {
 
         XCTAssertTrue(customization.mediaKeysEnabled)
         XCTAssertTrue(customization.hotkeysEnabled)
-        XCTAssertEqual(customization.hudStyle, .compact)
         XCTAssertEqual(customization.menuBarIconStyle, .speaker)
     }
 
+    func testOutputControlPresentationUsesExplicitCapabilities() {
+        let unavailable = OutputControlPresentation(capabilities: .unavailable)
+        XCTAssertFalse(unavailable.showsVolume)
+        XCTAssertFalse(unavailable.enablesVolume)
+        XCTAssertFalse(unavailable.showsMute)
+        XCTAssertFalse(unavailable.enablesMute)
+
+        let readOnly = OutputControlPresentation(capabilities: OutputControlCapabilities(
+            canReadVolume: true,
+            canSetVolume: false,
+            canReadMute: true,
+            canSetMute: false
+        ))
+        XCTAssertTrue(readOnly.showsVolume)
+        XCTAssertFalse(readOnly.enablesVolume)
+        XCTAssertTrue(readOnly.showsMute)
+        XCTAssertFalse(readOnly.enablesMute)
+
+        let controllable = OutputControlPresentation(capabilities: .controllable)
+        XCTAssertTrue(controllable.enablesVolume)
+        XCTAssertTrue(controllable.enablesMute)
+    }
+
     func testShortcutActionsHaveDefaultBindings() {
-        XCTAssertEqual(ShortcutAction.allCases.map(\.label), ["Toggle Popup", "Volume Up", "Volume Down", "Mute"])
+        XCTAssertEqual(ShortcutAction.allCases.map(\.label), ["Show Mixer", "Volume Up", "Volume Down", "Mute"])
         XCTAssertEqual(ShortcutAction.targetAppVolumeUp.defaultBinding.keyCode, 126)
+    }
+
+    func testEveryIssueRecoveryActionHasVisibleCopy() {
+        let app = AudioAppIdentity(rawValue: "com.example.Music")
+        let actions: [AudioRecoveryAction] = [
+            .retry,
+            .retryExternalControls,
+            .requestAudioPermission,
+            .openAudioPrivacySettings,
+            .requestAccessibilityPermission,
+            .openAccessibilitySettings,
+            .followDefaultOutput(app),
+            .ignoreApp(app)
+        ]
+
+        XCTAssertEqual(actions.map(AudioIssuePresentationModel.recoveryTitle), [
+            "Retry",
+            "Retry Controls",
+            "Request Access",
+            "Open Settings",
+            "Request Accessibility",
+            "Open Settings",
+            "Use Default Output",
+            "Ignore App"
+        ])
+    }
+
+    func testPermissionCardHidesOnlyItsDuplicateIssue() {
+        let permission = AudioIssue(
+            id: "audio-permission",
+            domain: .permission,
+            severity: .warning,
+            affectedApp: nil,
+            affectedDeviceID: nil,
+            message: "Permission",
+            recovery: .requestAudioPermission
+        )
+        let backend = AudioIssue(
+            id: "backend",
+            domain: .backend,
+            severity: .error,
+            affectedApp: nil,
+            affectedDeviceID: nil,
+            message: "Backend",
+            recovery: .retry
+        )
+        let state = AudioCapturePermissionState(
+            screenCapture: .denied,
+            audioUsageDescription: .present
+        )
+
+        XCTAssertEqual(
+            AudioIssuePresentationModel.visibleIssues(
+                [permission, backend],
+                permissionState: state,
+                hidesAudioPermissionIssue: true
+            ).map(\.id),
+            ["backend"]
+        )
     }
 }

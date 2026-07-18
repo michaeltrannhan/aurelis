@@ -18,7 +18,6 @@ struct MainWindowView: View {
         .frame(minWidth: 820, minHeight: 560)
         .background(Color(nsColor: .windowBackgroundColor))
         .preferredColorScheme(store.settings.customization.appearance.colorScheme)
-        .task { store.refreshIntent() }
     }
 
     private var header: some View {
@@ -56,11 +55,18 @@ struct MainWindowView: View {
                     .padding(.bottom, 8)
             }
 
-            if store.displayRows.isEmpty {
-                ContentUnavailableView("No Apps", systemImage: "speaker.slash", description: Text("Refresh or enable inactive apps in Settings."))
-            } else {
-                mixerRows
+            let visibleIssues = AudioIssuePresentationModel.visibleIssues(
+                store.issues,
+                permissionState: store.permissionState,
+                hidesAudioPermissionIssue: true
+            )
+            if !visibleIssues.isEmpty {
+                AudioIssueListView(store: store, issues: visibleIssues)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 8)
             }
+
+            mixerRows
         }
     }
 
@@ -70,47 +76,61 @@ struct MainWindowView: View {
                 OutputVolumeSection(store: store, layout: .desktop)
                     .padding(.horizontal, 12).padding(.bottom, 6)
                 Divider().padding(.horizontal, 12)
-                sectionHeader
-                ForEach(store.displayRows) { row in
-                    VStack(spacing: 0) {
-                        AppRowView(
-                            row: row,
-                            rowHeight: 54,
-                            isSelected: selectedAppID == row.identity,
-                            onSelect: { select(row.identity) },
-                            onVolume: { store.setVolumeIntent($0, for: row.identity) },
-                            onVolumeEditingChanged: { editing in
-                                editing ? store.beginVolumeEditing(for: row.identity) : store.endVolumeEditing(for: row.identity)
-                            },
-                            onMute: { store.setMutedIntent($0, for: row.identity) },
-                            onBoost: { store.setBoostIntent($0, for: row.identity) },
-                            onPin: { store.pinIntent($0, identity: row.identity) },
-                            onIgnore: { store.ignoreIntent(row.identity) },
-                            devices: store.devices,
-                            onRoute: { store.setRouteIntent($0, for: row.identity) },
-                            volumeStep: store.settings.customization.volumeStep.fraction,
-                            layout: .desktop
-                        )
-                        if selectedAppID == row.identity {
-                            EQPanelView(
-                                row: row,
-                                style: .desktop,
-                                onClose: { closeEQ(row) },
-                                onGain: { band, gain in store.setEQGainIntent(gain, band: band, for: row.identity) },
-                                onGainEditingChanged: { band, editing in
-                                    editing ? store.beginEQEditing(band: band, for: row.identity) : store.endEQEditing(band: band, for: row.identity)
-                                },
-                                onReset: { store.resetEQIntent(for: row.identity) }
-                            )
-                            .padding(.horizontal, 12).padding(.bottom, 10)
-                            .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
-                        }
+                if store.displayRows.isEmpty {
+                    ContentUnavailableView(
+                        "No Apps",
+                        systemImage: "speaker.slash",
+                        description: Text("Refresh or enable inactive apps in Settings.")
+                    )
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 260)
+                } else {
+                    sectionHeader
+                    ForEach(store.displayRows) { row in
+                        desktopRow(row)
                     }
-                    .background(selectedAppID == row.identity ? Color.accentColor.opacity(0.035) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
                 }
             }
             .padding(18)
         }
+    }
+
+    @ViewBuilder
+    private func desktopRow(_ row: DisplayableAppRow) -> some View {
+        VStack(spacing: 0) {
+            ConnectedAppRowView(
+                store: store,
+                row: row,
+                rowHeight: 54,
+                isSelected: selectedAppID == row.identity,
+                onSelect: { select(row.identity) },
+                layout: .desktop
+            )
+            if selectedAppID == row.identity {
+                EQPanelView(
+                    row: row,
+                    style: .desktop,
+                    onClose: { closeEQ(row) },
+                    onGain: { band, gain in
+                        store.setEQGainIntent(gain, band: band, for: row.identity)
+                    },
+                    onGainEditingChanged: { band, editing in
+                        if editing {
+                            store.beginEQEditing(band: band, for: row.identity)
+                        } else {
+                            store.endEQEditing(band: band, for: row.identity)
+                        }
+                    },
+                    onReset: { store.resetEQIntent(for: row.identity) }
+                )
+                .padding(.horizontal, 12).padding(.bottom, 10)
+                .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+            }
+        }
+        .background(
+            selectedAppID == row.identity ? Color.accentColor.opacity(0.035) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 12)
+        )
     }
 
     private var sectionHeader: some View {

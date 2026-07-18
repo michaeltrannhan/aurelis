@@ -9,7 +9,7 @@ final class AudioBackendFactoryTests: XCTestCase {
     }
 
     @MainActor
-    func testPersistedMockModeStillSupportsStoreRefresh() throws {
+    func testPersistedMockModeStillSupportsStoreRefresh() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("EQMacRepFactoryTests-\(UUID().uuidString)", isDirectory: true)
             .appendingPathComponent("settings.json")
@@ -20,7 +20,7 @@ final class AudioBackendFactoryTests: XCTestCase {
         let backend = AudioBackendFactory.makeBackend(mode: try settingsStore.load().customization.backendMode)
         let store = try AudioControlStore(settingsStore: settingsStore, backend: backend)
 
-        try store.refresh()
+        try await store.refresh()
 
         XCTAssertFalse(store.displayRows.isEmpty)
     }

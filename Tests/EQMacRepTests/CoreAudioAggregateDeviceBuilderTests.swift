@@ -3,7 +3,7 @@ import XCTest
 @testable import EQMacRep
 
 final class CoreAudioAggregateDeviceBuilderTests: XCTestCase {
-    func testSingleOutputAggregateDescriptionIncludesOutputAndTap() {
+    func testSingleOutputAggregateDescriptionIncludesOutputAndTap() throws {
         let tapUUID = UUID(uuidString: "00000000-0000-0000-0000-000000000123")!
 
         let description = CoreAudioAggregateDeviceBuilder.singleOutputDescription(
@@ -17,6 +17,13 @@ final class CoreAudioAggregateDeviceBuilderTests: XCTestCase {
         XCTAssertEqual(description[kAudioAggregateDeviceIsPrivateKey] as? Bool, true)
         XCTAssertEqual(description[kAudioAggregateDeviceTapAutoStartKey] as? Bool, true)
         XCTAssertEqual(description[kAudioAggregateDeviceIsStackedKey] as? Bool, false)
+
+        let taps = try XCTUnwrap(
+            description[kAudioAggregateDeviceTapListKey] as? [[String: Any]]
+        )
+        XCTAssertEqual(taps.count, 1)
+        XCTAssertEqual(taps[0][kAudioSubTapUIDKey] as? String, tapUUID.uuidString)
+        XCTAssertEqual(taps[0][kAudioSubTapDriftCompensationKey] as? Bool, true)
     }
 
     func testMultiOutputAggregateIncludesAllSubdevicesWithFirstAsClock() throws {
@@ -43,5 +50,10 @@ final class CoreAudioAggregateDeviceBuilderTests: XCTestCase {
         XCTAssertEqual(subdevices[1][kAudioSubDeviceDriftCompensationKey] as? Bool, true)
         XCTAssertEqual(subdevices[2][kAudioSubDeviceUIDKey] as? String, "airplay")
         XCTAssertEqual(subdevices[2][kAudioSubDeviceDriftCompensationKey] as? Bool, true)
+
+        let taps = try XCTUnwrap(
+            description[kAudioAggregateDeviceTapListKey] as? [[String: Any]]
+        )
+        XCTAssertEqual(taps[0][kAudioSubTapDriftCompensationKey] as? Bool, true)
     }
 }

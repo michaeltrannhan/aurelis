@@ -1,16 +1,83 @@
+import Combine
 import XCTest
 @testable import EQMacRep
 
 @MainActor
 final class AudioControlStoreTests: XCTestCase {
-    func testRefreshCreatesDefaultSettingsForBackendApps() throws {
+    func testCorruptSettingsRecoveryIsPublishedAndOriginalIsQuarantined() async throws {
+        let url = uniqueSettingsURL()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let original = Data("{ truncated".utf8)
+        try original.write(to: url)
+
+        let store = try AudioControlStore(
+            settingsStore: SettingsStore(settingsURL: url),
+            backend: MockAudioBackend()
+        )
+        await store.waitUntilReady()
+
+        let issue = try XCTUnwrap(store.issues.first { $0.id == "settings-recovery" })
+        XCTAssertEqual(issue.severity, .warning)
+        XCTAssertTrue(issue.message.contains("preserved"))
+        if case .degraded = store.operationState {} else { XCTFail("Expected degraded recovery state") }
+        let quarantines = try FileManager.default.contentsOfDirectory(
+            at: url.deletingLastPathComponent(),
+            includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.contains(".corrupt-") }
+        XCTAssertEqual(quarantines.count, 1)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(quarantines.first)), original)
+    }
+
+    func testFutureSettingsVersionIsPublishedAndAllWritesRemainBlocked() async throws {
+        let url = uniqueSettingsURL()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let original = Data("{\"version\":999,\"unknownFutureField\":true}".utf8)
+        try original.write(to: url)
+        let store = try AudioControlStore(
+            settingsStore: SettingsStore(settingsURL: url),
+            backend: MockAudioBackend()
+        )
+        await store.waitUntilReady()
+
+        let issue = try XCTUnwrap(store.issues.first { $0.id == "settings-version" })
+        XCTAssertEqual(issue.severity, .error)
+        XCTAssertTrue(issue.message.contains("left unchanged"))
+        var customization = store.settings.customization
+        customization.appearance = .dark
+        await assertThrows { try await store.applyCustomization(customization) }
+        XCTAssertEqual(try Data(contentsOf: url), original)
+        let siblingNames = try FileManager.default.contentsOfDirectory(atPath: url.deletingLastPathComponent().path)
+        XCTAssertFalse(siblingNames.contains { $0.contains(".corrupt-") })
+    }
+
+    func testRefreshCoalescesDuplicateBackendIdentitiesAndPersistedOrder() async throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let backend = MockAudioBackend(apps: [
+            AudioAppSnapshot(identity: music, displayName: "Music", isActive: false, level: 0.2),
+            AudioAppSnapshot(identity: music, displayName: "Duplicate", isActive: true, level: 0.8)
+        ])
+        let store = try makeStore(backend: backend)
+        await store.waitUntilReady()
+        store.settings.appDisplayOrder = [music, music]
+
+        try await store.refresh()
+
+        XCTAssertEqual(store.appSnapshots.count, 1)
+        XCTAssertEqual(store.displayRows.count, 1)
+        XCTAssertEqual(store.displayRows[0].displayName, "Music")
+        XCTAssertTrue(store.displayRows[0].isActive)
+        XCTAssertEqual(store.displayRows[0].level, 0.8)
+        XCTAssertEqual(store.settings.appDisplayOrder, [music])
+    }
+
+    func testRefreshCreatesDefaultSettingsForBackendApps() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let backend = MockAudioBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music", bundleIdentifier: music.rawValue, level: 0.6)
         ])
         let store = try AudioControlStore(settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()), backend: backend)
 
-        try store.refresh()
+        try await store.refresh()
 
         XCTAssertEqual(store.displayRows.count, 1)
         XCTAssertEqual(store.displayRows[0].displayName, "Music")
@@ -19,51 +86,78 @@ final class AudioControlStoreTests: XCTestCase {
         XCTAssertEqual(store.settings.appSettings[music]?.displayName, "Music")
     }
 
-    func testIgnoredAppsAreHiddenAndPersisted() throws {
+    func testLevelObservationPublishesRealBackendMeterValuesWithoutFullRefresh() async throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let backend = LevelProvidingBackend(apps: [
+            AudioAppSnapshot(identity: music, displayName: "Music")
+        ])
+        let store = try AudioControlStore(
+            settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()),
+            backend: backend,
+            permissionClient: grantedClient()
+        )
+        try await store.refresh()
+        let updated = expectation(description: "meter level published")
+        let cancellable = store.$displayRows.sink { rows in
+            if rows.first?.level == 0.75 { updated.fulfill() }
+        }
+
+        await store.startBackendObservation()
+        backend.levels = [music: 0.75]
+        await fulfillment(of: [updated], timeout: 1)
+        await store.stopBackendObservation()
+
+        XCTAssertEqual(store.displayRows.first?.level, 0.75)
+        XCTAssertEqual(backend.fetchCount, 1, "Meter polling must not repeat process/device discovery")
+        withExtendedLifetime(cancellable) {}
+    }
+
+    func testIgnoredAppsAreHiddenAndPersisted() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let backend = MockAudioBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music", bundleIdentifier: music.rawValue)
         ])
         let store = try AudioControlStore(settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()), backend: backend)
-        try store.refresh()
+        try await store.refresh()
 
-        try store.ignore(music)
+        try await store.ignore(music)
 
         XCTAssertTrue(store.displayRows.isEmpty)
         XCTAssertTrue(store.settings.ignoredAppIDs.contains(music))
         XCTAssertTrue(try store.settingsStore.load().ignoredAppIDs.contains(music))
     }
 
-    func testPinnedInactiveAppStaysVisibleWhenInactiveAppsAreHidden() throws {
+    func testPinnedInactiveAppStaysVisibleWhenInactiveAppsAreHidden() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let backend = MockAudioBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music", bundleIdentifier: music.rawValue, isActive: false)
         ])
         let store = try makeStore(backend: backend)
+        await store.waitUntilReady()
         store.settings.customization.showInactiveApps = false
-        try store.refresh()
+        try await store.refresh()
 
         XCTAssertTrue(store.displayRows.isEmpty)
 
-        try store.pin(music)
+        try await store.pin(music)
 
         XCTAssertEqual(store.displayRows.map(\.identity), [music])
         XCTAssertTrue(store.displayRows[0].isPinned)
         XCTAssertFalse(store.displayRows[0].isActive)
     }
 
-    func testVolumeMuteBoostAndEQMutationsPersistAndNotifyBackend() throws {
+    func testVolumeMuteBoostAndEQMutationsPersistAndNotifyBackend() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let backend = MockAudioBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music", bundleIdentifier: music.rawValue)
         ])
         let store = try makeStore(backend: backend)
-        try store.refresh()
+        try await store.refresh()
 
-        try store.setVolume(0.25, for: music)
-        try store.setMuted(true, for: music)
-        try store.setBoost(.x3, for: music)
-        try store.setEQGain(6, band: 0, for: music)
+        try await store.setVolume(0.25, for: music)
+        try await store.setMuted(true, for: music)
+        try await store.setBoost(.x3, for: music)
+        try await store.setEQGain(6, band: 0, for: music)
 
         let saved = try store.settingsStore.load()
         XCTAssertEqual(saved.appSettings[music]?.volume, 0.25)
@@ -81,39 +175,39 @@ final class AudioControlStoreTests: XCTestCase {
         )
     }
 
-    func testBackendModeChangeReplacesBackendAndRefreshesRows() throws {
+    func testBackendModeChangeReplacesBackendAndRefreshesRows() async throws {
         let mockIdentity = AudioAppIdentity(rawValue: "com.example.Mock")
         let realIdentity = AudioAppIdentity(rawValue: "com.example.Real")
         let initialBackend = MockAudioBackend(apps: [
             AudioAppSnapshot(identity: mockIdentity, displayName: "Mock App")
         ])
-        let replacementBackend = MockAudioBackend(apps: [
+        let replacementBackend = LockedValue(MockAudioBackend(apps: [
             AudioAppSnapshot(identity: realIdentity, displayName: "Real App")
-        ])
+        ]))
         let settingsStore = SettingsStore(settingsURL: uniqueSettingsURL())
         var settings = PersistedSettings()
         settings.customization.backendMode = .mock
         try settingsStore.save(settings)
-        var requestedModes: [BackendMode] = []
+        let requestedModes = LockedValue<[BackendMode]>([])
         let store = try AudioControlStore(
             settingsStore: settingsStore,
             backend: initialBackend,
             backendFactory: { mode in
-                requestedModes.append(mode)
-                return replacementBackend
+                requestedModes.withValue { $0.append(mode) }
+                return replacementBackend.value
             }
         )
-        try store.refresh()
+        try await store.refresh()
 
         var customization = store.settings.customization
         customization.backendMode = .coreAudioDiscovery
-        try store.applyCustomization(customization)
+        try await store.applyCustomization(customization)
 
-        XCTAssertEqual(requestedModes, [.coreAudioDiscovery])
+        XCTAssertEqual(requestedModes.value, [.coreAudioDiscovery])
         XCTAssertEqual(store.displayRows.map(\.identity), [realIdentity])
     }
 
-    func testRefreshSynchronizesTapsWithIgnoredApps() throws {
+    func testRefreshSynchronizesTapsWithIgnoredApps() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let backend = TapSynchronizingMockBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music")
@@ -124,15 +218,15 @@ final class AudioControlStoreTests: XCTestCase {
             permissionClient: grantedClient()
         )
 
-        try store.refresh()
-        try store.ignore(music)
+        try await store.refresh()
+        try await store.ignore(music)
 
         XCTAssertEqual(backend.synchronizedActiveIDs, [music])
         XCTAssertEqual(backend.synchronizedIgnoredIDs, [music])
         XCTAssertEqual(backend.tornDownIDs, [music])
     }
 
-    func testRefreshKeepsRowsWhenTapSynchronizationFails() throws {
+    func testRefreshKeepsRowsWhenTapSynchronizationFails() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let backend = TapSynchronizingMockBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music")
@@ -144,7 +238,7 @@ final class AudioControlStoreTests: XCTestCase {
             permissionClient: grantedClient()
         )
 
-        try store.refresh()
+        try await store.refresh()
 
         XCTAssertEqual(store.displayRows.map(\.identity), [music])
         XCTAssertTrue(store.statusMessage.contains("Tap setup error"))
@@ -167,15 +261,24 @@ final class AudioControlStoreTests: XCTestCase {
             backend: backend
         )
 
-        try store.refresh()
+        try await store.refresh()
         XCTAssertEqual(store.displayRows.map(\.identity), [music])
 
-        store.startBackendObservation(debounceNanoseconds: 1_000_000)
+        await store.startBackendObservation(debounceNanoseconds: 1_000_000)
+        let updated = expectation(description: "backend update published")
+        let cancellable = store.$displayRows
+            .dropFirst()
+            .sink { rows in
+                if rows.map(\.identity) == [music, safari] {
+                    updated.fulfill()
+                }
+            }
         backend.emitUpdate()
-        try await Task.sleep(nanoseconds: 60_000_000)
+        await fulfillment(of: [updated], timeout: 1)
 
         XCTAssertEqual(store.displayRows.map(\.identity), [music, safari])
-        store.stopBackendObservation()
+        await store.stopBackendObservation()
+        withExtendedLifetime(cancellable) {}
     }
 
     func testBackendObservationDebouncesEventBursts() async throws {
@@ -189,25 +292,34 @@ final class AudioControlStoreTests: XCTestCase {
             settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()),
             backend: backend
         )
-        try store.refresh()
+        try await store.refresh()
         let baselineFetches = backend.fetchCount
+        let refreshed = expectation(description: "debounced topology refresh")
+        backend.onFetch = { count in
+            if count == baselineFetches + 1 {
+                refreshed.fulfill()
+            }
+        }
 
-        store.startBackendObservation(debounceNanoseconds: 40_000_000)
+        await store.startBackendObservation(debounceNanoseconds: 40_000_000)
         for _ in 0..<10 { backend.emitUpdate() }
-        try await Task.sleep(nanoseconds: 120_000_000)
-        store.stopBackendObservation()
+        await fulfillment(of: [refreshed], timeout: 1)
+        backend.onFetch = nil
+        await store.stopBackendObservation()
 
-        // A burst of 10 events should collapse into far fewer refreshes.
-        XCTAssertLessThan(backend.fetchCount - baselineFetches, 10)
-        XCTAssertGreaterThanOrEqual(backend.fetchCount - baselineFetches, 1)
+        // Newest-only buffering plus debounce collapses the whole burst into
+        // exactly one bounded refresh.
+        XCTAssertEqual(backend.fetchCount - baselineFetches, 1)
+        XCTAssertEqual(store.topologyRefreshCount, 1)
     }
 
-    func testPermissionRefreshUpdatesPublishedStateAndStatus() throws {
+    func testPermissionRefreshUpdatesPublishedStateAndStatus() async throws {
         let client = FakePermissionClient(state: AudioCapturePermissionState(
             screenCapture: .denied,
             audioUsageDescription: .present
         ))
         let store = try makeStore(backend: MockAudioBackend(), permissionClient: client)
+        await store.waitUntilReady()
 
         store.refreshPermissionState()
 
@@ -215,7 +327,7 @@ final class AudioControlStoreTests: XCTestCase {
         XCTAssertEqual(store.statusMessage, "Screen & System Audio Recording denied")
     }
 
-    func testDeniedPermissionGatesTapSynchronization() throws {
+    func testDeniedPermissionGatesTapSynchronization() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let backend = TapSynchronizingMockBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music")
@@ -230,29 +342,29 @@ final class AudioControlStoreTests: XCTestCase {
             permissionClient: client
         )
 
-        try store.refresh()
+        try await store.refresh()
 
         // Taps must not be created; teardown-all is called instead as the safe path.
         XCTAssertTrue(backend.synchronizedActiveIDs.isEmpty)
         XCTAssertGreaterThanOrEqual(backend.tearDownAllCount, 1)
     }
 
-    func testRouteMutationPersistsAndNotifiesBackend() throws {
+    func testRouteMutationPersistsAndNotifiesBackend() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let backend = MockAudioBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music", bundleIdentifier: music.rawValue)
         ])
         let store = try makeStore(backend: backend)
-        try store.refresh()
+        try await store.refresh()
 
-        try store.setRoute(.selectedDevice("built-in-output"), for: music)
+        try await store.setRoute(.selectedDevice("built-in-output"), for: music)
 
         let saved = try store.settingsStore.load()
         XCTAssertEqual(saved.appSettings[music]?.route, .selectedDevice("built-in-output"))
         XCTAssertEqual(backend.commands.last, .setRoute(music, .selectedDevice("built-in-output")))
     }
 
-    func testRefreshRestoresPersistedMultiOutputStateBeforeTapSynchronization() throws {
+    func testRefreshRestoresPersistedMultiOutputStateBeforeTapSynchronization() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         var eq = EQCurve()
         eq.setGain(4, at: 2)
@@ -278,7 +390,7 @@ final class AudioControlStoreTests: XCTestCase {
             permissionClient: grantedClient()
         )
 
-        try store.refresh()
+        try await store.refresh()
 
         XCTAssertEqual(
             backend.events,
@@ -292,12 +404,12 @@ final class AudioControlStoreTests: XCTestCase {
             ]
         )
 
-        try store.refresh()
+        try await store.refresh()
         XCTAssertEqual(backend.events.filter { if case .command = $0 { true } else { false } }.count, 5)
         XCTAssertEqual(backend.events.last, .synchronize)
     }
 
-    func testBackendSwitchReplaysPersistedStateBeforeNewBackendSynchronization() throws {
+    func testBackendSwitchReplaysPersistedStateBeforeNewBackendSynchronization() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         var eq = EQCurve()
         eq.setGain(-3, at: 4)
@@ -314,23 +426,23 @@ final class AudioControlStoreTests: XCTestCase {
         let firstBackend = RestoreOrderingBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music")
         ])
-        let replacementBackend = RestoreOrderingBackend(apps: [
+        let replacementBackend = LockedValue(RestoreOrderingBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music")
-        ])
+        ]))
         let store = try AudioControlStore(
             settingsStore: settingsStore,
             backend: firstBackend,
-            backendFactory: { _ in replacementBackend },
+            backendFactory: { _ in replacementBackend.value },
             permissionClient: grantedClient()
         )
-        try store.refresh()
+        try await store.refresh()
 
         var customization = store.settings.customization
         customization.backendMode = .mock
-        try store.applyCustomization(customization)
+        try await store.applyCustomization(customization)
 
         XCTAssertEqual(
-            replacementBackend.events,
+            replacementBackend.value.events,
             [
                 .command(.setRoute(music, .multiOutput(["usb", "hdmi"]))),
                 .command(.setVolume(music, 0.4)),
@@ -342,22 +454,22 @@ final class AudioControlStoreTests: XCTestCase {
         )
     }
 
-    func testIgnoringAppStopsActiveTapAndKeepsSettings() throws {
+    func testIgnoringAppStopsActiveTapAndKeepsSettings() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let backend = MockAudioBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music", bundleIdentifier: music.rawValue)
         ])
         let store = try makeStore(backend: backend)
-        try store.refresh()
-        try store.setVolume(0.4, for: music)
+        try await store.refresh()
+        try await store.setVolume(0.4, for: music)
 
-        try store.ignore(music)
+        try await store.ignore(music)
 
         XCTAssertTrue(store.settings.ignoredAppIDs.contains(music))
         XCTAssertEqual(store.settings.appSettings[music]?.volume, 0.4)
     }
 
-    func testAppDisplayOrderMergesNewAppsAtEnd() throws {
+    func testAppDisplayOrderMergesNewAppsAtEnd() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let safari = AudioAppIdentity(rawValue: "com.example.Safari")
         let browser = AudioAppIdentity(rawValue: "com.example.Browser")
@@ -366,30 +478,30 @@ final class AudioControlStoreTests: XCTestCase {
             AudioAppSnapshot(identity: safari, displayName: "Safari")
         ])
         let store = try makeStore(backend: backend)
-        try store.refresh()
-        try store.moveApp(safari, before: music)
+        try await store.refresh()
+        try await store.moveApp(safari, before: music)
 
         backend.snapshot.apps.append(AudioAppSnapshot(identity: browser, displayName: "Browser"))
-        try store.refresh()
+        try await store.refresh()
 
         XCTAssertEqual(store.displayRows.map(\.identity), [safari, music, browser])
     }
 
-    func testMissingSelectedRouteStillDisplaysStoredRoute() throws {
+    func testMissingSelectedRouteStillDisplaysStoredRoute() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let backend = MockAudioBackend(
             apps: [AudioAppSnapshot(identity: music, displayName: "Music", bundleIdentifier: music.rawValue)],
             devices: [AudioDeviceSnapshot(id: "built-in-output", name: "MacBook Speakers", isDefault: true)]
         )
         let store = try makeStore(backend: backend)
-        try store.refresh()
-        try store.setRoute(.selectedDevice("usb"), for: music)
-        try store.refresh()
+        try await store.refresh()
+        try await store.setRoute(.selectedDevice("usb"), for: music)
+        try await store.refresh()
 
         XCTAssertEqual(store.displayRows[0].settings.route, .selectedDevice("usb"))
     }
 
-    func testFailedVolumeIntentRollsBackAndPublishesIssue() throws {
+    func testFailedVolumeIntentRollsBackAndPublishesIssue() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let backend = FailingApplyBackend(apps: [AudioAppSnapshot(identity: music, displayName: "Music")])
         let store = try AudioControlStore(
@@ -397,59 +509,64 @@ final class AudioControlStoreTests: XCTestCase {
             backend: backend,
             permissionClient: grantedClient()
         )
-        try store.refresh()
+        try await store.refresh()
 
         store.setVolumeIntent(0.25, for: music)
+        await store.waitForPendingOperations()
 
         XCTAssertEqual(store.displayRows.first?.settings.volume, 1)
         XCTAssertEqual(store.issues.last?.affectedApp, music)
         XCTAssertEqual(store.issues.last?.severity, .error)
     }
 
-    func testRefreshFailurePreservesLastSuccessfulRows() throws {
+    func testRefreshFailurePreservesLastSuccessfulRows() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let backend = FailsAfterFirstFetchBackend(apps: [AudioAppSnapshot(identity: music, displayName: "Music")])
         let store = try AudioControlStore(settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()), backend: backend)
-        try store.refresh()
+        try await store.refresh()
 
         store.refreshIntent()
+        await store.waitForPendingOperations()
 
         XCTAssertEqual(store.displayRows.map(\.identity), [music])
         if case .failed = store.operationState {} else { XCTFail("Expected failed operation state") }
         XCTAssertEqual(store.issues.last?.recovery, .retry)
     }
 
-    func testVolumeGestureCoalescesChangesAndFlushesFinalValue() throws {
+    func testVolumeGestureCoalescesChangesAndFlushesFinalValue() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let backend = MockAudioBackend(apps: [AudioAppSnapshot(identity: music, displayName: "Music")])
         let store = try makeStore(backend: backend)
-        try store.refresh()
+        try await store.refresh()
 
         store.beginVolumeEditing(for: music)
         for value in 1...20 { store.setVolumeIntent(Double(value) / 20, for: music) }
         store.endVolumeEditing(for: music)
+        await store.waitForPendingOperations()
 
         XCTAssertEqual(backend.commands, [.setVolume(music, 1)])
         XCTAssertEqual(try store.settingsStore.load().appSettings[music]?.volume, 1)
     }
 
-    func testEQGestureFlushAndAtomicResetEachSendOneCurve() throws {
+    func testEQGestureFlushAndAtomicResetEachSendOneCurve() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let backend = MockAudioBackend(apps: [AudioAppSnapshot(identity: music, displayName: "Music")])
         let store = try makeStore(backend: backend)
-        try store.refresh()
+        try await store.refresh()
 
         store.beginEQEditing(band: 0, for: music)
         for value in 1...20 { store.setEQGainIntent(Double(value) / 2, band: 0, for: music) }
         store.endEQEditing(band: 0, for: music)
+        await store.waitForPendingOperations()
         XCTAssertEqual(backend.commands.count, 1)
 
         store.resetEQIntent(for: music)
+        await store.waitForPendingOperations()
         XCTAssertEqual(backend.commands.count, 2)
         XCTAssertEqual(try store.settingsStore.load().appSettings[music]?.eq, EQCurve())
     }
 
-    func testPersistenceFailureCompensatesBackendBeforeRollingBackDiscreteMutations() throws {
+    func testPersistenceFailureCompensatesBackendAndRetriesTheRolledBackState() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         var baselineEQ = EQCurve()
         baselineEQ.setGain(4, at: 0)
@@ -466,15 +583,16 @@ final class AudioControlStoreTests: XCTestCase {
         try settingsStore.save(PersistedSettings(appSettings: [music: baseline]))
         let backend = MockAudioBackend(apps: [AudioAppSnapshot(identity: music, displayName: "Music")])
         let store = try AudioControlStore(settingsStore: settingsStore, backend: backend, permissionClient: grantedClient())
-        try store.refresh()
+        try await store.refresh()
         try blockPersistence(at: settingsURL)
         defer { try? FileManager.default.removeItem(at: settingsURL.deletingLastPathComponent()) }
 
-        XCTAssertThrowsError(try store.setVolume(0.2, for: music))
-        XCTAssertThrowsError(try store.setMuted(true, for: music))
-        XCTAssertThrowsError(try store.setBoost(.x4, for: music))
-        XCTAssertThrowsError(try store.setRoute(.selectedDevice("usb"), for: music))
+        await assertThrows { try await store.setVolume(0.2, for: music) }
+        await assertThrows { try await store.setMuted(true, for: music) }
+        await assertThrows { try await store.setBoost(.x4, for: music) }
+        await assertThrows { try await store.setRoute(.selectedDevice("usb"), for: music) }
         store.resetEQIntent(for: music)
+        await store.waitForPendingOperations()
 
         var resetEQ = baselineEQ
         resetEQ.reset()
@@ -498,9 +616,16 @@ final class AudioControlStoreTests: XCTestCase {
         )
         XCTAssertEqual(store.settings.appSettings[music], baseline)
         XCTAssertEqual(store.displayRows.first?.settings, baseline)
+
+        let settingsDirectory = settingsURL.deletingLastPathComponent()
+        try FileManager.default.removeItem(at: settingsDirectory)
+        try FileManager.default.createDirectory(at: settingsDirectory, withIntermediateDirectories: true)
+        await store.waitForPendingPersistence()
+
+        XCTAssertEqual(try settingsStore.load().appSettings[music], baseline)
     }
 
-    func testEQPersistenceFailureCompensatesAndPublishesIssue() throws {
+    func testEQPersistenceFailureCompensatesAndPublishesIssue() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         var baselineEQ = EQCurve()
         baselineEQ.setGain(3, at: 0)
@@ -510,26 +635,28 @@ final class AudioControlStoreTests: XCTestCase {
         try settingsStore.save(PersistedSettings(appSettings: [music: baseline]))
         let backend = MockAudioBackend(apps: [AudioAppSnapshot(identity: music, displayName: "Music")])
         let store = try AudioControlStore(settingsStore: settingsStore, backend: backend, permissionClient: grantedClient())
-        try store.refresh()
+        try await store.refresh()
         try blockPersistence(at: settingsURL)
         defer { try? FileManager.default.removeItem(at: settingsURL.deletingLastPathComponent()) }
 
         var changedEQ = baselineEQ
         changedEQ.setGain(-6, at: 1)
         store.setEQGainIntent(-6, band: 1, for: music)
+        await store.waitForPendingOperations()
 
         XCTAssertEqual(
             backend.commands,
             [.setEQ(music, baselineEQ), .setEQ(music, changedEQ), .setEQ(music, baselineEQ)]
         )
         XCTAssertEqual(store.displayRows.first?.settings.eq, baselineEQ)
-        XCTAssertEqual(store.issues.last?.id, "eq-\(music.rawValue)")
+        XCTAssertEqual(store.issues.last?.id, "eq-\(music.rawValue)-persistence")
+        XCTAssertEqual(store.issues.last?.domain, .persistence)
         XCTAssertEqual(store.issues.last?.affectedApp, music)
         XCTAssertEqual(store.issues.last?.severity, .error)
         XCTAssertEqual(store.issues.last?.recovery, .retry)
     }
 
-    func testResetKeepsSettingsWhenBackendTeardownFails() throws {
+    func testResetKeepsSettingsWhenBackendTeardownFails() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         var persisted = PersistedSettings(
             appSettings: [music: AppAudioSettings(displayName: "Music", volume: 0.4)],
@@ -541,22 +668,22 @@ final class AudioControlStoreTests: XCTestCase {
         try settingsStore.save(persisted)
         let backend = TapSynchronizingMockBackend(apps: [])
         backend.tearDownAllError = NSError(domain: "Teardown", code: 23)
-        var requestedModes: [BackendMode] = []
+        let requestedModes = LockedValue<[BackendMode]>([])
         let store = try AudioControlStore(
             settingsStore: settingsStore,
             backend: backend,
             backendFactory: { mode in
-                requestedModes.append(mode)
+                requestedModes.withValue { $0.append(mode) }
                 return MockAudioBackend()
             },
             permissionClient: grantedClient()
         )
 
-        XCTAssertThrowsError(try store.reset())
+        await assertThrows { try await store.reset() }
 
         XCTAssertEqual(store.settings, persisted)
         XCTAssertEqual(try settingsStore.load(), persisted)
-        XCTAssertTrue(requestedModes.isEmpty)
+        XCTAssertTrue(requestedModes.value.isEmpty)
     }
 
     private func makeStore(
@@ -569,50 +696,55 @@ final class AudioControlStoreTests: XCTestCase {
         return try AudioControlStore(settingsStore: store, backend: backend, permissionClient: permissionClient)
     }
 
-    func testRefreshReadsOutputVolumeFromBackend() throws {
+    func testRefreshReadsOutputVolumeFromBackend() async throws {
         let backend = MockAudioBackend()
         backend.outputVolume = 0.4
         backend.outputMuted = true
         let store = try makeStore(backend: backend)
 
-        try store.refresh()
+        try await store.refresh()
 
         XCTAssertEqual(store.outputVolumeState.volume, 0.4, accuracy: 0.001)
         XCTAssertTrue(store.outputVolumeState.isMuted)
         XCTAssertEqual(store.outputVolumeState.deviceName, "MacBook Speakers")
     }
 
-    func testSetOutputVolumeIntentAppliesAndClamps() throws {
+    func testSetOutputVolumeIntentAppliesAndClamps() async throws {
         let backend = MockAudioBackend()
         let store = try makeStore(backend: backend)
-        try store.refresh()
+        try await store.refresh()
 
         store.setOutputVolumeIntent(0.55)
+        await store.waitForPendingOperations()
         XCTAssertEqual(backend.outputVolume, 0.55, accuracy: 0.001)
         XCTAssertEqual(store.outputVolumeState.volume, 0.55, accuracy: 0.001)
 
         store.setOutputVolumeIntent(1.4)
+        await store.waitForPendingOperations()
         XCTAssertEqual(backend.outputVolume, 1, accuracy: 0.001)
         store.setOutputVolumeIntent(-0.2)
+        await store.waitForPendingOperations()
         XCTAssertEqual(backend.outputVolume, 0, accuracy: 0.001)
     }
 
-    func testToggleOutputMuteIntentFlipsMute() throws {
+    func testToggleOutputMuteIntentFlipsMute() async throws {
         let backend = MockAudioBackend()
         let store = try makeStore(backend: backend)
-        try store.refresh()
+        try await store.refresh()
         XCTAssertFalse(store.outputVolumeState.isMuted)
 
         store.toggleOutputMuteIntent()
+        await store.waitForPendingOperations()
         XCTAssertTrue(backend.outputMuted)
         XCTAssertTrue(store.outputVolumeState.isMuted)
 
         store.toggleOutputMuteIntent()
+        await store.waitForPendingOperations()
         XCTAssertFalse(backend.outputMuted)
         XCTAssertFalse(store.outputVolumeState.isMuted)
     }
 
-    func testRefreshReadsDeviceVolumeStatesForAllDevices() throws {
+    func testRefreshReadsDeviceVolumeStatesForAllDevices() async throws {
         let usb = AudioDeviceSnapshot(id: "usb", name: "USB DAC")
         let hdmi = AudioDeviceSnapshot(id: "hdmi", name: "HDMI")
         let backend = MockAudioBackend(devices: [usb, hdmi])
@@ -620,7 +752,7 @@ final class AudioControlStoreTests: XCTestCase {
         backend.perDeviceMuted = ["usb": false, "hdmi": true]
         let store = try makeStore(backend: backend)
 
-        try store.refresh()
+        try await store.refresh()
 
         XCTAssertEqual(store.deviceVolumeStates["usb"]?.volume ?? -1, 0.4, accuracy: 0.001)
         XCTAssertEqual(store.deviceVolumeStates["hdmi"]?.volume ?? -1, 0.8, accuracy: 0.001)
@@ -629,34 +761,39 @@ final class AudioControlStoreTests: XCTestCase {
         XCTAssertEqual(store.deviceVolumeStates["usb"]?.deviceName, "USB DAC")
     }
 
-    func testSetDeviceVolumeIntentAppliesPerDeviceAndClamps() throws {
+    func testSetDeviceVolumeIntentAppliesPerDeviceAndClamps() async throws {
         let usb = AudioDeviceSnapshot(id: "usb", name: "USB DAC")
         let backend = MockAudioBackend(devices: [usb])
         let store = try makeStore(backend: backend)
-        try store.refresh()
+        try await store.refresh()
 
         store.setDeviceVolumeIntent(0.55, for: "usb")
+        await store.waitForPendingOperations()
         XCTAssertEqual(backend.perDeviceVolume["usb"] ?? -1, 0.55, accuracy: 0.001)
         XCTAssertEqual(store.deviceVolumeStates["usb"]?.volume ?? -1, 0.55, accuracy: 0.001)
 
         store.setDeviceVolumeIntent(1.5, for: "usb")
+        await store.waitForPendingOperations()
         XCTAssertEqual(backend.perDeviceVolume["usb"] ?? -1, 1, accuracy: 0.001)
         store.setDeviceVolumeIntent(-0.3, for: "usb")
+        await store.waitForPendingOperations()
         XCTAssertEqual(backend.perDeviceVolume["usb"] ?? -1, 0, accuracy: 0.001)
     }
 
-    func testToggleDeviceMuteIntentFlipsPerDeviceMute() throws {
+    func testToggleDeviceMuteIntentFlipsPerDeviceMute() async throws {
         let usb = AudioDeviceSnapshot(id: "usb", name: "USB DAC")
         let backend = MockAudioBackend(devices: [usb])
         let store = try makeStore(backend: backend)
-        try store.refresh()
+        try await store.refresh()
         XCTAssertFalse(store.deviceVolumeStates["usb"]?.isMuted ?? true)
 
         store.toggleDeviceMuteIntent(for: "usb")
+        await store.waitForPendingOperations()
         XCTAssertTrue(backend.perDeviceMuted["usb"] ?? false)
         XCTAssertTrue(store.deviceVolumeStates["usb"]?.isMuted ?? false)
 
         store.toggleDeviceMuteIntent(for: "usb")
+        await store.waitForPendingOperations()
         XCTAssertFalse(backend.perDeviceMuted["usb"] ?? true)
         XCTAssertFalse(store.deviceVolumeStates["usb"]?.isMuted ?? true)
     }
@@ -666,15 +803,37 @@ final class AudioControlStoreTests: XCTestCase {
     }
 
     private func uniqueSettingsURL() -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("EQMacRepStoreTests-\(UUID().uuidString)", isDirectory: true)
-            .appendingPathComponent("settings.json")
+        temporaryFileURL(prefix: "EQMacRepStore", filename: "settings.json")
     }
 
     private func blockPersistence(at settingsURL: URL) throws {
         let settingsDirectory = settingsURL.deletingLastPathComponent()
         try FileManager.default.removeItem(at: settingsDirectory)
         try Data().write(to: settingsDirectory)
+    }
+
+    private func assertThrows(
+        _ operation: () async throws -> Void,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        do {
+            try await operation()
+            XCTFail("Expected operation to throw", file: file, line: line)
+        } catch {}
+    }
+}
+
+private final class LockedValue<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: Value
+
+    init(_ value: Value) { storage = value }
+
+    var value: Value { lock.withLock { storage } }
+
+    func withValue(_ body: (inout Value) -> Void) {
+        lock.withLock { body(&storage) }
     }
 }
 
@@ -697,19 +856,48 @@ private final class FailsAfterFirstFetchBackend: AudioBackend {
     func apply(_ command: AudioBackendCommand) throws {}
 }
 
+private final class LevelProvidingBackend: AudioBackend, AudioBackendAppLevelProviding {
+    let snapshot: AudioBackendSnapshot
+    private let lock = NSLock()
+    private var storedLevels: [AudioAppIdentity: Double] = [:]
+    private var storedFetchCount = 0
+
+    var levels: [AudioAppIdentity: Double] {
+        get { lock.withLock { storedLevels } }
+        set { lock.withLock { storedLevels = newValue } }
+    }
+
+    var fetchCount: Int { lock.withLock { storedFetchCount } }
+
+    init(apps: [AudioAppSnapshot]) {
+        snapshot = AudioBackendSnapshot(apps: apps)
+    }
+
+    func fetchSnapshot() throws -> AudioBackendSnapshot {
+        lock.withLock { storedFetchCount += 1 }
+        return snapshot
+    }
+
+    func apply(_ command: AudioBackendCommand) throws {}
+    func consumeAppLevels() -> [AudioAppIdentity: Double] {
+        lock.withLock { storedLevels }
+    }
+}
+
 private struct FakePermissionClient: AudioCapturePermissionClient {
     var state: AudioCapturePermissionState
 
     func currentState() -> AudioCapturePermissionState { state }
     func requestScreenCaptureAccess() -> AudioCapturePermissionState { state }
     func openPrivacySettings() {}
-    func relaunchApp() {}
+    func relaunchApp() async throws {}
 }
 
 private final class EventingBackend: AudioBackend, AudioBackendUpdatePublishing {
     private var snapshots: [AudioBackendSnapshot]
     private let repeatingSnapshot: AudioBackendSnapshot?
     private(set) var fetchCount = 0
+    var onFetch: ((Int) -> Void)?
     private var continuation: AsyncStream<Void>.Continuation?
 
     private lazy var stream: AsyncStream<Void> = AsyncStream { continuation in
@@ -734,6 +922,7 @@ private final class EventingBackend: AudioBackend, AudioBackendUpdatePublishing 
 
     func fetchSnapshot() throws -> AudioBackendSnapshot {
         fetchCount += 1
+        onFetch?(fetchCount)
         if let repeatingSnapshot { return repeatingSnapshot }
         return snapshots.isEmpty ? AudioBackendSnapshot() : snapshots.removeFirst()
     }

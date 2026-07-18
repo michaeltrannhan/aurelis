@@ -1,0 +1,46 @@
+name: Verification
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  strict-concurrency:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: Scripts/run-verification.sh strict
+
+  thread-sanitizer:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: Scripts/run-verification.sh tsan
+
+  sustained-audio-stress:
+    runs-on: macos-14
+    timeout-minutes: 20
+    env:
+      EQMACREP_STRESS_ITERATIONS: 100000
+    steps:
+      - uses: actions/checkout@v4
+      - run: Scripts/run-verification.sh stress
+
+  generated-xcode-products:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: Scripts/run-verification.sh xcode

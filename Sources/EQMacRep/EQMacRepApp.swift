@@ -2,8 +2,11 @@ import SwiftUI
 
 @main
 struct EQMacRepApp: App {
+    @NSApplicationDelegateAdaptor(EQMacRepApplicationDelegate.self) private var appDelegate
     @StateObject private var store: AudioControlStore
-    @StateObject private var controls = ExternalControlsCoordinator()
+    @StateObject private var controls: ExternalControlsCoordinator
+    @StateObject private var widgetBridge: WidgetBridge
+    private let lifecycle: AppLifecycleCoordinator
 
     init() {
         #if DEBUG
@@ -12,61 +15,85 @@ struct EQMacRepApp: App {
         let enforcedBackendMode: BackendMode? = .coreAudioDiscovery
         #endif
         let settingsStore = SettingsStore(enforcedBackendMode: enforcedBackendMode)
-        let settings = (try? settingsStore.load()) ?? PersistedSettings()
-        let backend = AudioBackendFactory.makeBackend(mode: settings.customization.backendMode)
         let controlStore: AudioControlStore
-        if let primaryStore = try? AudioControlStore(settingsStore: settingsStore, backend: backend) {
+        // AudioControlStore owns the one recovery-aware load. Preloading here
+        // would consume a quarantine notice before the UI can publish it.
+        if let primaryStore = try? AudioControlStore(settingsStore: settingsStore) {
             controlStore = primaryStore
         } else {
             let fallbackStore = SettingsStore(
-                settingsURL: FileManager.default.temporaryDirectory.appendingPathComponent("eqmacrep-fallback.json"),
+                settingsURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("eqmacrep-fallback.json"),
                 enforcedBackendMode: enforcedBackendMode
             )
-            let fallbackBackend = AudioBackendFactory.makeBackend(mode: enforcedBackendMode ?? .mock)
-            controlStore = try! AudioControlStore(settingsStore: fallbackStore, backend: fallbackBackend)
+            let fallbackBackend = AudioBackendFactory.makeBackend(
+                mode: enforcedBackendMode ?? .mock
+            )
+            controlStore = try! AudioControlStore(
+                settingsStore: fallbackStore,
+                backend: fallbackBackend
+            )
         }
+
+        let externalControls = ExternalControlsCoordinator(windowRouter: AppWindowRouter())
+        let bridge = WidgetBridge(store: controlStore)
+        let lifecycle = AppLifecycleCoordinator(
+            store: controlStore,
+            controls: externalControls,
+            widgetBridge: bridge
+        )
         _store = StateObject(wrappedValue: controlStore)
+        _controls = StateObject(wrappedValue: externalControls)
+        _widgetBridge = StateObject(wrappedValue: bridge)
+        self.lifecycle = lifecycle
+        appDelegate.configure(lifecycle: lifecycle)
     }
 
     private var menuBarSymbol: String {
         let loudest = store.displayRows.max { $0.level < $1.level }
-        let volume = loudest?.settings.volume ?? 1
-        let muted = loudest?.settings.isMuted ?? false
         return MenuBarIconState.symbolName(
             style: store.settings.customization.menuBarIconStyle,
-            volume: volume,
-            isMuted: muted
+            volume: loudest?.settings.volume ?? 1,
+            isMuted: loudest?.settings.isMuted ?? false
         )
     }
 
     var body: some Scene {
-        Window("EQMacRep", id: "main") {
-            MainWindowView(store: store)
-                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-                    store.shutdown()
-                }
+        Window("EQMacRep", id: AppWindowID.main.rawValue) {
+            MainWindowSceneContent(store: store, widgetBridge: widgetBridge)
+                .environmentObject(controls)
         }
         .defaultSize(width: 1080, height: 760)
 
         MenuBarExtra("EQMacRep", systemImage: menuBarSymbol) {
             MenuBarRootView(store: store)
-                .task {
-                    store.refreshPermissionState()
-                    store.startBackendObservation()
-                    controls.attach(store: store)
-                    store.refreshIntent()
-                }
-                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-                    store.shutdown()
-                }
+                .environmentObject(controls)
         }
         .menuBarExtraStyle(.window)
 
         Settings {
             SettingsView(store: store)
+                .environmentObject(controls)
                 .onChange(of: store.settings.customization) { _, _ in
-                    controls.applySettings()
+                    Task { await lifecycle.applySettings() }
                 }
         }
+    }
+}
+
+private struct MainWindowSceneContent: View {
+    @Environment(\.openWindow) private var openWindow
+    @ObservedObject var store: AudioControlStore
+    @ObservedObject var widgetBridge: WidgetBridge
+
+    var body: some View {
+        MainWindowView(store: store)
+            .background(WindowIdentityInstaller(identifier: .main))
+            .onOpenURL { url in
+                guard AppURLRoute(url) == .openMainWindow else { return }
+                openWindow(id: AppWindowID.main.rawValue)
+                NSApp.activate(ignoringOtherApps: true)
+                Task { await widgetBridge.flush() }
+            }
     }
 }

@@ -1,0 +1,125 @@
+name: EQMacRep
+options:
+  bundleIdPrefix: com.michaeltrannhan
+  deploymentTarget:
+    macOS: "14.2"
+  createIntermediateGroups: true
+  groupSortPosition: top
+  developmentLanguage: en
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: "Apple Development"
+    DEVELOPMENT_TEAM: 6T8J96Z3SD
+    ENABLE_HARDENED_RUNTIME: YES
+    COMBINE_HIDPI_IMAGES: YES
+    SWIFT_STRICT_CONCURRENCY: complete
+configs:
+  Debug: debug
+  Release: release
+targets:
+  EQMacRep:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.2"
+    sources:
+      - Sources/EQMacRep
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.michaeltrannhan.EQMacRep
+        INFOPLIST_FILE: Resources/EQMacRep-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Resources/EQMacRep.entitlements
+        GENERATE_INFOPLIST_FILE: NO
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+        ENABLE_PREVIEWS: YES
+    dependencies:
+      - target: EQMacRepWidgetShared
+      - target: EQMacRepWidget
+        embed: true
+        codeSign: true
+  EQMacRepWidgetShared:
+    type: library.static
+    platform: macOS
+    deploymentTarget: "14.2"
+    sources:
+      - Sources/EQMacRepWidgetShared
+    settings:
+      base:
+        DEFINES_MODULE: YES
+        SKIP_INSTALL: YES
+  EQMacRepWidget:
+    type: app-extension
+    platform: macOS
+    deploymentTarget: "14.2"
+    sources:
+      - Sources/EQMacRepWidget
+      - path: Sources/EQMacRep/Widget/WidgetSnapshot.swift
+      - path: Sources/EQMacRep/Widget/WidgetCommandQueue.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.michaeltrannhan.EQMacRep.EQMacRepWidget
+        INFOPLIST_FILE: Resources/EQMacRepWidget-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Resources/EQMacRepWidget.entitlements
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../../../../Frameworks"
+    dependencies:
+      - target: EQMacRepWidgetShared
+  EQMacRepTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.2"
+    sources:
+      - Tests/EQMacRepTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.michaeltrannhan.EQMacRepTests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/EQMacRep.app/Contents/MacOS/EQMacRep"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+    dependencies:
+      - target: EQMacRep
+      - target: EQMacRepWidgetShared
+  EQMacRepWidgetTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.2"
+    sources:
+      - Tests/EQMacRepWidgetTests
+      - path: Sources/EQMacRepWidget/EQMacRepWidget.swift
+      - path: Sources/EQMacRepWidget/WidgetAppIntents.swift
+      - path: Sources/EQMacRepWidget/WidgetMixerView.swift
+      - path: Sources/EQMacRepWidget/WidgetEQView.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.michaeltrannhan.EQMacRepWidgetTests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/EQMacRep.app/Contents/MacOS/EQMacRep"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+    dependencies:
+      - target: EQMacRep
+      - target: EQMacRepWidgetShared
+schemes:
+  EQMacRep:
+    build:
+      targets:
+        EQMacRep: all
+        EQMacRepTests: [test]
+        EQMacRepWidgetTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - name: EQMacRepTests
+        - name: EQMacRepWidgetTests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ShortcutsSettingsTab: View {
     @ObservedObject var store: AudioControlStore
+    @EnvironmentObject private var controls: ExternalControlsCoordinator
 
     var body: some View {
         Form {
@@ -17,15 +18,26 @@ struct ShortcutsSettingsTab: View {
             Section("External Controls") {
                 Toggle("Media keys control target app", isOn: settingsCustomizationBinding(store: store, \.mediaKeysEnabled))
                 Toggle("Global hotkeys", isOn: settingsCustomizationBinding(store: store, \.hotkeysEnabled))
-                settingsHelper("Media keys need Accessibility permission. Hotkeys default to Option+Command+Up/Down/M and Option+Command+Space to toggle the popup.")
+                LabeledContent("Accessibility") {
+                    Label(
+                        controls.accessibilityTrusted ? "Granted" : "Not Granted",
+                        systemImage: controls.accessibilityTrusted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                    )
+                    .foregroundStyle(controls.accessibilityTrusted ? Color.green : Color.orange)
+                }
+                HStack {
+                    Button("Request Accessibility") {
+                        controls.requestAccessibilityAccess()
+                    }
+                    .disabled(controls.accessibilityTrusted)
+                    Button("Open Accessibility Settings") {
+                        controls.openAccessibilitySettings()
+                    }
+                }
+                settingsHelper("Media keys need Accessibility permission. Hotkeys default to Option+Command+Up/Down/M and Option+Command+Space to show the mixer.")
             }
 
             Section("Display") {
-                Picker("Volume HUD", selection: settingsCustomizationBinding(store: store, \.hudStyle)) {
-                    ForEach(HUDStyle.allCases) { style in
-                        Text(style.label).tag(style)
-                    }
-                }
                 Picker("Menu bar icon", selection: settingsCustomizationBinding(store: store, \.menuBarIconStyle)) {
                     ForEach(MenuBarIconStyle.allCases) { style in
                         Text(style.label).tag(style)

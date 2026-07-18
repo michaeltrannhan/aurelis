@@ -9,7 +9,12 @@ protocol CoreAudioActiveTapControlling: AnyObject {
     var outputDeviceUIDs: [String] { get }
     func start() throws -> CoreAudioTapSession
     func updateGainState(_ state: CoreAudioRealtimeGainState)
-    func stop()
+    func consumePeakLevel() -> Float
+    func stop() throws
+}
+
+extension CoreAudioActiveTapControlling {
+    func consumePeakLevel() -> Float { 0 }
 }
 
 final class SystemCoreAudioActiveTapOperations: CoreAudioActiveTapOperating {
@@ -34,9 +39,35 @@ final class SystemCoreAudioActiveTapOperations: CoreAudioActiveTapOperating {
     }
 }
 
+/// HAL can return from aggregate creation before its streams and buffer
+/// configuration are published. Keep the same owned aggregate alive while it
+/// settles instead of immediately destroying/recreating it into the same race.
+enum CoreAudioAggregateReadiness {
+    static let productionAttemptLimit = 21
+    static let productionWaitInterval: TimeInterval = 0.01
+
+    static func resolve<Value>(
+        attemptLimit: Int,
+        wait: () -> Void,
+        operation: () throws -> Value
+    ) throws -> Value {
+        precondition(attemptLimit > 0)
+        for attempt in 0..<attemptLimit {
+            do {
+                return try operation()
+            } catch {
+                guard attempt + 1 < attemptLimit else { throw error }
+                wait()
+            }
+        }
+        preconditionFailure("A positive aggregate-readiness attempt limit must execute")
+    }
+}
+
 /// DSP state is confined to `queue` after `start()` publishes the controller;
-/// lifecycle/resource mutation remains serialized by the main-actor manager.
-final class CoreAudioTapIOController: @unchecked Sendable {
+/// lifecycle/resource mutation remains serialized by the manager's lifecycle
+/// executor.
+final class CoreAudioTapIOController {
     private struct OutputDeviceInfo {
         var uid: String
         var nominalSampleRate: Double
@@ -45,6 +76,7 @@ final class CoreAudioTapIOController: @unchecked Sendable {
     private let target: CoreAudioTapTarget
     let outputDeviceUIDs: [String]
     private let operations: CoreAudioActiveTapOperating
+    private let ownershipJournal: any CoreAudioAggregateOwnershipJournaling
     private let queue = DispatchQueue(label: "EQMacRep.CoreAudioTapIOController", qos: .userInitiated)
     private var resources = CoreAudioTapResources(
         tapID: AudioObjectID(kAudioObjectUnknown),
@@ -52,9 +84,8 @@ final class CoreAudioTapIOController: @unchecked Sendable {
         ioProcID: nil
     )
 
-    private var gainState: CoreAudioRealtimeGainState
-    private var ramp: CoreAudioGainRamp
-    private let eqProcessor: CoreAudioGraphicEQProcessor
+    private let initialGainState: CoreAudioRealtimeGainState
+    private var renderer: CoreAudioPCMRenderer?
     private var nominalRateListener: AudioObjectPropertyListenerBlock?
     private var nominalRateListenerDeviceID = AudioObjectID(kAudioObjectUnknown)
 
@@ -62,28 +93,25 @@ final class CoreAudioTapIOController: @unchecked Sendable {
         target: CoreAudioTapTarget,
         outputDeviceUIDs: [String],
         initialGainState: CoreAudioRealtimeGainState,
-        operations: CoreAudioActiveTapOperating = SystemCoreAudioActiveTapOperations()
+        operations: CoreAudioActiveTapOperating = SystemCoreAudioActiveTapOperations(),
+        ownershipJournal: any CoreAudioAggregateOwnershipJournaling = CoreAudioAggregateOwnershipJournal.shared
     ) {
         precondition(!outputDeviceUIDs.isEmpty, "A tap controller needs at least one output")
         self.target = target
         self.outputDeviceUIDs = outputDeviceUIDs
-        self.gainState = initialGainState
-        self.ramp = CoreAudioGainRamp(currentGain: initialGainState.targetGain, coefficient: 0.0007)
-        self.eqProcessor = CoreAudioGraphicEQProcessor(sampleRate: 48000, curve: initialGainState.eq)
+        self.initialGainState = initialGainState
         self.operations = operations
+        self.ownershipJournal = ownershipJournal
     }
 
     func start() throws -> CoreAudioTapSession {
         guard #available(macOS 14.2, *) else {
             throw CoreAudioTapError.unsupportedOS
         }
-        // Read each output's current nominal rate for a DSP coefficient
-        // fallback. HAL reconciles differing rates inside the aggregate (the
-        // clock device sets the aggregate rate); we do NOT validate or align
-        // rates upfront — matching FineTune's approach. The aggregate's own
-        // nominal rate is read after creation and used for EQ/ramp coefficients.
-        let outputDevices = try outputDeviceUIDs.map(Self.outputDeviceInfo)
-        let physicalSampleRate = outputDevices.first?.nominalSampleRate ?? 48000
+        // Resolve every physical output before creating owned resources. HAL
+        // reconciles differing physical rates inside the aggregate; the
+        // aggregate's validated stream descriptions below define render I/O.
+        _ = try outputDeviceUIDs.map(Self.outputDeviceInfo)
 
         let tapDescription = CATapDescription(stereoMixdownOfProcesses: target.processObjectIDs)
         tapDescription.name = "EQMacRep \(target.displayName)"
@@ -103,11 +131,26 @@ final class CoreAudioTapIOController: @unchecked Sendable {
             tapUUID: tapDescription.uuid,
             appName: target.displayName
         )
+        let aggregateUID = CoreAudioAggregateDeviceBuilder.aggregateUID(tapUUID: tapDescription.uuid)
+
+        // Persist intent before creation closes the crash window between HAL
+        // creating the aggregate and the ownership write. The UID is the stable
+        // ownership proof; the numeric object ID is updated after creation.
+        do {
+            try ownershipJournal.recordAggregate(
+                uid: aggregateUID,
+                deviceID: AudioObjectID(kAudioObjectUnknown)
+            )
+            resources.aggregateDeviceUID = aggregateUID
+        } catch {
+            try? stop()
+            throw error
+        }
 
         var aggregateID = AudioObjectID(kAudioObjectUnknown)
         status = AudioHardwareCreateAggregateDevice(aggregateDescription as CFDictionary, &aggregateID)
         guard status == noErr else {
-            stop()
+            try? stop()
             throw CoreAudioTapError.setupFailed(
                 identity: target.identity,
                 operation: "Aggregate device creation",
@@ -115,7 +158,12 @@ final class CoreAudioTapIOController: @unchecked Sendable {
             )
         }
         resources.aggregateDeviceID = aggregateID
-        CoreAudioAggregateCrashGuard.trackDevice(aggregateID)
+        do {
+            try ownershipJournal.recordAggregate(uid: aggregateUID, deviceID: aggregateID)
+        } catch {
+            try? stop()
+            throw error
+        }
 
         let activeSubdeviceIDs: [AudioObjectID] = (try? CoreAudioPropertyReader.array(
             objectID: aggregateID,
@@ -130,23 +178,69 @@ final class CoreAudioTapIOController: @unchecked Sendable {
             active: activeUIDs
         )
         guard inactiveUIDs.isEmpty else {
-            stop()
+            try? stop()
             throw CoreAudioTapStartFailure.inactiveOutputDevices(inactiveUIDs)
         }
 
-        // Property inspection and coefficient replacement happen before the IO
-        // proc exists, keeping all CoreAudio work out of the realtime callback.
-        let sampleRate = Self.nominalSampleRate(for: aggregateID) ?? physicalSampleRate
-        eqProcessor.updateSampleRate(sampleRate)
-        ramp.coefficient = CoreAudioGainRamp.coefficient(sampleRate: sampleRate)
-        installNominalRateListener(for: aggregateID)
+        // Capture and validate both stream sides before an IO proc can ever
+        // invoke render. Aggregate creation is asynchronous inside HAL, so
+        // retry the property snapshot briefly while the new streams settle.
+        let renderer: CoreAudioPCMRenderer
+        do {
+            renderer = try CoreAudioAggregateReadiness.resolve(
+                attemptLimit: CoreAudioAggregateReadiness.productionAttemptLimit,
+                wait: {
+                    Thread.sleep(
+                        forTimeInterval: CoreAudioAggregateReadiness.productionWaitInterval
+                    )
+                }
+            ) {
+                let inputDescriptions = try Self.streamDescriptions(
+                    for: aggregateID,
+                    scope: kAudioDevicePropertyScopeInput
+                )
+                let outputDescriptions = try Self.streamDescriptions(
+                    for: aggregateID,
+                    scope: kAudioDevicePropertyScopeOutput
+                )
+                let inputBufferChannels = try Self.streamConfiguration(
+                    for: aggregateID,
+                    scope: kAudioDevicePropertyScopeInput
+                )
+                let outputBufferChannels = try Self.streamConfiguration(
+                    for: aggregateID,
+                    scope: kAudioDevicePropertyScopeOutput
+                )
+                let maximumFrameCount = try Self.maximumFrameCount(for: aggregateID)
+                return try CoreAudioPCMRenderer(
+                    inputFormat: CoreAudioPCMFormat(
+                        streamDescriptions: inputDescriptions,
+                        configuredBufferChannelCounts: inputBufferChannels
+                    ),
+                    outputFormat: CoreAudioPCMFormat(
+                        streamDescriptions: outputDescriptions,
+                        configuredBufferChannelCounts: outputBufferChannels
+                    ),
+                    maximumFrameCount: maximumFrameCount,
+                    initialGainState: initialGainState
+                )
+            }
+        } catch let error as CoreAudioPCMFormatError {
+            try? stop()
+            throw CoreAudioTapStartFailure.fatal(error.localizedDescription)
+        } catch {
+            try? stop()
+            throw error
+        }
+        self.renderer = renderer
+        installNominalRateListener(for: aggregateID, renderer: renderer)
 
         var ioProcID: AudioDeviceIOProcID?
-        status = AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, queue) { [self] _, inputData, _, outputData, _ in
-            render(inputData: inputData, outputData: outputData)
+        status = AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, queue) { _, inputData, _, outputData, _ in
+            renderer.render(inputData: inputData, outputData: outputData)
         }
         guard status == noErr else {
-            stop()
+            try? stop()
             throw CoreAudioTapError.setupFailed(
                 identity: target.identity,
                 operation: "IOProc creation",
@@ -157,7 +251,7 @@ final class CoreAudioTapIOController: @unchecked Sendable {
 
         status = AudioDeviceStart(aggregateID, ioProcID)
         guard status == noErr else {
-            stop()
+            try? stop()
             throw CoreAudioTapError.setupFailed(
                 identity: target.identity,
                 operation: "Aggregate device start",
@@ -175,52 +269,43 @@ final class CoreAudioTapIOController: @unchecked Sendable {
     func updateGainState(_ state: CoreAudioRealtimeGainState) {
         // AudioDevice IO blocks run synchronously on `queue`; enqueue control
         // updates there as well so the mutable gain/EQ state has one executor.
-        queue.async { [self] in
-            gainState = state
-            eqProcessor.updateCurve(state.eq)
-        }
+        guard let renderer else { return }
+        queue.async(execute: DispatchWorkItem {
+            renderer.updateGainState(state)
+        })
     }
 
-    func stop() {
-        removeNominalRateListener()
-        resources.destroy(using: operations)
+    func stop() throws {
+        let listenerFailure = removeNominalRateListener()
+        var failures: [CoreAudioTapResourceFailure] = []
+        var deferredError: Error?
+        do {
+            try resources.destroy(using: operations, ownershipJournal: ownershipJournal)
+        } catch let error as CoreAudioTapResourceTeardownError {
+            failures.append(contentsOf: error.failures)
+        } catch {
+            deferredError = error
+        }
+
+        if resources.aggregateDeviceID == AudioObjectID(kAudioObjectUnknown) {
+            // Destroying the owning aggregate also invalidates its listeners.
+            nominalRateListener = nil
+            nominalRateListenerDeviceID = AudioObjectID(kAudioObjectUnknown)
+        } else if let listenerFailure {
+            failures.insert(listenerFailure, at: 0)
+        }
+
+        if !failures.isEmpty {
+            throw CoreAudioTapResourceTeardownError(failures: failures)
+        }
+        if let deferredError {
+            throw deferredError
+        }
+        renderer = nil
     }
 
-    private func render(inputData: UnsafePointer<AudioBufferList>, outputData: UnsafeMutablePointer<AudioBufferList>) {
-        let inputs = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputData))
-        let outputs = UnsafeMutableAudioBufferListPointer(outputData)
-        guard let input = inputs.first,
-              let output = outputs.first,
-              let inputData = input.mData?.assumingMemoryBound(to: Float.self),
-              let outputData = output.mData?.assumingMemoryBound(to: Float.self) else {
-            for buffer in outputs {
-                if let data = buffer.mData {
-                    memset(data, 0, Int(buffer.mDataByteSize))
-                }
-            }
-            return
-        }
-
-        let sampleCount = Int(min(input.mDataByteSize, output.mDataByteSize)) / MemoryLayout<Float>.size
-        let frameCount = sampleCount / 2
-        let eqInputData: UnsafePointer<Float>
-
-        if frameCount > 0 {
-            eqProcessor.process(input: inputData, output: outputData, frameCount: frameCount)
-            eqInputData = UnsafePointer(outputData)
-        } else {
-            eqInputData = UnsafePointer(inputData)
-        }
-
-        var localRamp = ramp
-        CoreAudioRealtimeGainProcessor.process(
-            input: eqInputData,
-            output: outputData,
-            sampleCount: sampleCount,
-            targetGain: gainState.targetGain,
-            ramp: &localRamp
-        )
-        ramp = localRamp
+    func consumePeakLevel() -> Float {
+        renderer?.consumePeakLevel() ?? 0
     }
 
     private static func nominalSampleRate(for deviceID: AudioObjectID) -> Double? {
@@ -236,14 +321,148 @@ final class CoreAudioTapIOController: @unchecked Sendable {
         return sampleRate
     }
 
-    private func installNominalRateListener(for deviceID: AudioObjectID) {
+    private static func streamDescriptions(
+        for deviceID: AudioObjectID,
+        scope: AudioObjectPropertyScope
+    ) throws -> [AudioStreamBasicDescription] {
+        let streamIDs: [AudioObjectID]
+        do {
+            streamIDs = try CoreAudioPropertyReader.array(
+                objectID: deviceID,
+                selector: kAudioDevicePropertyStreams,
+                scope: scope
+            )
+        } catch let CoreAudioDiscoveryError.propertyReadFailed(_, _, status) {
+            throw CoreAudioTapStartFailure.osStatus(
+                status,
+                operation: scope == kAudioDevicePropertyScopeInput
+                    ? "Input stream-list read"
+                    : "Output stream-list read"
+            )
+        } catch {
+            throw error
+        }
+        guard !streamIDs.isEmpty else {
+            throw CoreAudioTapStartFailure.fatal(
+                scope == kAudioDevicePropertyScopeInput
+                    ? "Aggregate device has no input streams"
+                    : "Aggregate device has no output streams"
+            )
+        }
+
+        return try streamIDs.map { streamID in
+            var address = AudioObjectPropertyAddress(
+                mSelector: kAudioStreamPropertyVirtualFormat,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var description = AudioStreamBasicDescription()
+            var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+            let status = AudioObjectGetPropertyData(
+                streamID,
+                &address,
+                0,
+                nil,
+                &size,
+                &description
+            )
+            guard status == noErr else {
+                throw CoreAudioTapStartFailure.osStatus(
+                    status,
+                    operation: scope == kAudioDevicePropertyScopeInput
+                        ? "Input virtual stream-format read"
+                        : "Output virtual stream-format read"
+                )
+            }
+            return description
+        }
+    }
+
+    private static func streamConfiguration(
+        for deviceID: AudioObjectID,
+        scope: AudioObjectPropertyScope
+    ) throws -> [Int] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamConfiguration,
+            mScope: scope,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        var status = AudioObjectGetPropertyDataSize(
+            deviceID,
+            &address,
+            0,
+            nil,
+            &size
+        )
+        guard status == noErr else {
+            throw CoreAudioTapStartFailure.osStatus(status, operation: "Stream-configuration size read")
+        }
+        guard size >= UInt32(MemoryLayout<AudioBufferList>.size) else {
+            throw CoreAudioTapStartFailure.fatal("CoreAudio returned an invalid stream configuration")
+        }
+
+        let storage = UnsafeMutableRawPointer.allocate(
+            byteCount: Int(size),
+            alignment: MemoryLayout<AudioBufferList>.alignment
+        )
+        defer { storage.deallocate() }
+        storage.initializeMemory(as: UInt8.self, repeating: 0, count: Int(size))
+        status = AudioObjectGetPropertyData(
+            deviceID,
+            &address,
+            0,
+            nil,
+            &size,
+            storage
+        )
+        guard status == noErr else {
+            throw CoreAudioTapStartFailure.osStatus(status, operation: "Stream-configuration read")
+        }
+        let list = storage.bindMemory(to: AudioBufferList.self, capacity: 1)
+        let bufferCount = Int(list.pointee.mNumberBuffers)
+        let requiredSize = MemoryLayout<AudioBufferList>.size
+            + max(bufferCount - 1, 0) * MemoryLayout<AudioBuffer>.stride
+        guard bufferCount > 0, requiredSize <= Int(size) else {
+            throw CoreAudioTapStartFailure.fatal("CoreAudio returned a truncated stream configuration")
+        }
+        return UnsafeMutableAudioBufferListPointer(list).map { Int($0.mNumberChannels) }
+    }
+
+    private static func maximumFrameCount(for deviceID: AudioObjectID) throws -> Int {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyBufferFrameSize,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var frameCount: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioObjectGetPropertyData(
+            deviceID,
+            &address,
+            0,
+            nil,
+            &size,
+            &frameCount
+        )
+        guard status == noErr else {
+            throw CoreAudioTapStartFailure.osStatus(
+                status,
+                operation: "Buffer frame-size read"
+            )
+        }
+        return Int(frameCount)
+    }
+
+    private func installNominalRateListener(
+        for deviceID: AudioObjectID,
+        renderer: CoreAudioPCMRenderer
+    ) {
         var address = Self.nominalRateAddress
-        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            guard let self,
-                  let sampleRate = Self.nominalSampleRate(for: deviceID) else { return }
+        let listener: AudioObjectPropertyListenerBlock = { _, _ in
+            guard let sampleRate = Self.nominalSampleRate(for: deviceID) else { return }
             // The listener is delivered on the same serial queue as render.
-            eqProcessor.updateSampleRate(sampleRate)
-            ramp.coefficient = CoreAudioGainRamp.coefficient(sampleRate: sampleRate)
+            renderer.updateSampleRate(sampleRate)
         }
         let status = AudioObjectAddPropertyListenerBlock(deviceID, &address, queue, listener)
         guard status == noErr else { return }
@@ -251,18 +470,26 @@ final class CoreAudioTapIOController: @unchecked Sendable {
         nominalRateListenerDeviceID = deviceID
     }
 
-    private func removeNominalRateListener() {
+    private func removeNominalRateListener() -> CoreAudioTapResourceFailure? {
         guard let nominalRateListener,
-              nominalRateListenerDeviceID != AudioObjectID(kAudioObjectUnknown) else { return }
+              nominalRateListenerDeviceID != AudioObjectID(kAudioObjectUnknown) else { return nil }
         var address = Self.nominalRateAddress
-        AudioObjectRemovePropertyListenerBlock(
+        let status = AudioObjectRemovePropertyListenerBlock(
             nominalRateListenerDeviceID,
             &address,
             queue,
             nominalRateListener
         )
+        guard status == noErr else {
+            return CoreAudioTapResourceFailure(
+                operation: .removeNominalRateListener,
+                objectID: nominalRateListenerDeviceID,
+                status: status
+            )
+        }
         self.nominalRateListener = nil
         nominalRateListenerDeviceID = AudioObjectID(kAudioObjectUnknown)
+        return nil
     }
 
     private static var nominalRateAddress: AudioObjectPropertyAddress {

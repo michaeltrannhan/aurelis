@@ -3,6 +3,9 @@ import Foundation
 /// Pure ordering model backing arrow-key navigation in the popup. Editing mode
 /// clears the order so keyboard selection is disabled while reordering.
 final class PopupKeyboardNavModel {
+    static let visibleKeyboardHint = "↑/↓ select · Return EQ · Space mute · ←/→ volume"
+    static let accessibilityHint = "Up and Down select an app. Return opens its equalizer. Space toggles mute. Left and Right adjust volume."
+
     private(set) var orderedAppIDs: [AudioAppIdentity] = []
 
     func sync(apps: [AudioAppIdentity], isEditing: Bool) {
@@ -35,22 +38,5 @@ final class PopupKeyboardNavModel {
             return current
         }
         return orderedAppIDs.first
-    }
-}
-
-/// Chooses a stable target for the header's quick controls. An explicit popup
-/// selection wins; otherwise use the first active row in the persisted display
-/// order, then the first row. Live level changes must not retarget a click.
-enum PopupQuickActionTargetResolver {
-    static func resolve(
-        rows: [DisplayableAppRow],
-        selectedAppID: AudioAppIdentity?
-    ) -> AudioAppIdentity? {
-        if let selectedAppID,
-           rows.contains(where: { $0.identity == selectedAppID }) {
-            return selectedAppID
-        }
-        if let active = rows.first(where: \.isActive) { return active.identity }
-        return rows.first?.identity
     }
 }

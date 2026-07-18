@@ -61,10 +61,35 @@ final class CoreAudioOutputVolumeController: @unchecked Sendable {
     // MARK: - Per-device reads
 
     private func readOutputVolume(forDeviceID deviceID: AudioObjectID) throws -> OutputVolumeState {
-        let volume = (try? readVolumeScalar(for: deviceID)) ?? 1
-        let isMuted = (try? readMute(for: deviceID)) ?? false
+        let capabilities = outputCapabilities(for: deviceID)
+        let volume = capabilities.canReadVolume ? ((try? readVolumeScalar(for: deviceID)) ?? 1) : 1
+        let isMuted = capabilities.canReadMute ? ((try? readMute(for: deviceID)) ?? false) : false
         let deviceName = try? readName(for: deviceID)
-        return OutputVolumeState(volume: volume, isMuted: isMuted, deviceName: deviceName)
+        return OutputVolumeState(
+            volume: volume,
+            isMuted: isMuted,
+            deviceName: deviceName,
+            capabilities: capabilities
+        )
+    }
+
+    private func outputCapabilities(for deviceID: AudioObjectID) -> OutputControlCapabilities {
+        var volumeAddress = Self.volumeAddress()
+        var muteAddress = Self.muteAddress()
+        return OutputControlCapabilities(
+            canReadVolume: AudioObjectHasProperty(deviceID, &volumeAddress),
+            canSetVolume: Self.isSettable(deviceID: deviceID, address: &volumeAddress),
+            canReadMute: AudioObjectHasProperty(deviceID, &muteAddress),
+            canSetMute: Self.isSettable(deviceID: deviceID, address: &muteAddress)
+        )
+    }
+
+    private static func isSettable(
+        deviceID: AudioObjectID,
+        address: inout AudioObjectPropertyAddress
+    ) -> Bool {
+        var settable = DarwinBoolean(false)
+        return AudioObjectIsPropertySettable(deviceID, &address, &settable) == noErr && settable.boolValue
     }
 
     // MARK: - Default device

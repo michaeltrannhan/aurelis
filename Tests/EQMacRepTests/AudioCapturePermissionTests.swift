@@ -13,6 +13,25 @@ final class AudioCapturePermissionTests: XCTestCase {
         XCTAssertEqual(state.summary, "Audio capture usage description missing")
     }
 
+    func testMissingUsageDescriptionAlwaysSupersedesSystemSettingsActions() {
+        for screenCapture in [
+            ScreenCapturePermissionStatus.notDetermined,
+            .denied,
+            .pendingRestart,
+            .granted
+        ] {
+            let presentation = PermissionPresentation(state: AudioCapturePermissionState(
+                screenCapture: screenCapture,
+                audioUsageDescription: .missing
+            ))
+
+            XCTAssertEqual(presentation.title, "Audio capture unavailable")
+            XCTAssertNil(presentation.primary)
+            XCTAssertNil(presentation.secondary)
+            XCTAssertTrue(presentation.detail.contains("System Settings cannot repair it"))
+        }
+    }
+
     func testGrantedScreenCaptureAndUsageDescriptionAllowTaps() {
         let state = AudioCapturePermissionState(
             screenCapture: .granted,
@@ -120,5 +139,5 @@ private final class RejectedPermissionClient: AudioCapturePermissionClient {
     }
 
     func openPrivacySettings() {}
-    func relaunchApp() {}
+    func relaunchApp() async throws {}
 }

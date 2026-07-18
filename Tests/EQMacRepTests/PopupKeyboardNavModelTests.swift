@@ -3,6 +3,13 @@ import XCTest
 
 @MainActor
 final class PopupKeyboardNavModelTests: XCTestCase {
+    func testVisibleAndAccessibilityHintsDocumentStableReturnAndSpaceOwnership() {
+        XCTAssertTrue(PopupKeyboardNavModel.visibleKeyboardHint.contains("Return EQ"))
+        XCTAssertTrue(PopupKeyboardNavModel.visibleKeyboardHint.contains("Space mute"))
+        XCTAssertTrue(PopupKeyboardNavModel.accessibilityHint.contains("Return opens its equalizer"))
+        XCTAssertTrue(PopupKeyboardNavModel.accessibilityHint.contains("Space toggles mute"))
+    }
+
     func testNextAndPreviousFollowVisibleRows() {
         let nav = PopupKeyboardNavModel()
         let music = AudioAppIdentity(rawValue: "com.example.Music")
@@ -35,52 +42,4 @@ final class PopupKeyboardNavModelTests: XCTestCase {
         XCTAssertEqual(nav.returnActionTarget(for: nil), music)
     }
 
-    func testQuickActionsPreferExplicitSelection() {
-        let music = row("Music", isActive: true, level: 0.2)
-        let safari = row("Safari", isActive: true, level: 0.8)
-
-        XCTAssertEqual(
-            PopupQuickActionTargetResolver.resolve(
-                rows: [music, safari],
-                selectedAppID: music.identity
-            ),
-            music.identity
-        )
-    }
-
-    func testQuickActionsUseFirstActiveRowThenFirstVisibleRow() {
-        let music = row("Music", isActive: false, level: 0.9)
-        let safari = row("Safari", isActive: true, level: 0.3)
-
-        XCTAssertEqual(
-            PopupQuickActionTargetResolver.resolve(rows: [music, safari], selectedAppID: nil),
-            safari.identity
-        )
-        XCTAssertEqual(
-            PopupQuickActionTargetResolver.resolve(rows: [music], selectedAppID: nil),
-            music.identity
-        )
-    }
-
-    func testQuickActionTargetDoesNotFollowFluctuatingLevels() {
-        let music = row("Music", isActive: true, level: 0.1)
-        let safari = row("Safari", isActive: true, level: 0.9)
-
-        XCTAssertEqual(
-            PopupQuickActionTargetResolver.resolve(rows: [music, safari], selectedAppID: nil),
-            music.identity
-        )
-    }
-
-    private func row(_ name: String, isActive: Bool, level: Double) -> DisplayableAppRow {
-        let identity = AudioAppIdentity(rawValue: "com.example.\(name)")
-        return DisplayableAppRow(
-            identity: identity,
-            displayName: name,
-            isActive: isActive,
-            isPinned: false,
-            level: level,
-            settings: AppAudioSettings(displayName: name, volume: 0.5)
-        )
-    }
 }

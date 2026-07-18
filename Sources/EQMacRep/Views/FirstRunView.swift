@@ -2,7 +2,10 @@ import SwiftUI
 
 struct FirstRunView: View {
     @ObservedObject var store: AudioControlStore
+    @EnvironmentObject private var controls: ExternalControlsCoordinator
     @Environment(\.dismiss) private var dismiss
+    @State private var isCommitting = false
+    @State private var commitErrorMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -24,8 +27,19 @@ struct FirstRunView: View {
                         title: "Media keys are optional",
                         text: "Accessibility is only needed for media-key control. Skip it and every popup control still works.",
                         icon: "keyboard",
-                        done: false
+                        done: controls.accessibilityTrusted
                     )
+                    HStack(spacing: 8) {
+                        Button(controls.accessibilityTrusted ? "Accessibility Granted" : "Request Accessibility") {
+                            controls.requestAccessibilityAccess()
+                        }
+                        .disabled(controls.accessibilityTrusted)
+                        Button("Open System Settings") {
+                            controls.openAccessibilitySettings()
+                        }
+                    }
+                    .controlSize(.small)
+                    .padding(.leading, 42)
                     step(
                         index: 3,
                         title: "Play something and refresh",
@@ -40,14 +54,26 @@ struct FirstRunView: View {
             Divider()
 
             HStack {
-                Text(store.permissionState.allowsProcessTaps ? "You’re all set." : "You can finish this later in Settings.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Get Started") {
-                    store.completeOnboardingIntent()
-                    dismiss()
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(store.permissionState.allowsProcessTaps ? "You’re all set." : "You can finish this later in Settings.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let commitErrorMessage {
+                        Text(commitErrorMessage)
+                            .font(.caption2)
+                            .foregroundStyle(.red)
+                    }
                 }
+                Spacer()
+                Button {
+                    completeOnboarding()
+                } label: {
+                    HStack(spacing: 6) {
+                        if isCommitting { ProgressView().controlSize(.small) }
+                        Text(isCommitting ? "Saving…" : "Get Started")
+                    }
+                }
+                .disabled(isCommitting)
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
             }
@@ -55,6 +81,21 @@ struct FirstRunView: View {
             .padding(.vertical, 16)
         }
         .frame(width: 500)
+    }
+
+    private func completeOnboarding() {
+        guard !isCommitting else { return }
+        isCommitting = true
+        commitErrorMessage = nil
+        Task { @MainActor in
+            do {
+                try await store.completeOnboarding()
+                dismiss()
+            } catch {
+                commitErrorMessage = "Couldn’t save setup: \(error.localizedDescription)"
+                isCommitting = false
+            }
+        }
     }
 
     private var hero: some View {

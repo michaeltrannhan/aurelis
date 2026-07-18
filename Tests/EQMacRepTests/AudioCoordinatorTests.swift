@@ -3,39 +3,57 @@ import XCTest
 
 @MainActor
 final class AudioCoordinatorTests: XCTestCase {
-    func testSessionForwardsSnapshotCommandAndStatus() throws {
+    func testEngineActorForwardsSnapshotCommandAndStatus() async throws {
         let backend = CoordinatorBackend()
         backend.snapshot = AudioBackendSnapshot(apps: [AudioAppSnapshot(identity: .init(rawValue: "music"), displayName: "Music")])
-        let session = AudioSessionCoordinator(backend: backend, backendFactory: { _ in CoordinatorBackend() })
+        let engine = AudioEngineActor(
+            backend: backend,
+            initialMode: .mock,
+            backendFactory: { _ in CoordinatorBackend() }
+        )
 
-        XCTAssertEqual(try session.fetchSnapshot().apps.count, 1)
-        try session.apply(.setMuted(.init(rawValue: "music"), true))
+        let snapshot = try await engine.fetchSnapshot(
+            settings: PersistedSettings(),
+            permissionAllowsTaps: true
+        )
+        XCTAssertEqual(snapshot.backend.apps.count, 1)
+        try await engine.apply(.setMuted(.init(rawValue: "music"), true))
         XCTAssertEqual(backend.commands.count, 1)
-        XCTAssertEqual(session.statusMessage(appCount: 1, deviceCount: 0), "healthy 1/0")
+        XCTAssertEqual(snapshot.statusMessage, "healthy 1/0")
     }
 
-    func testDeniedSynchronizationTearsDownAndGrantedSynchronizationForwards() throws {
+    func testDeniedSynchronizationTearsDownAndGrantedSynchronizationForwards() async throws {
         let backend = CoordinatorBackend()
-        let session = AudioSessionCoordinator(backend: backend, backendFactory: { _ in CoordinatorBackend() })
+        let engine = AudioEngineActor(
+            backend: backend,
+            initialMode: .mock,
+            backendFactory: { _ in CoordinatorBackend() }
+        )
         let music = AudioAppIdentity(rawValue: "music")
 
-        try session.synchronizeTaps(activeAppIDs: [music], ignoredAppIDs: [], permissionAllowsTaps: false)
+        try await engine.synchronizeTaps(activeAppIDs: [music], ignoredAppIDs: [], permissionAllowsTaps: false)
         XCTAssertEqual(backend.tearDownAllCount, 1)
         XCTAssertTrue(backend.synchronized.isEmpty)
 
-        try session.synchronizeTaps(activeAppIDs: [music], ignoredAppIDs: [], permissionAllowsTaps: true)
+        try await engine.synchronizeTaps(activeAppIDs: [music], ignoredAppIDs: [], permissionAllowsTaps: true)
         XCTAssertEqual(backend.synchronized, [music])
     }
 
-    func testBackendSwitchAndShutdownTearDownOwnedBackends() throws {
+    func testBackendSwitchAndShutdownTearDownOwnedBackends() async throws {
         let initial = CoordinatorBackend()
         let replacement = CoordinatorBackend()
-        let session = AudioSessionCoordinator(backend: initial, backendFactory: { _ in replacement })
+        let engine = AudioEngineActor(
+            backend: initial,
+            initialMode: .coreAudioDiscovery,
+            backendFactory: { _ in replacement }
+        )
 
-        try session.switchBackend(to: .mock)
+        let token = try await engine.beginBackendSwitch(to: .mock)
+        try await engine.commitBackendSwitch(token)
         XCTAssertEqual(initial.tearDownAllCount, 1)
-        try session.shutdown()
+        let report = await engine.shutdown()
         XCTAssertEqual(replacement.tearDownAllCount, 1)
+        XCTAssertTrue(report.succeeded)
     }
 
     func testPermissionCoordinatorMapsAndDelegates() {
@@ -48,7 +66,7 @@ final class AudioCoordinatorTests: XCTestCase {
         XCTAssertEqual(client.openCount, 1)
     }
 
-    func testPendingRestartStaysStickyAcrossRefresh() {
+    func testPendingRestartStaysStickyAcrossRefresh() async throws {
         // Request returns pendingRestart; the OS keeps reporting notDetermined until
         // relaunch. refresh() must not regress the surfaced state back to notRequested.
         let client = CoordinatorPermissionClient(
@@ -60,22 +78,34 @@ final class AudioCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.requestAudioCapture().screenCapture, .pendingRestart)
         XCTAssertEqual(coordinator.refresh().screenCapture, .pendingRestart)
         XCTAssertEqual(coordinator.requirements.first?.state, .restartRequired)
-        coordinator.relaunchApp()
+        try await coordinator.relaunchApp()
         XCTAssertEqual(client.relaunchCount, 1)
     }
 }
 
-private final class CoordinatorBackend: AudioBackend, AudioBackendStatusProviding, AudioBackendTapSynchronizing {
-    var snapshot = AudioBackendSnapshot()
-    var commands: [AudioBackendCommand] = []
-    var synchronized: Set<AudioAppIdentity> = []
-    var tearDownAllCount = 0
+private final class CoordinatorBackend: AudioBackend, AudioBackendStatusProviding, AudioBackendTapSynchronizing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedSnapshot = AudioBackendSnapshot()
+    private var storedCommands: [AudioBackendCommand] = []
+    private var storedSynchronized: Set<AudioAppIdentity> = []
+    private var storedTearDownAllCount = 0
+
+    var snapshot: AudioBackendSnapshot {
+        get { lock.withLock { storedSnapshot } }
+        set { lock.withLock { storedSnapshot = newValue } }
+    }
+    var commands: [AudioBackendCommand] { lock.withLock { storedCommands } }
+    var synchronized: Set<AudioAppIdentity> { lock.withLock { storedSynchronized } }
+    var tearDownAllCount: Int { lock.withLock { storedTearDownAllCount } }
+
     func fetchSnapshot() throws -> AudioBackendSnapshot { snapshot }
-    func apply(_ command: AudioBackendCommand) throws { commands.append(command) }
+    func apply(_ command: AudioBackendCommand) throws { lock.withLock { storedCommands.append(command) } }
     func statusMessage(appCount: Int, deviceCount: Int) -> String { "healthy \(appCount)/\(deviceCount)" }
-    func synchronizeTaps(activeAppIDs: Set<AudioAppIdentity>, ignoredAppIDs: Set<AudioAppIdentity>) throws { synchronized = activeAppIDs.subtracting(ignoredAppIDs) }
+    func synchronizeTaps(activeAppIDs: Set<AudioAppIdentity>, ignoredAppIDs: Set<AudioAppIdentity>) throws {
+        lock.withLock { storedSynchronized = activeAppIDs.subtracting(ignoredAppIDs) }
+    }
     func tearDownTap(for identity: AudioAppIdentity) throws {}
-    func tearDownAllTaps() throws { tearDownAllCount += 1 }
+    func tearDownAllTaps() throws { lock.withLock { storedTearDownAllCount += 1 } }
 }
 
 private final class CoordinatorPermissionClient: AudioCapturePermissionClient {
@@ -90,5 +120,5 @@ private final class CoordinatorPermissionClient: AudioCapturePermissionClient {
     func currentState() -> AudioCapturePermissionState { state }
     func requestScreenCaptureAccess() -> AudioCapturePermissionState { requestState }
     func openPrivacySettings() { openCount += 1 }
-    func relaunchApp() { relaunchCount += 1 }
+    func relaunchApp() async throws { relaunchCount += 1 }
 }

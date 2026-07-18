@@ -39,7 +39,7 @@ struct GeneralSettingsTab: View {
                         }
                     }
                     Button("Restore All") {
-                        for identity in store.settings.ignoredAppIDs { store.unignoreIntent(identity) }
+                        store.restoreAllIgnoredIntent()
                     }
                 }
             }

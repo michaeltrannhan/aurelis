@@ -2,6 +2,84 @@ import XCTest
 @testable import EQMacRep
 
 final class SettingsStoreTests: XCTestCase {
+    func testTolerantDecodingNormalizesSettingsAndDeduplicatesOrdering() throws {
+        let data = Data(
+            """
+            {
+              "version": 3,
+              "customization": {
+                "appearance": "unknown",
+                "defaultNewAppVolume": "NaN",
+                "eqGainRange": 999
+              },
+              "appSettings": {
+                "com.example.Music": {
+                  "displayName": "Music",
+                  "volume": "NaN",
+                  "boost": 99,
+                  "eq": {
+                    "gains": ["NaN", 50, -50],
+                    "range": 12
+                  },
+                  "route": {
+                    "multiOutput": {"_0": ["usb", "usb", ""]}
+                  }
+                }
+              },
+              "pinnedAppIDs": ["com.example.Music", {"rawValue": "com.example.Music"}, "", 42],
+              "ignoredAppIDs": ["com.example.Chat", "com.example.Chat"],
+              "appDisplayOrder": ["com.example.Music", "com.example.Music", "com.example.Chat", null]
+            }
+            """.utf8
+        )
+
+        let settings = try JSONDecoder().decode(PersistedSettings.self, from: data)
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let chat = AudioAppIdentity(rawValue: "com.example.Chat")
+
+        XCTAssertEqual(settings.version, PersistedSettings.currentVersion)
+        XCTAssertEqual(settings.customization.appearance, .system)
+        XCTAssertEqual(settings.customization.defaultNewAppVolume, 1)
+        XCTAssertEqual(settings.customization.eqGainRange, .db12)
+        XCTAssertEqual(settings.appSettings[music]?.volume, 1)
+        XCTAssertEqual(settings.appSettings[music]?.boost, .x1)
+        XCTAssertEqual(settings.appSettings[music]?.eq.gains, [0, 12, -12, 0, 0, 0, 0, 0, 0, 0])
+        XCTAssertEqual(settings.appSettings[music]?.route, .multiOutput(["usb"]))
+        XCTAssertEqual(settings.pinnedAppIDs, [music])
+        XCTAssertEqual(settings.ignoredAppIDs, [chat])
+        XCTAssertEqual(settings.appDisplayOrder, [music, chat])
+    }
+
+    func testLegacyAlternatingAppSettingsDeduplicatesIdentityWithoutTrap() throws {
+        let data = Data(
+            """
+            {
+              "version": 3,
+              "appSettings": [
+                "com.example.Music", {"displayName": "Music", "volume": 0.2},
+                {"rawValue": "com.example.Music"}, {"displayName": "Music", "volume": 0.8}
+              ]
+            }
+            """.utf8
+        )
+
+        let settings = try JSONDecoder().decode(PersistedSettings.self, from: data)
+
+        XCTAssertEqual(settings.appSettings.count, 1)
+        XCTAssertEqual(
+            settings.appSettings[AudioAppIdentity(rawValue: "com.example.Music")]?.volume,
+            0.8
+        )
+    }
+
+    func testMalformedSelectedRouteFallsBackToFollowDefault() throws {
+        let data = Data("{\"selectedDevice\":{\"_0\":\"\"}}".utf8)
+
+        let route = try JSONDecoder().decode(DeviceRoute.self, from: data)
+
+        XCTAssertEqual(route, .followDefault)
+    }
+
     func testLoadMissingFileReturnsDefaults() throws {
         let store = SettingsStore(settingsURL: uniqueSettingsURL())
 
@@ -43,23 +121,59 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(loaded, settings)
     }
 
-    func testMalformedJSONFallsBackToDefaultsAndCanBeSaved() throws {
+    func testMalformedJSONIsQuarantinedBeforeDefaultsCanBeSaved() throws {
         let url = uniqueSettingsURL()
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try Data("{ not json".utf8).write(to: url)
+        let original = Data("{ not json".utf8)
+        try original.write(to: url)
         let store = SettingsStore(settingsURL: url)
 
-        var loaded = try store.load()
+        let result = try store.loadWithRecovery()
+        var loaded = result.settings
 
         XCTAssertEqual(loaded, PersistedSettings())
+        let notice = try XCTUnwrap(result.recoveryNotice)
+        XCTAssertEqual(notice.originalURL, url)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertEqual(try Data(contentsOf: notice.quarantineURL), original)
 
         loaded.customization = AppCustomization(defaultNewAppVolume: 0.25)
         try store.save(loaded)
 
         XCTAssertEqual(try store.load().customization.defaultNewAppVolume, 0.25)
+    }
+
+    func testTruncatedSettingsArePreservedInQuarantine() throws {
+        let url = uniqueSettingsURL()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let original = Data("{\"version\":3,\"appSettings\":[".utf8)
+        try original.write(to: url)
+
+        let result = try SettingsStore(settingsURL: url).loadWithRecovery()
+
+        XCTAssertEqual(result.settings, PersistedSettings())
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(result.recoveryNotice).quarantineURL), original)
+    }
+
+    func testFutureVersionIsRejectedWithoutRewritingOrQuarantining() throws {
+        let url = uniqueSettingsURL()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let original = Data("{\"version\":999,\"customization\":{}}".utf8)
+        try original.write(to: url)
+        let store = SettingsStore(settingsURL: url, enforcedBackendMode: .coreAudioDiscovery)
+
+        XCTAssertThrowsError(try store.load()) { error in
+            XCTAssertEqual(
+                error as? SettingsStoreError,
+                .futureVersion(found: 999, supported: PersistedSettings.currentVersion)
+            )
+        }
+        XCTAssertEqual(try Data(contentsOf: url), original)
+        let siblingNames = try FileManager.default.contentsOfDirectory(atPath: url.deletingLastPathComponent().path)
+        XCTAssertFalse(siblingNames.contains { $0.contains(".corrupt-") })
     }
 
     func testVersionOneDefaultMockSettingsMigrateToCoreAudioDiscovery() throws {
@@ -134,30 +248,103 @@ final class SettingsStoreTests: XCTestCase {
         )
     }
 
-    @MainActor
-    func testRepositoryDebouncesToLatestSettingsAndFlushes() async throws {
+    func testPersistenceActorDebouncesToLatestSettingsAndFlushes() async throws {
         let url = uniqueSettingsURL()
-        let repository = AudioSettingsRepository(store: SettingsStore(settingsURL: url))
+        let persistence = SettingsPersistenceActor(store: SettingsStore(settingsURL: url))
         var first = PersistedSettings()
         first.hasCompletedOnboarding = false
         var latest = first
         latest.hasCompletedOnboarding = true
 
-        repository.scheduleSave(first, debounceNanoseconds: 80_000_000)
-        repository.scheduleSave(latest, debounceNanoseconds: 80_000_000)
+        await persistence.schedule(first, debounceNanoseconds: 80_000_000)
+        await persistence.schedule(latest, debounceNanoseconds: 80_000_000)
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
-        try await Task.sleep(nanoseconds: 120_000_000)
-        XCTAssertTrue(try repository.load().hasCompletedOnboarding)
+        await persistence.waitForScheduledWork()
+        XCTAssertTrue(try SettingsStore(settingsURL: url).load().hasCompletedOnboarding)
 
         latest.hasCompletedOnboarding = false
-        repository.scheduleSave(latest, debounceNanoseconds: 1_000_000_000)
-        try repository.flush()
-        XCTAssertFalse(try repository.load().hasCompletedOnboarding)
+        await persistence.schedule(latest, debounceNanoseconds: 1_000_000_000)
+        try await persistence.flush()
+        XCTAssertFalse(try SettingsStore(settingsURL: url).load().hasCompletedOnboarding)
+    }
+
+    func testPersistenceActorRetainsDirtyStateAndRetriesAfterFilesystemFaultIsRemoved() async throws {
+        let url = uniqueSettingsURL()
+        let blockedParent = url.deletingLastPathComponent()
+        try Data("not a directory".utf8).write(to: blockedParent)
+        defer { try? FileManager.default.removeItem(at: blockedParent) }
+        let persistence = SettingsPersistenceActor(
+            store: SettingsStore(settingsURL: url),
+            retryDelaysNanoseconds: [20_000_000, 40_000_000]
+        )
+        var settings = PersistedSettings()
+        settings.hasCompletedOnboarding = true
+
+        do {
+            _ = try await persistence.commit(settings)
+            XCTFail("Expected the blocked parent to reject the write")
+        } catch {}
+        var diagnostics = await persistence.diagnostics()
+        XCTAssertTrue(diagnostics.hasDirtyState)
+        XCTAssertNotNil(diagnostics.lastErrorDescription)
+        XCTAssertEqual(diagnostics.retryAttemptCount, 1)
+
+        try FileManager.default.removeItem(at: blockedParent)
+        try FileManager.default.createDirectory(at: blockedParent, withIntermediateDirectories: true)
+        await persistence.waitForScheduledWork()
+
+        diagnostics = await persistence.diagnostics()
+        XCTAssertFalse(diagnostics.hasDirtyState)
+        XCTAssertNil(diagnostics.lastErrorDescription)
+        XCTAssertEqual(diagnostics.retryAttemptCount, 0)
+        XCTAssertTrue(try SettingsStore(settingsURL: url).load().hasCompletedOnboarding)
+    }
+
+    func testPersistenceActorBoundsRetriesButKeepsLatestDirtySnapshot() async throws {
+        let url = uniqueSettingsURL()
+        let blockedParent = url.deletingLastPathComponent()
+        try Data("not a directory".utf8).write(to: blockedParent)
+        defer { try? FileManager.default.removeItem(at: blockedParent) }
+        let persistence = SettingsPersistenceActor(
+            store: SettingsStore(settingsURL: url),
+            retryDelaysNanoseconds: [5_000_000, 10_000_000]
+        )
+
+        do {
+            _ = try await persistence.commit(PersistedSettings())
+            XCTFail("Expected the blocked parent to reject the write")
+        } catch {}
+        await persistence.waitForScheduledWork()
+
+        let diagnostics = await persistence.diagnostics()
+        XCTAssertTrue(diagnostics.hasDirtyState)
+        XCTAssertNotNil(diagnostics.lastErrorDescription)
+        XCTAssertEqual(diagnostics.retryAttemptCount, 2)
+    }
+
+    func testPersistenceActorWritesOnlyDirtySnapshots() async throws {
+        let url = uniqueSettingsURL()
+        let store = SettingsStore(settingsURL: url)
+        let persistence = SettingsPersistenceActor(store: store)
+        _ = try await persistence.loadWithRecovery()
+        let baseline = PersistedSettings()
+
+        let baselineWritten = try await persistence.commit(baseline)
+        XCTAssertFalse(baselineWritten)
+        var changed = baseline
+        changed.hasCompletedOnboarding = true
+        let changedWritten = try await persistence.commit(changed)
+        let duplicateWritten = try await persistence.commit(changed)
+        XCTAssertTrue(changedWritten)
+        XCTAssertFalse(duplicateWritten)
+
+        let diagnostics = await persistence.diagnostics()
+        XCTAssertEqual(diagnostics.attemptedWriteCount, 1)
+        XCTAssertEqual(diagnostics.successfulWriteCount, 1)
+        XCTAssertFalse(diagnostics.hasDirtyState)
     }
 
     private func uniqueSettingsURL() -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("EQMacRepTests-\(UUID().uuidString)", isDirectory: true)
-            .appendingPathComponent("settings.json")
+        temporaryFileURL(prefix: "EQMacRepSettings", filename: "settings.json")
     }
 }

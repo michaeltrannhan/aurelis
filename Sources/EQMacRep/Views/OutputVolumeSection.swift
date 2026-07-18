@@ -1,5 +1,21 @@
 import SwiftUI
 
+struct OutputControlPresentation: Equatable {
+    let showsVolume: Bool
+    let enablesVolume: Bool
+    let showsMute: Bool
+    let enablesMute: Bool
+
+    init(capabilities: OutputControlCapabilities) {
+        showsVolume = capabilities.canReadVolume
+        enablesVolume = capabilities.canReadVolume && capabilities.canSetVolume
+        showsMute = capabilities.canReadMute
+        enablesMute = capabilities.canReadMute && capabilities.canSetMute
+    }
+
+    var hasAnyReadableControl: Bool { showsVolume || showsMute }
+}
+
 /// Top-level section that lists every available output device with its own
 /// hardware volume slider and mute toggle. Mirrors FineTune's device-level
 /// volume sliders, shown above per-app mixers in both the desktop window and
@@ -39,19 +55,24 @@ struct OutputVolumeSection: View {
 
     private func deviceRow(for device: AudioDeviceSnapshot) -> some View {
         let state = store.deviceVolumeStates[device.id] ?? OutputVolumeState(deviceName: device.name)
+        let presentation = OutputControlPresentation(capabilities: state.capabilities)
 
         return HStack(spacing: layout == .desktop ? 10 : 6) {
-            Button {
-                store.toggleDeviceMuteIntent(for: device.id)
-            } label: {
-                Image(systemName: state.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    .font(.system(size: layout.iconSize))
-                    .foregroundStyle(state.isMuted ? Color.red : Color.accentColor)
-                    .frame(width: layout.muteSize, height: layout.muteSize)
+            if presentation.showsMute {
+                Button {
+                    store.toggleDeviceMuteIntent(for: device.id)
+                } label: {
+                    Image(systemName: state.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .font(.system(size: layout.iconSize))
+                        .foregroundStyle(state.isMuted ? Color.red : Color.accentColor)
+                        .frame(width: layout.muteSize, height: layout.muteSize)
+                }
+                .buttonStyle(.plain)
+                .disabled(!presentation.enablesMute)
+                .help(muteHelp(device: device, state: state, enabled: presentation.enablesMute))
+                .accessibilityLabel(state.isMuted ? "Unmute \(device.name)" : "Mute \(device.name)")
+                .accessibilityHint(presentation.enablesMute ? "" : "Mute is read-only for this device")
             }
-            .buttonStyle(.plain)
-            .help(state.isMuted ? "Unmute \(device.name)" : "Mute \(device.name)")
-            .accessibilityLabel(state.isMuted ? "Unmute \(device.name)" : "Mute \(device.name)")
 
             Text(device.name)
                 .font(layout.labelFont)
@@ -59,26 +80,76 @@ struct OutputVolumeSection: View {
                 .truncationMode(.tail)
                 .frame(minWidth: layout == .desktop ? 100 : 60, maxWidth: layout == .desktop ? 140 : 90, alignment: .leading)
 
-            Slider(value: Binding(
-                get: { state.volume },
-                set: { store.setDeviceVolumeIntent($0, for: device.id) }
-            ), in: 0...1)
-            .controlSize(layout.sliderControlSize)
-            .frame(maxWidth: .infinity)
-            .scrollWheelStep(step: volumeStep) { deltaY in
-                let next = ScrollWheelStepModel.nextValue(current: state.volume, deltaY: deltaY, step: volumeStep)
-                store.setDeviceVolumeIntent(next, for: device.id)
-            }
+            if presentation.showsVolume {
+                volumeControl(
+                    device: device,
+                    state: state,
+                    enabled: presentation.enablesVolume
+                )
 
-            Text("\(Int((state.volume * 100).rounded()))%")
-                .font(layout.percentageFont)
-                .foregroundStyle(.secondary)
-                .frame(width: layout.percentageWidth, alignment: .trailing)
-                .fixedSize(horizontal: true, vertical: false)
+                Text("\(Int((state.volume * 100).rounded()))%")
+                    .font(layout.percentageFont)
+                    .foregroundStyle(.secondary)
+                    .frame(width: layout.percentageWidth, alignment: .trailing)
+                    .fixedSize(horizontal: true, vertical: false)
+            } else {
+                Text(presentation.hasAnyReadableControl ? "Volume unavailable" : "Controls unavailable")
+                    .font(layout.percentageFont)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
         }
         .frame(minHeight: layout.rowHeight)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(device.name) volume")
-        .accessibilityValue("\(Int((state.volume * 100).rounded())) percent\(state.isMuted ? ", muted" : "")")
+        .accessibilityLabel("\(device.name) output controls")
+        .accessibilityValue(accessibilityValue(state: state, presentation: presentation))
+    }
+
+    @ViewBuilder
+    private func volumeControl(
+        device: AudioDeviceSnapshot,
+        state: OutputVolumeState,
+        enabled: Bool
+    ) -> some View {
+        let slider = Slider(value: Binding(
+            get: { state.volume },
+            set: { store.setDeviceVolumeIntent($0, for: device.id) }
+        ), in: 0...1)
+        .controlSize(layout.sliderControlSize)
+        .frame(maxWidth: .infinity)
+        .disabled(!enabled)
+        .help(enabled ? "Adjust \(device.name) volume" : "Volume is read-only for this device")
+
+        if enabled {
+            slider.scrollWheelSteps { logicalSteps in
+                let next = ScrollWheelStepModel.nextValue(
+                    current: state.volume,
+                    logicalSteps: logicalSteps,
+                    step: volumeStep
+                )
+                store.setDeviceVolumeIntent(next, for: device.id)
+            }
+        } else {
+            slider
+        }
+    }
+
+    private func muteHelp(device: AudioDeviceSnapshot, state: OutputVolumeState, enabled: Bool) -> String {
+        guard enabled else { return "Mute is read-only for \(device.name)" }
+        return state.isMuted ? "Unmute \(device.name)" : "Mute \(device.name)"
+    }
+
+    private func accessibilityValue(
+        state: OutputVolumeState,
+        presentation: OutputControlPresentation
+    ) -> String {
+        var values: [String] = []
+        if presentation.showsVolume {
+            values.append("\(Int((state.volume * 100).rounded())) percent")
+        }
+        if presentation.showsMute {
+            values.append(state.isMuted ? "muted" : "not muted")
+        }
+        return values.isEmpty ? "Controls unavailable" : values.joined(separator: ", ")
     }
 }

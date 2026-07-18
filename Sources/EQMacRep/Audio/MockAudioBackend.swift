@@ -65,14 +65,20 @@ extension MockAudioBackend: AudioBackendOutputVolumeControlling {
     }
 
     func readOutputVolume() throws -> OutputVolumeState {
-        OutputVolumeState(volume: outputVolume, isMuted: outputMuted, deviceName: "MacBook Speakers")
+        OutputVolumeState(
+            volume: outputVolume,
+            isMuted: outputMuted,
+            deviceName: "MacBook Speakers",
+            capabilities: .controllable
+        )
     }
 
     func readOutputVolume(forUID uid: String) throws -> OutputVolumeState {
         OutputVolumeState(
             volume: perDeviceVolume[uid] ?? outputVolume,
             isMuted: perDeviceMuted[uid] ?? outputMuted,
-            deviceName: deviceName(forUID: uid)
+            deviceName: deviceName(forUID: uid),
+            capabilities: .controllable
         )
     }
 

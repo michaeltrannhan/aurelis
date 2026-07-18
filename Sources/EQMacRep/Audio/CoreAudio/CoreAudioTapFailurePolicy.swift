@@ -7,6 +7,7 @@ enum CoreAudioTapStartFailure: LocalizedError, Equatable {
     case inactiveOutputDevices([String])
     case permissionDenied
     case unsupportedProcess
+    case fatal(String)
     case osStatus(OSStatus, operation: String)
 
     var errorDescription: String? {
@@ -29,6 +30,10 @@ enum CoreAudioTapFailureDecision: Equatable {
             return message
         }
     }
+
+    var shouldRetry: Bool {
+        if case .recoverable = self { true } else { false }
+    }
 }
 
 enum CoreAudioTapFailurePolicy {
@@ -42,6 +47,8 @@ enum CoreAudioTapFailurePolicy {
             return .disabled("Screen & System Audio Recording permission denied")
         case .unsupportedProcess:
             return .unsupported("App cannot be tapped")
+        case let .fatal(message):
+            return .fatal(message)
         case let .osStatus(status, operation):
             return .recoverable("\(operation) failed with OSStatus \(status)")
         }

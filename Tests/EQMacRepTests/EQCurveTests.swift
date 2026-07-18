@@ -2,6 +2,38 @@ import XCTest
 @testable import EQMacRep
 
 final class EQCurveTests: XCTestCase {
+    func testDecodingNormalizesShortMalformedAndNonfiniteBands() throws {
+        let data = Data(
+            """
+            {
+              "gains": ["NaN", 99, -99, 3.5, {"bad": true}],
+              "range": 12
+            }
+            """.utf8
+        )
+
+        let curve = try JSONDecoder().decode(EQCurve.self, from: data)
+
+        XCTAssertEqual(curve.gains, [0, 12, -12, 3.5, 0, 0, 0, 0, 0, 0])
+        XCTAssertEqual(curve.range, .db12)
+    }
+
+    func testDecodingTruncatesLongBandsAndDefaultsInvalidRange() throws {
+        let data = Data(
+            """
+            {
+              "gains": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+              "range": 999
+            }
+            """.utf8
+        )
+
+        let curve = try JSONDecoder().decode(EQCurve.self, from: data)
+
+        XCTAssertEqual(curve.gains, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+        XCTAssertEqual(curve.range, .db12)
+    }
+
     func testNormalizesBandCountByPaddingMissingBands() {
         let curve = EQCurve(gains: [1, 2, 3], range: .db12)
 

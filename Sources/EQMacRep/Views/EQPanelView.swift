@@ -27,7 +27,7 @@ struct EQPanelView: View {
             if style == .desktop {
                 desktopBandGrid
             } else {
-                widgetBandGrid
+                compactBandGrid
             }
             footer
         }
@@ -107,20 +107,6 @@ struct EQPanelView: View {
         }
     }
 
-    private var compactBandGrid: some View {
-        VStack(spacing: 8) {
-            ForEach(0..<EQCurve.bandCount, id: \.self) { index in
-                EQBandRow(
-                    frequency: EQCurve.frequencies[index],
-                    gain: row.settings.eq.gains[index],
-                    range: range,
-                    onGain: { onGain(index, $0) },
-                    onEditingChanged: { onGainEditingChanged(index, $0) }
-                )
-            }
-        }
-    }
-
     private var desktopBandGrid: some View {
         HStack(alignment: .top, spacing: 8) {
             ForEach(0..<EQCurve.bandCount, id: \.self) { index in
@@ -140,7 +126,7 @@ struct EQPanelView: View {
         .background(Color.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private var widgetBandGrid: some View {
+    private var compactBandGrid: some View {
         HStack(alignment: .top, spacing: 2) {
             ForEach(0..<EQCurve.bandCount, id: \.self) { index in
                 VerticalEQBand(
@@ -251,80 +237,6 @@ private struct VerticalEQBand: View {
             onEditingChanged(true)
             onGain(min(max(gain + adjustment, -range), range))
             onEditingChanged(false)
-        }
-    }
-}
-
-private struct EQBandRow: View {
-    let frequency: String
-    let gain: Double
-    let range: Double
-    let onGain: (Double) -> Void
-    let onEditingChanged: (Bool) -> Void
-
-    private var normalizedGain: Double {
-        guard range > 0 else { return 0 }
-        return min(max(gain / range, -1), 1)
-    }
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Text(frequency)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 34, alignment: .leading)
-
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Color(nsColor: .separatorColor).opacity(0.35))
-                    .frame(height: 6)
-                GeometryReader { geometry in
-                    let center = geometry.size.width / 2
-                    let width = abs(normalizedGain) * center
-                    Capsule()
-                        .fill(gain >= 0 ? Color.accentColor : Color.orange)
-                        .frame(width: width, height: 6)
-                        .offset(x: gain >= 0 ? center : center - width)
-                }
-                .frame(height: 6)
-            }
-            .frame(width: 72)
-
-            Slider(
-                value: Binding(
-                    get: { gain },
-                    set: { onGain($0) }
-                ),
-                in: -range...range,
-                step: 0.5,
-                onEditingChanged: onEditingChanged
-            )
-            .controlSize(.small)
-
-            Stepper(
-                value: Binding(
-                    get: { gain },
-                    set: { onGain($0) }
-                ),
-                in: -range...range,
-                step: 0.5
-            ) {
-                Text(String(format: "%+.1f", gain))
-                    .font(.caption.monospacedDigit())
-                    .frame(width: 48, alignment: .trailing)
-            }
-            .labelsHidden()
-            .frame(width: 74)
-
-            Button {
-                onGain(0)
-            } label: {
-                Image(systemName: "arrow.counterclockwise")
-            }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
-            .disabled(abs(gain) < 0.05)
-            .help("Reset \(frequency) Hz")
         }
     }
 }

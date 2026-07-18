@@ -23,6 +23,14 @@ require_file() {
     [ -e "$1" ] || fail "required path not found: $1"
 }
 
+run_xcodebuild() {
+    if [ "$ALLOW_PROVISIONING_UPDATES" = YES ]; then
+        xcodebuild -allowProvisioningUpdates "$@"
+    else
+        xcodebuild "$@"
+    fi
+}
+
 plist_value() {
     plist_path=$1
     plist_key=$2
@@ -80,10 +88,12 @@ make_app_group_probe_bundle() {
     bundle_identifier=$2
     executable_source=$3
     entitlements_path=$4
+    provisioning_profile=$5
     executable_name=AppGroupRuntimeProbe
 
     /bin/mkdir -p "$bundle_path/Contents/MacOS"
     /bin/cp "$executable_source" "$bundle_path/Contents/MacOS/$executable_name"
+    /bin/cp "$provisioning_profile" "$bundle_path/Contents/embedded.provisionprofile"
     /usr/bin/plutil -create xml1 "$bundle_path/Contents/Info.plist"
     /usr/bin/plutil -insert CFBundleIdentifier -string "$bundle_identifier" "$bundle_path/Contents/Info.plist"
     /usr/bin/plutil -insert CFBundleExecutable -string "$executable_name" "$bundle_path/Contents/Info.plist"
@@ -154,6 +164,7 @@ DEVELOPMENT_TEAM=${DEVELOPMENT_TEAM:-6T8J96Z3SD}
 EXPECTED_SIGNING_TEAM=${EXPECTED_SIGNING_TEAM:-$DEVELOPMENT_TEAM}
 SIGN_IDENTITY=${SIGN_IDENTITY:-Apple Development}
 CODE_SIGNING_ALLOWED=${CODE_SIGNING_ALLOWED:-YES}
+ALLOW_PROVISIONING_UPDATES=${ALLOW_PROVISIONING_UPDATES:-$CODE_SIGNING_ALLOWED}
 RUN_TESTS=${RUN_TESTS:-YES}
 REQUIRE_APP_GROUP_SMOKE=${REQUIRE_APP_GROUP_SMOKE:-$CODE_SIGNING_ALLOWED}
 VALIDATE_ONLY=${VALIDATE_ONLY:-NO}
@@ -171,6 +182,11 @@ esac
 case "$CODE_SIGNING_ALLOWED" in
     YES|NO) ;;
     *) fail "CODE_SIGNING_ALLOWED must be YES or NO" ;;
+esac
+
+case "$ALLOW_PROVISIONING_UPDATES" in
+    YES|NO) ;;
+    *) fail "ALLOW_PROVISIONING_UPDATES must be YES or NO" ;;
 esac
 
 case "$RUN_TESTS" in
@@ -286,7 +302,7 @@ if [ "$VALIDATE_ONLY" = NO ]; then
 
     printf '==> Building %s (%s, architectures: %s)\n' "$SCHEME" "$CONFIGURATION" "$ARCHS"
     set +e
-    xcodebuild \
+    run_xcodebuild \
         -project "$PROJECT_PATH" \
         -scheme "$SCHEME" \
         -configuration "$CONFIGURATION" \
@@ -320,7 +336,7 @@ if [ "$RUN_TESTS" = YES ]; then
         APP_GROUP_TEST_ARGUMENT='-skip-testing:AuralisWidgetTests/WidgetRenderingTests/testSignedHostResolvesConfiguredApplicationGroup'
     fi
     set +e
-    xcodebuild \
+    run_xcodebuild \
         -project "$PROJECT_PATH" \
         -scheme "$SCHEME" \
         -configuration "$CONFIGURATION" \
@@ -435,14 +451,21 @@ if [ "$CODE_SIGNING_ALLOWED" = YES ]; then
         -o "$APP_GROUP_PROBE_EXECUTABLE" ||
         fail "could not compile app-group runtime probe"
 
+    APP_PROVISIONING_PROFILE=$BUILT_APP/Contents/embedded.provisionprofile
+    WIDGET_PROVISIONING_PROFILE=$BUILT_WIDGET/Contents/embedded.provisionprofile
+    require_file "$APP_PROVISIONING_PROFILE"
+    require_file "$WIDGET_PROVISIONING_PROFILE"
+
     APP_GROUP_APP_PROBE=$APP_GROUP_PROBE_ROOT/AppProbe.app
     APP_GROUP_WIDGET_PROBE=$APP_GROUP_PROBE_ROOT/WidgetProbe.app
     make_app_group_probe_bundle \
-        "$APP_GROUP_APP_PROBE" "$APP_BUNDLE_ID.AppGroupProbe" \
-        "$APP_GROUP_PROBE_EXECUTABLE" "$APP_BUILT_ENTITLEMENTS"
+        "$APP_GROUP_APP_PROBE" "$APP_BUNDLE_ID" \
+        "$APP_GROUP_PROBE_EXECUTABLE" "$APP_BUILT_ENTITLEMENTS" \
+        "$APP_PROVISIONING_PROFILE"
     make_app_group_probe_bundle \
-        "$APP_GROUP_WIDGET_PROBE" "$WIDGET_BUNDLE_ID.AppGroupProbe" \
-        "$APP_GROUP_PROBE_EXECUTABLE" "$WIDGET_BUILT_ENTITLEMENTS"
+        "$APP_GROUP_WIDGET_PROBE" "$WIDGET_BUNDLE_ID" \
+        "$APP_GROUP_PROBE_EXECUTABLE" "$WIDGET_BUILT_ENTITLEMENTS" \
+        "$WIDGET_PROVISIONING_PROFILE"
 
     APP_GROUP_TOKEN=$(/usr/bin/uuidgen)
     APP_GROUP_MARKER=.auralis-app-group-smoke-$APP_GROUP_TOKEN

@@ -71,14 +71,19 @@ AudioControlStore
 - App icons render as SF Symbols (`waveform`) because the widget extension cannot access Launch Services.
 
 The bundle script defaults to the project's Apple Development team and identity
-so the Screen & System Audio Recording grant survives rebuilds. Override either
-setting when needed:
+so the Screen & System Audio Recording grant survives rebuilds. Signed builds
+also authorize Xcode to create or download missing provisioning profiles. Make
+sure the appropriate Apple ID is signed in under Xcode's Accounts settings, then
+override the team or identity when needed:
 
 ```sh
 DEVELOPMENT_TEAM=TEAMID \
 SIGN_IDENTITY='Apple Development' \
 Scripts/build-debug-app.sh
 ```
+
+Set `ALLOW_PROVISIONING_UPDATES=NO` only when the required certificates and
+profiles are already installed, such as on a locked-down or offline CI runner.
 
 If no identity is available, create or import an Apple Development or local Code
 Signing certificate in Keychain Access. Ad-hoc signing is intentionally rejected

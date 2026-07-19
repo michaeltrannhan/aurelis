@@ -10,13 +10,21 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    CURRENT_PROJECT_VERSION: "2"
     CODE_SIGN_STYLE: Automatic
+    REGISTER_APP_GROUPS: YES
     CODE_SIGN_IDENTITY: "Apple Development"
     DEVELOPMENT_TEAM: 6T8J96Z3SD
     ENABLE_HARDENED_RUNTIME: YES
     COMBINE_HIDPI_IMAGES: YES
     SWIFT_STRICT_CONCURRENCY: complete
+  configs:
+    Debug:
+      AURALIS_DEBUG_LOG_PATH: "$(SRCROOT)/.build/logs/runtime/Auralis-debug.log"
+      AURALIS_DIAGNOSTICS_MODE: "detailed"
+    Release:
+      AURALIS_DEBUG_LOG_PATH: ""
+      AURALIS_DIAGNOSTICS_MODE: "minimal"
 configs:
   Debug: debug
   Release: release
@@ -27,6 +35,8 @@ targets:
     deploymentTarget: "14.2"
     sources:
       - Sources/Auralis
+      - path: Resources/Brand/Auralis.xcassets
+        buildPhase: resources
     settings:
       base:
         PRODUCT_NAME: Auralis
@@ -38,6 +48,7 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
         ENABLE_PREVIEWS: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - target: AuralisWidgetShared
       - target: AuralisWidget
@@ -61,6 +72,12 @@ targets:
       - Sources/AuralisWidget
       - path: Sources/Auralis/Widget/WidgetSnapshot.swift
       - path: Sources/Auralis/Widget/WidgetCommandQueue.swift
+      # Interactive WidgetKit AppIntents must be compiled into both the host
+      # app and widget extension so macOS can resolve their archived types.
+      - path: Sources/Auralis/Widget/WidgetAppIntents.swift
+      - path: Sources/Auralis/Widget/WidgetDiagnostics.swift
+      - path: Resources/Brand/Auralis.xcassets
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.michaeltrannhan.Auralis.Widget
@@ -94,9 +111,13 @@ targets:
     sources:
       - Tests/AuralisWidgetTests
       - path: Sources/AuralisWidget/AuralisWidget.swift
-      - path: Sources/AuralisWidget/WidgetAppIntents.swift
+      - path: Sources/Auralis/Widget/WidgetAppIntents.swift
       - path: Sources/AuralisWidget/WidgetMixerView.swift
       - path: Sources/AuralisWidget/WidgetEQView.swift
+      - path: Sources/AuralisWidget/WidgetBrandMark.swift
+      - path: Sources/Auralis/Widget/WidgetDiagnostics.swift
+      - path: Resources/Brand/Auralis.xcassets
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.michaeltrannhan.AuralisWidgetTests

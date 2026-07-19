@@ -20,10 +20,7 @@ private enum HardwarePreflightError: Error, CustomStringConvertible {
 
 private enum AggregateIdentity {
     static let currentPrefix = "Auralis-"
-    // Retained only so an upgrade can detect and clean devices left by the
-    // previous application identity after a crash.
-    static let legacyPrefix = "EQMacRep-"
-    static let recognizedPrefixes = [currentPrefix, legacyPrefix]
+    static let recognizedPrefixes = [currentPrefix]
 }
 
 private struct OutputDevice {
@@ -235,12 +232,7 @@ do {
     let currentJournalURL = applicationSupportURL
         .appendingPathComponent("Auralis", isDirectory: true)
         .appendingPathComponent("aggregate-ownership.json")
-    // Read-only legacy inspection prevents an old crash journal from being
-    // mistaken for a clean starting state during the identity migration.
-    let legacyJournalURL = applicationSupportURL
-        .appendingPathComponent("EQMacRep", isDirectory: true)
-        .appendingPathComponent("aggregate-ownership.json")
-    let journalURLs = [currentJournalURL, legacyJournalURL]
+    let journalURLs = [currentJournalURL]
     let devices = try outputDevices()
     let physical = devices.filter(\.isPhysical)
     let staleAggregates = devices.filter(\.isOwnedAggregate)

@@ -64,10 +64,10 @@ final class CoreAudioMappingTests: XCTestCase {
             isHidden: false,
             transportType: kAudioDeviceTransportTypeAggregate
         )
-        let legacyOwnedOutput = CoreAudioDeviceDiscovery.DeviceRecord(
+        let thirdPartyVirtualOutput = CoreAudioDeviceDiscovery.DeviceRecord(
             objectID: 12,
-            uid: "legacy-owned-output",
-            name: "EQMacRep-Legacy",
+            uid: "third-party-virtual-output",
+            name: "Example Virtual Cable",
             hasOutputStreams: true,
             isHidden: false
         )
@@ -84,8 +84,8 @@ final class CoreAudioMappingTests: XCTestCase {
         XCTAssertNil(CoreAudioDeviceDiscovery.mapDeviceRecord(ownAggregate, defaultDeviceID: nil))
         XCTAssertNil(CoreAudioDeviceDiscovery.mapDeviceRecord(userAggregate, defaultDeviceID: nil))
         XCTAssertEqual(
-            CoreAudioDeviceDiscovery.mapDeviceRecord(legacyOwnedOutput, defaultDeviceID: nil),
-            AudioDeviceSnapshot(id: "legacy-owned-output", name: "EQMacRep-Legacy", isDefault: false)
+            CoreAudioDeviceDiscovery.mapDeviceRecord(thirdPartyVirtualOutput, defaultDeviceID: nil),
+            AudioDeviceSnapshot(id: "third-party-virtual-output", name: "Example Virtual Cable", isDefault: false)
         )
         XCTAssertNil(CoreAudioDeviceDiscovery.mapDeviceRecord(autoAggregate, defaultDeviceID: nil))
         XCTAssertNil(CoreAudioDeviceDiscovery.defaultOutputUID(records: [userAggregate], defaultDeviceID: 11))

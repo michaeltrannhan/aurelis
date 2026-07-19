@@ -22,12 +22,19 @@ struct AuralisProvider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (AuralisEntry) -> Void) {
-        let entry = AuralisEntry(date: Date(), snapshot: WidgetSnapshotReader.read(), family: context.family)
+        let snapshot = WidgetSnapshotReader.read()
+        WidgetDiagnostics.record(
+            "snapshot family=\(String(describing: context.family)) host=\(snapshot.hostState.rawValue) apps=\(snapshot.apps.count)"
+        )
+        let entry = AuralisEntry(date: Date(), snapshot: snapshot, family: context.family)
         completion(entry)
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<AuralisEntry>) -> Void) {
         let snapshot = WidgetSnapshotReader.read()
+        WidgetDiagnostics.record(
+            "timeline family=\(String(describing: context.family)) host=\(snapshot.hostState.rawValue) apps=\(snapshot.apps.count)"
+        )
         let now = Date()
         let entry = AuralisEntry(date: now, snapshot: snapshot, family: context.family)
 
@@ -90,8 +97,8 @@ struct AuralisMixerWidget: Widget {
     }
 }
 
-/// EQ widget — systemLarge shows the mixer plus a 10-band EQ chart for the
-/// first active app, with ±0.5 dB buttons per band.
+/// EQ widget — systemLarge shows a focused 10-band EQ for the first active app,
+/// with five bands per row and ±0.5 dB buttons.
 struct AuralisEQWidget: Widget {
     let kind: String = "AuralisEQWidget"
 

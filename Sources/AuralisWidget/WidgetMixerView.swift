@@ -40,9 +40,8 @@ struct AuralisMixerWidgetView: View {
     private var smallBody: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Image(systemName: "waveform.circle.fill")
-                    .font(.title3)
-                    .foregroundStyle(Color.accentColor)
+                AuralisWidgetMark()
+                    .frame(width: 22, height: 22)
                 Text("Auralis")
                     .font(.headline)
                 Spacer(minLength: 0)
@@ -120,13 +119,8 @@ struct AuralisMixerWidgetView: View {
 
     private var mediumHeader: some View {
         HStack(spacing: 8) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.16))
-                Image(systemName: "waveform.circle.fill")
-                    .font(.callout)
-                    .foregroundStyle(Color.accentColor)
-            }
-            .frame(width: 26, height: 26)
+            AuralisWidgetMark()
+                .frame(width: 26, height: 26)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Auralis Mixer")
                     .font(.subheadline.weight(.semibold))
@@ -199,9 +193,7 @@ struct WidgetAppRow: View {
         HStack(spacing: 8) {
             ZStack {
                 RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.16))
-                Image(systemName: "waveform")
-                    .font(.caption)
-                    .foregroundStyle(Color.accentColor)
+                AuralisAudioGlyph()
             }
             .frame(width: 22, height: 22)
 

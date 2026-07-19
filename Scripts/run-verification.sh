@@ -28,8 +28,8 @@ run_xcode() {
     printf '==> Generated Xcode Debug app/widget/tests\n'
     CODE_SIGNING_ALLOWED=NO "$SCRIPT_DIR/build-debug-app.sh"
     printf '==> Generated Xcode Release app/widget\n'
-    CONFIGURATION=Release RUN_TESTS=NO CODE_SIGNING_ALLOWED=NO \
-        "$SCRIPT_DIR/build-debug-app.sh"
+    RUN_TESTS=NO CODE_SIGNING_ALLOWED=NO \
+        "$SCRIPT_DIR/build-release-app.sh"
     printf '==> Product verifier failure matrix\n'
     CONFIGURATION=Release CODE_SIGNING_ALLOWED=NO \
         "$SCRIPT_DIR/test-build-verifier.sh"
@@ -39,8 +39,8 @@ run_signed() {
     printf '==> Certificate-backed Xcode Debug app/widget/tests\n'
     CODE_SIGNING_ALLOWED=YES "$SCRIPT_DIR/build-debug-app.sh"
     printf '==> Certificate-backed Xcode Release app/widget\n'
-    CONFIGURATION=Release RUN_TESTS=NO CODE_SIGNING_ALLOWED=YES \
-        "$SCRIPT_DIR/build-debug-app.sh"
+    RUN_TESTS=NO CODE_SIGNING_ALLOWED=YES \
+        "$SCRIPT_DIR/build-release-app.sh"
     printf '==> Signed product and distribution verifier failure matrix\n'
     CONFIGURATION=Release CODE_SIGNING_ALLOWED=YES \
         "$SCRIPT_DIR/test-build-verifier.sh"

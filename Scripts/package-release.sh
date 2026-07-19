@@ -33,7 +33,7 @@ validate_distribution_product() {
         CONFIGURATION=Release \
         RUN_TESTS=NO \
         CODE_SIGNING_ALLOWED=YES \
-        "$SCRIPT_DIR/build-debug-app.sh"
+        "$SCRIPT_DIR/build-release-app.sh"
 
     require_distribution_signature "$product_path" "app"
     require_distribution_signature "$widget_path" "embedded widget"
@@ -57,7 +57,7 @@ SKIP_BUILD=${SKIP_BUILD:-NO}
 REQUIRE_NOTARIZATION=${REQUIRE_NOTARIZATION:-YES}
 NOTARY_PROFILE=${NOTARY_PROFILE:-}
 OUTPUT_DIRECTORY=${OUTPUT_DIRECTORY:-$REPOSITORY_ROOT/.build/release}
-APP_PATH=${APP_PATH:-$REPOSITORY_ROOT/.build/$APP_PRODUCT_NAME.app}
+APP_PATH=${APP_PATH:-$REPOSITORY_ROOT/.build/products/Release/$APP_PRODUCT_NAME.app}
 WIDGET_PATH=$APP_PATH/Contents/PlugIns/$WIDGET_NAME.appex
 ARCHIVE_PATH=$OUTPUT_DIRECTORY/$APP_PRODUCT_NAME-$MARKETING_VERSION-$CURRENT_PROJECT_VERSION.zip
 ARCHIVE_VALIDATION_ROOT=
@@ -75,8 +75,8 @@ require_command xcrun
 require_command spctl
 
 if [ "$SKIP_BUILD" = NO ]; then
-    CONFIGURATION=Release RUN_TESTS=NO CODE_SIGNING_ALLOWED=YES \
-        "$SCRIPT_DIR/build-debug-app.sh"
+    RUN_TESTS=NO CODE_SIGNING_ALLOWED=YES \
+        "$SCRIPT_DIR/build-release-app.sh"
 fi
 
 [ -d "$APP_PATH" ] || fail "release app not found: $APP_PATH"

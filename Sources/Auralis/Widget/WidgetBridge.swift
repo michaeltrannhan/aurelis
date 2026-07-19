@@ -46,15 +46,24 @@ final class WidgetBridge: ObservableObject {
 
     @discardableResult
     func start() async -> Bool {
-        if isStarted { return true }
-        guard let store else { return false }
+        if isStarted {
+            InternalDiagnostics.record("widget", "bridge.start skipped=already-started")
+            return true
+        }
+        guard let store else {
+            InternalDiagnostics.error("widget", "bridge.start failed=store-unavailable")
+            return false
+        }
         let resolvedLayout: WidgetSharedLayout
         do {
             resolvedLayout = try await fileActor.prepareAndResolveLayout()
         } catch {
+            InternalDiagnostics.error("widget", "bridge.layout failed=\(error.localizedDescription)")
             store.reportWidgetIPCConfigurationError(error.localizedDescription)
             return false
         }
+
+        InternalDiagnostics.record("widget", "bridge.layout ready=\(resolvedLayout.rootURL.path)")
 
         store.reportWidgetIPCConfigurationError(nil)
         subscribe(to: store)
@@ -82,11 +91,13 @@ final class WidgetBridge: ObservableObject {
             _ = try await writeSnapshotNow(hostState: .running)
             startHeartbeat()
             drainCommands()
+            InternalDiagnostics.record("widget", "bridge.start complete=true")
             return true
         } catch {
             watcher.stop()
             processor = nil
             subscriptions.removeAll()
+            InternalDiagnostics.error("widget", "bridge.start failed=\(error.localizedDescription)")
             store.reportWidgetIPCConfigurationError(error.localizedDescription)
             return false
         }
@@ -94,6 +105,7 @@ final class WidgetBridge: ObservableObject {
 
     func stop() async {
         guard isStarted else { return }
+        InternalDiagnostics.record("widget", "bridge.stop begin")
         snapshotTask?.cancel()
         snapshotTask = nil
         heartbeatTask?.cancel()
@@ -109,6 +121,7 @@ final class WidgetBridge: ObservableObject {
         watcher.stop()
         processor = nil
         isStarted = false
+        InternalDiagnostics.record("widget", "bridge.stop complete")
     }
 
     /// Forces an immediate snapshot write, bypassing the debounce.
@@ -118,6 +131,7 @@ final class WidgetBridge: ObservableObject {
         do {
             _ = try await writeSnapshotNow(hostState: .running)
         } catch {
+            InternalDiagnostics.error("widget", "bridge.flush failed=\(error.localizedDescription)")
             store?.reportWidgetIPCConfigurationError(error.localizedDescription)
         }
     }
@@ -142,6 +156,7 @@ final class WidgetBridge: ObservableObject {
             do {
                 _ = try await writeSnapshotNow(hostState: .running)
             } catch {
+                InternalDiagnostics.error("widget", "bridge.snapshot failed=\(error.localizedDescription)")
                 store?.reportWidgetIPCConfigurationError(error.localizedDescription)
             }
         }
@@ -157,7 +172,12 @@ final class WidgetBridge: ObservableObject {
                 guard !Task.isCancelled else { return }
                 do {
                     _ = try await writeSnapshotNow(hostState: .running)
+                    // The directory DispatchSource is the low-latency path.
+                    // Periodic draining is a bounded fallback for a missed
+                    // filesystem event or a watcher interrupted by the OS.
+                    drainCommands()
                 } catch {
+                    InternalDiagnostics.error("widget", "bridge.heartbeat failed=\(error.localizedDescription)")
                     store?.reportWidgetIPCConfigurationError(error.localizedDescription)
                 }
             }
@@ -229,7 +249,21 @@ final class WidgetBridge: ObservableObject {
                 drainRequested = false
                 let report = await processor.drain()
                 guard !Task.isCancelled else { return }
+                for result in report.results {
+                    InternalDiagnostics.record(
+                        "widget",
+                        "command.complete id=\(result.commandID.uuidString) status=\(result.status.rawValue) "
+                            + "message=\(result.message)"
+                    )
+                    if result.status != .applied {
+                        InternalDiagnostics.error(
+                            "widget",
+                            "command.\(result.status.rawValue) message=\(result.message)"
+                        )
+                    }
+                }
                 if let message = report.transportErrors.last {
+                    InternalDiagnostics.error("widget", "bridge.command-drain failed=\(message)")
                     store?.reportWidgetIPCConfigurationError(message)
                 } else {
                     store?.reportWidgetIPCConfigurationError(nil)

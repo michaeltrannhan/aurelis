@@ -173,8 +173,23 @@ final class AuralisApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard let lifecycle else { return }
-        Task { _ = await lifecycle.start() }
+        InternalDiagnostics.beginSession()
+        guard let lifecycle else {
+            InternalDiagnostics.error("lifecycle", "launch.failed lifecycle=missing")
+            return
+        }
+        Task {
+            let report = await lifecycle.start()
+            let summary = "launch.complete observation=\(report.observationStarted) "
+                + "controls=\(report.externalControlsStarted) "
+                + "widgetTransport=\(report.widgetTransportStarted) "
+                + "discoveryError=\(report.discoveryErrorDescription ?? "none")"
+            if report.discoveryErrorDescription == nil, report.widgetTransportStarted {
+                InternalDiagnostics.notice("lifecycle", summary)
+            } else {
+                InternalDiagnostics.error("lifecycle", summary)
+            }
+        }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -182,7 +197,21 @@ final class AuralisApplicationDelegate: NSObject, NSApplicationDelegate {
         guard !terminationReplyPending else { return .terminateLater }
         terminationReplyPending = true
         Task {
-            _ = await lifecycle.stop()
+            InternalDiagnostics.record("lifecycle", "termination.begin")
+            let report = await lifecycle.stop()
+            let summary = "termination.complete controls=\(report.externalControlsStopped) "
+                + "widgetTransport=\(report.widgetTransportStopped) "
+                + "editErrors=\(report.audio.editSessionErrorDescriptions.count) "
+                + "persistenceError=\(report.audio.persistenceErrorDescription ?? "none") "
+                + "tapTeardownError=\(report.audio.engineReport.teardownErrorDescription ?? "none")"
+            if report.audio.editSessionErrorDescriptions.isEmpty,
+               report.audio.persistenceErrorDescription == nil,
+               report.audio.engineReport.teardownErrorDescription == nil {
+                InternalDiagnostics.notice("lifecycle", summary)
+            } else {
+                InternalDiagnostics.error("lifecycle", summary)
+            }
+            InternalDiagnostics.flush()
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater

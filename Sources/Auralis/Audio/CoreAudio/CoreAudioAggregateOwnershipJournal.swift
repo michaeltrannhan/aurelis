@@ -204,10 +204,6 @@ private final class BlockingAggregateJournalResult<Value>: @unchecked Sendable {
 /// work itself executes outside the caller's actor/executor.
 final class CoreAudioAggregateOwnershipJournal: CoreAudioAggregateOwnershipJournaling, @unchecked Sendable {
     static let shared = CoreAudioAggregateOwnershipJournal()
-    static let legacyShared = CoreAudioAggregateOwnershipJournal(
-        journalURL: legacyJournalURL(),
-        aggregateUIDPrefix: CoreAudioOrphanedAggregateCleanup.legacyAggregateUIDPrefix
-    )
 
     let journalURL: URL
     let aggregateUIDPrefix: String
@@ -243,10 +239,6 @@ final class CoreAudioAggregateOwnershipJournal: CoreAudioAggregateOwnershipJourn
 
     static func defaultJournalURL() -> URL {
         journalURL(applicationSupportDirectoryName: "Auralis")
-    }
-
-    static func legacyJournalURL() -> URL {
-        journalURL(applicationSupportDirectoryName: "EQMacRep")
     }
 
     private static func journalURL(applicationSupportDirectoryName: String) -> URL {

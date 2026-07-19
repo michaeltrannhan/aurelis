@@ -13,20 +13,18 @@ protocol CoreAudioAggregateCleanupOperating: AnyObject {
     func destroyAggregateDevice(_ id: AudioObjectID) -> OSStatus
 }
 
-/// Recovers only aggregates that were durably journaled by Auralis or its
-/// EQMacRep predecessor. A name prefix alone is not ownership proof: a live
-/// device must match the journal identity, stable UID, and aggregate transport.
+/// Recovers only aggregates that were durably journaled by Auralis. A name
+/// prefix alone is not ownership proof: a live device must match the journal
+/// identity, stable UID, and aggregate transport.
 enum CoreAudioOrphanedAggregateCleanup {
     static let aggregateNamePrefix = "Auralis-"
     static let aggregateUIDPrefix = "Auralis-"
-    static let legacyAggregateNamePrefix = "EQMacRep-"
-    static let legacyAggregateUIDPrefix = "EQMacRep-"
 
     @discardableResult
     static func destroyOrphans(
         using operations: CoreAudioAggregateCleanupOperating = SystemAggregateCleanupOperations()
     ) -> [AudioObjectID] {
-        destroyOrphans(journals: defaultRecoveryJournals(), using: operations)
+        destroyOrphans(journal: CoreAudioAggregateOwnershipJournal.shared, using: operations)
     }
 
     @discardableResult
@@ -70,13 +68,6 @@ enum CoreAudioOrphanedAggregateCleanup {
         return recovered
     }
 
-    static func defaultRecoveryJournals() -> [any CoreAudioAggregateOwnershipJournaling] {
-        [
-            CoreAudioAggregateOwnershipJournal.shared,
-            CoreAudioAggregateOwnershipJournal.legacyShared
-        ]
-    }
-
     static func isOwnedAggregateIdentity(uid: String?, name: String) -> Bool {
         guard let uid else { return false }
         return matchesOwnedIdentity(
@@ -84,11 +75,6 @@ enum CoreAudioOrphanedAggregateCleanup {
             name: name,
             uidPrefix: aggregateUIDPrefix,
             namePrefix: aggregateNamePrefix
-        ) || matchesOwnedIdentity(
-            uid: uid,
-            name: name,
-            uidPrefix: legacyAggregateUIDPrefix,
-            namePrefix: legacyAggregateNamePrefix
         )
     }
 
@@ -103,14 +89,7 @@ enum CoreAudioOrphanedAggregateCleanup {
     }
 
     private static func aggregateNamePrefix(matchingUIDPrefix uidPrefix: String) -> String? {
-        switch uidPrefix {
-        case aggregateUIDPrefix:
-            aggregateNamePrefix
-        case legacyAggregateUIDPrefix:
-            legacyAggregateNamePrefix
-        default:
-            nil
-        }
+        uidPrefix == aggregateUIDPrefix ? aggregateNamePrefix : nil
     }
 }
 

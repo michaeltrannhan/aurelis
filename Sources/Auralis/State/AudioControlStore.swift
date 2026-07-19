@@ -101,6 +101,7 @@ final class AudioControlStore: ObservableObject {
 
     private func performBootstrap() async {
         defer { bootstrapTask = nil }
+        InternalDiagnostics.record("persistence", "bootstrap.begin")
         do {
             let result = try await persistence.loadWithRecovery()
             settings = result.settings
@@ -114,6 +115,10 @@ final class AudioControlStore: ObservableObject {
                 )
                 operationState = .degraded(notice.message)
             }
+            InternalDiagnostics.record(
+                "persistence",
+                "bootstrap.complete recovered=\(result.recoveryNotice != nil) apps=\(result.settings.appSettings.count)"
+            )
         } catch let error as SettingsStoreError {
             if case .futureVersion = error {
                 await persistence.blockWrites(because: error)
@@ -141,6 +146,10 @@ final class AudioControlStore: ObservableObject {
 
     private func refreshUnlocked() async throws {
         guard completedShutdownReport == nil else { throw AudioControlStoreError.shuttingDown }
+        InternalDiagnostics.record(
+            "audio",
+            "refresh.begin permissionAllowsTaps=\(permissionState.allowsProcessTaps)"
+        )
         operationState = .refreshing
         let engineSnapshot: AudioEngineSnapshot
         do {
@@ -207,6 +216,13 @@ final class AudioControlStore: ObservableObject {
             operationState = .ready(engineSnapshot.statusMessage)
         }
         rebuildDisplayRows()
+        InternalDiagnostics.record(
+            "audio",
+            "refresh.complete apps=\(appSnapshots.count) devices=\(devices.count) "
+                + "active=\(appSnapshots.filter(\.isActive).count) "
+                + "tapIssue=\(engineSnapshot.tapIssue ?? "none") "
+                + "restoreIssue=\(engineSnapshot.restoreIssue ?? "none")"
+        )
     }
 
     func startBackendObservation(
@@ -277,6 +293,10 @@ final class AudioControlStore: ObservableObject {
 
     func refreshPermissionState() {
         permissionState = permissions.refresh()
+        InternalDiagnostics.record(
+            "permission",
+            "audioCapture state=\(String(describing: permissionState)) allowsTaps=\(permissionState.allowsProcessTaps)"
+        )
         if !permissionState.allowsProcessTaps {
             operationState = .degraded(permissionState.summary)
             reportIssue(
@@ -466,6 +486,7 @@ final class AudioControlStore: ObservableObject {
                 try await engine.setOutputVolume(clamped)
                 outputVolumeState.volume = clamped
                 dismissIssue(id: "output-volume")
+                InternalDiagnostics.record("audio", "output.volume applied=\(clamped)")
             } catch {
                 reportMutationFailure(error, id: "output-volume", domain: .backend)
                 throw error
@@ -483,6 +504,7 @@ final class AudioControlStore: ObservableObject {
                 try await engine.setOutputMuted(muted)
                 outputVolumeState.isMuted = muted
                 dismissIssue(id: "output-mute")
+                InternalDiagnostics.record("audio", "output.mute applied=\(muted)")
             } catch {
                 reportMutationFailure(error, id: "output-mute", domain: .backend)
                 throw error
@@ -502,6 +524,10 @@ final class AudioControlStore: ObservableObject {
                 try await engine.setOutputVolume(clamped, forUID: deviceUID)
                 deviceVolumeStates[deviceUID]?.volume = clamped
                 dismissIssue(id: "device-volume-\(deviceUID)")
+                InternalDiagnostics.record(
+                    "audio",
+                    "device.volume id=\(deviceUID) applied=\(clamped)"
+                )
             } catch {
                 reportMutationFailure(error, id: "device-volume-\(deviceUID)", domain: .backend, device: deviceUID)
                 throw error
@@ -520,6 +546,10 @@ final class AudioControlStore: ObservableObject {
                 try await engine.setOutputMuted(muted, forUID: deviceUID)
                 deviceVolumeStates[deviceUID]?.isMuted = muted
                 dismissIssue(id: "device-mute-\(deviceUID)")
+                InternalDiagnostics.record(
+                    "audio",
+                    "device.mute id=\(deviceUID) applied=\(muted)"
+                )
             } catch {
                 reportMutationFailure(error, id: "device-mute-\(deviceUID)", domain: .backend, device: deviceUID)
                 throw error
@@ -845,6 +875,10 @@ final class AudioControlStore: ObservableObject {
     }
 
     private func execute<Receipt: Sendable>(_ transaction: AudioMutationTransaction<Receipt>) async throws {
+        InternalDiagnostics.record(
+            "operation",
+            "transaction.begin id=\(transaction.issueID) app=\(transaction.affectedApp?.rawValue ?? "none")"
+        )
         settings = transaction.desiredState
         rebuildDisplayRows()
         let receipt: Receipt
@@ -914,6 +948,7 @@ final class AudioControlStore: ObservableObject {
         dismissIssue(id: transaction.issueID)
         dismissIssue(id: "\(transaction.issueID)-persistence")
         dismissIssue(id: "\(transaction.issueID)-compensation")
+        InternalDiagnostics.record("operation", "transaction.complete id=\(transaction.issueID)")
     }
 
     // MARK: - Edit sessions
@@ -1257,8 +1292,7 @@ final class AudioControlStore: ObservableObject {
         device: String? = nil,
         recovery: AudioRecoveryAction? = nil
     ) {
-        issues.removeAll { $0.id == id }
-        issues.append(AudioIssue(
+        let issue = AudioIssue(
             id: id,
             domain: domain,
             severity: severity,
@@ -1266,7 +1300,18 @@ final class AudioControlStore: ObservableObject {
             affectedDeviceID: device,
             message: message,
             recovery: recovery
-        ))
+        )
+        let previous = issues.first { $0.id == id }
+        issues.removeAll { $0.id == id }
+        issues.append(issue)
+        guard previous != issue else { return }
+        let diagnostic = "issue id=\(id) domain=\(domain.rawValue) message=\(message)"
+        switch severity {
+        case .warning:
+            InternalDiagnostics.warning("issue", diagnostic)
+        case .error:
+            InternalDiagnostics.error("issue", diagnostic)
+        }
     }
 
     func dismissIssue(id: String) { issues.removeAll { $0.id == id } }

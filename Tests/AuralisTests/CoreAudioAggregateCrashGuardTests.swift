@@ -50,25 +50,6 @@ final class CoreAudioAggregateCrashGuardTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: journal.journalURL.path))
     }
 
-    func testDefaultRecoveryJournalsCoverCurrentAndLegacyApplicationSupportLocations() {
-        let journals = CoreAudioOrphanedAggregateCleanup.defaultRecoveryJournals()
-
-        XCTAssertEqual(
-            journals.map(\.journalURL),
-            [
-                CoreAudioAggregateOwnershipJournal.defaultJournalURL(),
-                CoreAudioAggregateOwnershipJournal.legacyJournalURL()
-            ]
-        )
-        XCTAssertEqual(
-            journals.map(\.aggregateUIDPrefix),
-            [
-                CoreAudioOrphanedAggregateCleanup.aggregateUIDPrefix,
-                CoreAudioOrphanedAggregateCleanup.legacyAggregateUIDPrefix
-            ]
-        )
-    }
-
     func testProductionJournalSkipsMalformedAndUnownedEntries() throws {
         let url = uniqueJournalURL()
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -93,49 +74,8 @@ final class CoreAudioAggregateCrashGuardTests: XCTestCase {
         XCTAssertEqual(records.map(\.lastKnownDeviceID), [42])
     }
 
-    func testLegacyProductionJournalAcceptsOnlyLegacyOwnershipUIDs() throws {
-        let url = uniqueJournalURL()
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        let legacyUID = legacyAggregateUID()
-        let currentUID = aggregateUID()
-        try Data(
-            """
-            {
-              "version": 1,
-              "records": [
-                {"aggregateUID":"\(legacyUID)","lastKnownDeviceID":71},
-                {"aggregateUID":"\(currentUID)","lastKnownDeviceID":72},
-                {"aggregateUID":"EQMacRep-not-a-uuid","lastKnownDeviceID":73}
-              ]
-            }
-            """.utf8
-        ).write(to: url)
-        let journal = CoreAudioAggregateOwnershipJournal(
-            journalURL: url,
-            aggregateUIDPrefix: CoreAudioOrphanedAggregateCleanup.legacyAggregateUIDPrefix
-        )
-
-        let records = try journal.records()
-
-        XCTAssertEqual(records.map(\.aggregateUID), [legacyUID])
-        XCTAssertEqual(records.map(\.lastKnownDeviceID), [71])
-        XCTAssertThrowsError(try journal.recordAggregate(uid: currentUID, deviceID: 74)) {
-            XCTAssertEqual(
-                $0 as? CoreAudioAggregateOwnershipJournalError,
-                .invalidAggregateUID(currentUID)
-            )
-        }
-    }
-
     private func aggregateUID() -> String {
         "\(CoreAudioOrphanedAggregateCleanup.aggregateUIDPrefix)\(UUID().uuidString)"
-    }
-
-    private func legacyAggregateUID() -> String {
-        "\(CoreAudioOrphanedAggregateCleanup.legacyAggregateUIDPrefix)\(UUID().uuidString)"
     }
 
     private func uniqueJournalURL() -> URL {

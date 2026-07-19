@@ -14,9 +14,41 @@ CONFIGURATION=${CONFIGURATION:-Release}
 CODE_SIGNING_ALLOWED=${CODE_SIGNING_ALLOWED:-NO}
 APP_PRODUCT_NAME=${APP_PRODUCT_NAME:-Auralis}
 WIDGET_NAME=${WIDGET_NAME:-AuralisWidget}
-BASE_APP=${BASE_APP:-$REPOSITORY_ROOT/.build/xcode/$CONFIGURATION/BuildDerivedData/Build/Products/$CONFIGURATION/$APP_PRODUCT_NAME.app}
-FAULT_ROOT=$REPOSITORY_ROOT/.build/verifier-self-test/$(/usr/bin/uuidgen)
-LOG_ROOT=$FAULT_ROOT/logs
+FAULT_ID=$(/usr/bin/uuidgen)
+FAULT_ROOT=$REPOSITORY_ROOT/.build/verifier-self-test/$FAULT_ID
+LOG_ROOT=$REPOSITORY_ROOT/.build/logs/verifier-self-test/$FAULT_ID
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+
+cleanup_fault_products() {
+    if [ -d "$FAULT_ROOT" ]; then
+        /usr/bin/find "$FAULT_ROOT" -type d -name "$WIDGET_NAME.appex" -prune -print |
+            while IFS= read -r widget_path; do
+                /usr/bin/pluginkit -r "$widget_path" >/dev/null 2>&1 || true
+            done
+        if [ -x "$LSREGISTER" ]; then
+            /usr/bin/find "$FAULT_ROOT" -type d -name '*.app' -prune -print |
+                while IFS= read -r app_path; do
+                    "$LSREGISTER" -u "$app_path" >/dev/null 2>&1 || true
+                done
+        fi
+        /bin/rm -rf "$FAULT_ROOT"
+    fi
+}
+
+trap cleanup_fault_products EXIT
+
+case "$CONFIGURATION" in
+    Debug)
+        BUILD_SCRIPT=$SCRIPT_DIR/build-debug-app.sh
+        DEFAULT_BASE_APP=$REPOSITORY_ROOT/.build/products/Debug/$APP_PRODUCT_NAME.app
+        ;;
+    Release)
+        BUILD_SCRIPT=$SCRIPT_DIR/build-release-app.sh
+        DEFAULT_BASE_APP=$REPOSITORY_ROOT/.build/products/Release/$APP_PRODUCT_NAME.app
+        ;;
+    *) fail "CONFIGURATION must be Debug or Release" ;;
+esac
+BASE_APP=${BASE_APP:-$DEFAULT_BASE_APP}
 
 [ -d "$BASE_APP" ] || fail "validated base app not found: $BASE_APP"
 /bin/mkdir -p "$LOG_ROOT"
@@ -45,7 +77,7 @@ validate_app() {
         RUN_TESTS=NO \
         REQUIRE_APP_GROUP_SMOKE=NO \
         CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED" \
-        "$SCRIPT_DIR/build-debug-app.sh"
+        "$BUILD_SCRIPT"
 }
 
 printf '==> Verifier self-test (%s, signing: %s)\n' "$CONFIGURATION" "$CODE_SIGNING_ALLOWED"
@@ -64,7 +96,7 @@ env \
     RUN_TESTS=NO \
     REQUIRE_APP_GROUP_SMOKE=NO \
     CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED" \
-    "$SCRIPT_DIR/build-debug-app.sh" >/dev/null
+    "$BUILD_SCRIPT" >/dev/null
 [ ! -e "$REPLACEMENT_SENTINEL" ] || fail "validated copy retained a stale destination file"
 printf '    verified: clean product replacement\n'
 
@@ -98,6 +130,27 @@ URL_SCHEME_APP=$FAULT_ROOT/url-scheme.app
     "$URL_SCHEME_APP/Contents/Info.plist"
 expect_failure url-scheme validate_app "$URL_SCHEME_APP"
 
+APP_ICON_APP=$FAULT_ROOT/app-icon.app
+/usr/bin/ditto "$BASE_COPY" "$APP_ICON_APP"
+/bin/rm -f "$APP_ICON_APP/Contents/Resources/AppIcon.icns"
+expect_failure app-icon validate_app "$APP_ICON_APP"
+
+APP_ASSETS_APP=$FAULT_ROOT/app-assets.app
+/usr/bin/ditto "$BASE_COPY" "$APP_ASSETS_APP"
+/bin/rm -f "$APP_ASSETS_APP/Contents/Resources/Assets.car"
+expect_failure app-assets validate_app "$APP_ASSETS_APP"
+
+WIDGET_ASSETS_APP=$FAULT_ROOT/widget-assets.app
+/usr/bin/ditto "$BASE_COPY" "$WIDGET_ASSETS_APP"
+/bin/rm -f "$WIDGET_ASSETS_APP/Contents/PlugIns/$WIDGET_NAME.appex/Contents/Resources/Assets.car"
+expect_failure widget-assets validate_app "$WIDGET_ASSETS_APP"
+
+INTENT_METADATA_APP=$FAULT_ROOT/intent-metadata.app
+/usr/bin/ditto "$BASE_COPY" "$INTENT_METADATA_APP"
+INTENT_METADATA=$INTENT_METADATA_APP/Contents/PlugIns/$WIDGET_NAME.appex/Contents/Resources/Metadata.appintents/extract.actionsdata
+/usr/bin/plutil -replace actions.SetAppMutedIntent.parameters -json '[]' "$INTENT_METADATA"
+expect_failure intent-metadata validate_app "$INTENT_METADATA_APP"
+
 EMBEDDING_APP=$FAULT_ROOT/embedding.app
 /usr/bin/ditto "$BASE_COPY" "$EMBEDDING_APP"
 /bin/rm -rf "$EMBEDDING_APP/Contents/PlugIns/$WIDGET_NAME.appex"
@@ -111,7 +164,7 @@ expect_failure architecture env \
     REQUIRE_APP_GROUP_SMOKE=NO \
     CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED" \
     ARCHS=x86_64 \
-    "$SCRIPT_DIR/build-debug-app.sh"
+    "$BUILD_SCRIPT"
 
 expect_failure bundle-identifier env \
     VALIDATE_ONLY=YES \
@@ -121,7 +174,7 @@ expect_failure bundle-identifier env \
     REQUIRE_APP_GROUP_SMOKE=NO \
     CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED" \
     APP_BUNDLE_ID=com.example.invalid \
-    "$SCRIPT_DIR/build-debug-app.sh"
+    "$BUILD_SCRIPT"
 
 expect_failure entitlement env \
     VALIDATE_ONLY=YES \
@@ -132,7 +185,7 @@ expect_failure entitlement env \
     REQUIRE_APP_GROUP_SMOKE=NO \
     CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED" \
     APP_GROUP_ID=com.example.invalid.group \
-    "$SCRIPT_DIR/build-debug-app.sh"
+    "$BUILD_SCRIPT"
 
 expect_failure notary-configuration env \
     SKIP_BUILD=YES \

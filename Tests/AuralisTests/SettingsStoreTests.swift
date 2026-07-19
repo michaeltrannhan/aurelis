@@ -92,64 +92,6 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertTrue(settings.ignoredAppIDs.isEmpty)
     }
 
-    func testLegacyOnlySettingsLoadAndMigrateWithoutRemovingRollbackCopy() throws {
-        let urls = try uniqueMigrationURLs()
-        var legacySettings = PersistedSettings()
-        legacySettings.customization.defaultNewAppVolume = 0.37
-        legacySettings.hasCompletedOnboarding = true
-        try SettingsStore(settingsURL: urls.legacy).save(legacySettings)
-        let legacyData = try Data(contentsOf: urls.legacy)
-
-        let migrated = try SettingsStore(
-            settingsURL: urls.current,
-            legacySettingsURL: urls.legacy
-        ).load()
-
-        XCTAssertEqual(migrated, legacySettings)
-        XCTAssertEqual(try SettingsStore(settingsURL: urls.current).load(), legacySettings)
-        XCTAssertEqual(try Data(contentsOf: urls.legacy), legacyData)
-    }
-
-    func testCurrentSettingsWinWhenCurrentAndLegacyFilesBothExist() throws {
-        let urls = try uniqueMigrationURLs()
-        var currentSettings = PersistedSettings()
-        currentSettings.customization.defaultNewAppVolume = 0.21
-        var legacySettings = PersistedSettings()
-        legacySettings.customization.defaultNewAppVolume = 0.84
-        try SettingsStore(settingsURL: urls.current).save(currentSettings)
-        try SettingsStore(settingsURL: urls.legacy).save(legacySettings)
-        let currentData = try Data(contentsOf: urls.current)
-        let legacyData = try Data(contentsOf: urls.legacy)
-
-        let loaded = try SettingsStore(
-            settingsURL: urls.current,
-            legacySettingsURL: urls.legacy
-        ).load()
-
-        XCTAssertEqual(loaded, currentSettings)
-        XCTAssertEqual(try Data(contentsOf: urls.current), currentData)
-        XCTAssertEqual(try Data(contentsOf: urls.legacy), legacyData)
-    }
-
-    func testLegacySettingsStillLoadWhenMigrationDestinationCannotBeCreated() throws {
-        let urls = try uniqueMigrationURLs()
-        var legacySettings = PersistedSettings()
-        legacySettings.customization.defaultNewAppVolume = 0.63
-        try SettingsStore(settingsURL: urls.legacy).save(legacySettings)
-        let legacyData = try Data(contentsOf: urls.legacy)
-        let blockedDirectory = urls.current.deletingLastPathComponent()
-        try Data("not a directory".utf8).write(to: blockedDirectory)
-
-        let loaded = try SettingsStore(
-            settingsURL: urls.current,
-            legacySettingsURL: urls.legacy
-        ).load()
-
-        XCTAssertEqual(loaded, legacySettings)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: urls.current.path))
-        XCTAssertEqual(try Data(contentsOf: urls.legacy), legacyData)
-    }
-
     func testSaveAndLoadRoundTrip() throws {
         let url = uniqueSettingsURL()
         let store = SettingsStore(settingsURL: url)
@@ -404,17 +346,5 @@ final class SettingsStoreTests: XCTestCase {
 
     private func uniqueSettingsURL() -> URL {
         temporaryFileURL(prefix: "AuralisSettings", filename: "settings.json")
-    }
-
-    private func uniqueMigrationURLs() throws -> (current: URL, legacy: URL) {
-        let root = try temporaryDirectory(prefix: "AuralisSettingsMigration")
-        return (
-            current: root
-                .appendingPathComponent("Auralis", isDirectory: true)
-                .appendingPathComponent("settings.json"),
-            legacy: root
-                .appendingPathComponent("EQMacRep", isDirectory: true)
-                .appendingPathComponent("settings.json")
-        )
     }
 }

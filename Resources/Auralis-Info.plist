@@ -16,6 +16,10 @@
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>AuralisDebugLogPath</key>
+    <string>$(AURALIS_DEBUG_LOG_PATH)</string>
+    <key>AuralisDiagnosticsMode</key>
+    <string>$(AURALIS_DIAGNOSTICS_MODE)</string>
     <key>LSMinimumSystemVersion</key>
     <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
     <key>NSAudioCaptureUsageDescription</key>

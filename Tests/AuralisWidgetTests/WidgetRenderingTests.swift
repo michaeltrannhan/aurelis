@@ -31,7 +31,7 @@ final class WidgetRenderingTests: XCTestCase {
     func testEQViewRendersProductionLargeFamily() throws {
         try assertRenders(
             AuralisEQWidgetView(entry: makeEntry(hostState: .running).withFamily(.systemLarge)),
-            size: CGSize(width: 338, height: 354)
+            size: CGSize(width: 344, height: 344)
         )
     }
 
@@ -44,7 +44,7 @@ final class WidgetRenderingTests: XCTestCase {
         )
         try assertRenders(
             AuralisEQWidgetView(entry: entry.withFamily(.systemLarge)),
-            size: CGSize(width: 338, height: 354)
+            size: CGSize(width: 344, height: 344)
         )
     }
 

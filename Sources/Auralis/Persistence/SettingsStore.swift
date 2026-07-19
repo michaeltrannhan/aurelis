@@ -140,7 +140,6 @@ struct PersistedSettings: Codable, Equatable, Sendable {
 
 struct SettingsStore: Sendable {
     let settingsURL: URL
-    private let legacySettingsURL: URL?
     /// When set, all loaded and saved settings use this backend. Production
     /// launches use this to prevent a persisted debug-only mock selection from
     /// becoming the hidden runtime backend.
@@ -148,17 +147,14 @@ struct SettingsStore: Sendable {
 
     init(enforcedBackendMode: BackendMode? = nil) {
         settingsURL = Self.defaultSettingsURL()
-        legacySettingsURL = Self.defaultLegacySettingsURL()
         self.enforcedBackendMode = enforcedBackendMode
     }
 
     init(
         settingsURL: URL,
-        enforcedBackendMode: BackendMode? = nil,
-        legacySettingsURL: URL? = nil
+        enforcedBackendMode: BackendMode? = nil
     ) {
         self.settingsURL = settingsURL
-        self.legacySettingsURL = legacySettingsURL
         self.enforcedBackendMode = enforcedBackendMode
     }
 
@@ -167,24 +163,18 @@ struct SettingsStore: Sendable {
     }
 
     func loadWithRecovery() throws -> SettingsLoadResult {
-        if FileManager.default.fileExists(atPath: settingsURL.path) {
-            return try loadWithRecovery(from: settingsURL, isLegacyMigration: false)
-        }
-
-        guard let legacySettingsURL,
-              FileManager.default.fileExists(atPath: legacySettingsURL.path) else {
+        guard FileManager.default.fileExists(atPath: settingsURL.path) else {
             return SettingsLoadResult(
                 settings: enforcingBackendMode(in: PersistedSettings()),
                 recoveryNotice: nil
             )
         }
 
-        return try loadWithRecovery(from: legacySettingsURL, isLegacyMigration: true)
+        return try loadWithRecovery(from: settingsURL)
     }
 
     private func loadWithRecovery(
-        from sourceURL: URL,
-        isLegacyMigration: Bool
+        from sourceURL: URL
     ) throws -> SettingsLoadResult {
         let data = try Data(contentsOf: sourceURL)
         let decoded: PersistedSettings
@@ -205,17 +195,8 @@ struct SettingsStore: Sendable {
         }
 
         let normalized = enforcingBackendMode(in: decoded)
-        if isLegacyMigration {
-            // `save` writes atomically to the new location. The legacy file
-            // remains untouched so it can serve as a rollback copy. Keeping
-            // this write outside the decode catch also ensures a destination
-            // failure never quarantines a valid legacy source.
-            // A failed copy must not prevent startup with valid legacy
-            // settings. Normal persistence will retry the Auralis location
-            // when the user next changes or flushes settings.
-            try? save(normalized)
-        } else if normalized != decoded {
-            // Runtime safety does not depend on this best-effort migration:
+        if normalized != decoded {
+            // Runtime safety does not depend on this best-effort repair:
             // `load` already returns the normalized value and `save` also
             // enforces it. A later successful save will repair the file.
             try? save(normalized)
@@ -254,13 +235,6 @@ struct SettingsStore: Sendable {
         FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Auralis", isDirectory: true)
-            .appendingPathComponent("settings.json")
-    }
-
-    static func defaultLegacySettingsURL() -> URL {
-        FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("EQMacRep", isDirectory: true)
             .appendingPathComponent("settings.json")
     }
 

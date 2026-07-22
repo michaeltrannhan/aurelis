@@ -8,10 +8,12 @@ enum AppControlTargetResolver {
 
     static func resolve(
         rows: [DisplayableAppRow],
+        levels: [AudioAppIdentity: Double],
         frontmostBundleID: String?,
         selectedAppID: AudioAppIdentity?
     ) -> AudioAppIdentity? {
-        if let audible = rows.filter({ $0.level >= audibleThreshold }).max(by: { $0.level < $1.level }) {
+        let level: (DisplayableAppRow) -> Double = { levels[$0.identity] ?? 0 }
+        if let audible = rows.filter({ level($0) >= audibleThreshold }).max(by: { level($0) < level($1) }) {
             return audible.identity
         }
         if let frontmostBundleID,

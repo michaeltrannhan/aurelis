@@ -1,5 +1,7 @@
 import SwiftUI
 import AppKit
+import Combine
+import QuartzCore
 
 // UI structure adapted from FineTune's GPLv3 AppRow/AppRowControls.
 // https://github.com/ronitsingh10/FineTune
@@ -11,6 +13,10 @@ struct AppRowView: View {
     }
 
     let row: DisplayableAppRow
+    /// Live meter values. Held as a plain reference (not `@ObservedObject`) so a
+    /// level tick invalidates only the meter leaf views that observe it, never
+    /// this whole row.
+    let levels: AppLevelStore
     let rowHeight: Double
     let isSelected: Bool
     let onSelect: () -> Void
@@ -65,7 +71,7 @@ struct AppRowView: View {
 
     private var desktopBody: some View {
         HStack(spacing: 12) {
-            AudioLevelMeter(level: row.level, isMuted: row.settings.isMuted)
+            AudioLevelMeter(levels: levels, identity: row.identity, isMuted: row.settings.isMuted)
             appIcon.frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.displayName).font(.body.weight(.medium)).lineLimit(1)
@@ -326,7 +332,7 @@ struct AppRowView: View {
             }
 
             HStack(spacing: 7) {
-                CompactAudioLevelMeter(level: row.level, isMuted: row.settings.isMuted)
+                CompactAudioLevelMeter(levels: levels, identity: row.identity, isMuted: row.settings.isMuted)
 
                 Slider(value: Binding(
                     get: { row.settings.volume },
@@ -395,6 +401,7 @@ struct ConnectedAppRowView: View {
     var body: some View {
         AppRowView(
             row: row,
+            levels: store.appLevels,
             rowHeight: rowHeight,
             isSelected: isSelected,
             onSelect: onSelect,
@@ -522,53 +529,169 @@ final class AppIconCache {
     }
 }
 
-/// Horizontal live-level capsule sized for the menu-bar volume line. The old
-/// four-point-wide linear ProgressView rendered as a crushed horizontal track.
-private struct CompactAudioLevelMeter: View {
-    let level: Double
+/// The live meter is hosted by AppKit/Core Animation so a ~10 Hz level update
+/// changes only a few layer properties. SwiftUI receives no observation event,
+/// avoiding a hosting-view layout pass for every audio meter tick.
+private struct CompactAudioLevelMeter: NSViewRepresentable {
+    let levels: AppLevelStore
+    let identity: AudioAppIdentity
     let isMuted: Bool
 
-    private var normalizedLevel: Double {
-        min(max(level.isFinite ? level : 0, 0), 1)
+    func makeNSView(context: Context) -> AppKitAudioLevelMeterView {
+        let view = AppKitAudioLevelMeterView(style: .compact)
+        view.configure(levels: levels, identity: identity, isMuted: isMuted)
+        return view
     }
 
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Color.secondary.opacity(0.18))
-                Capsule()
-                    .fill(isMuted ? Color.secondary : Color.green)
-                    .frame(width: proxy.size.width * normalizedLevel)
-            }
-        }
-        .frame(width: 24, height: 5)
-        .animation(.linear(duration: 0.08), value: normalizedLevel)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Audio level")
-        .accessibilityValue(isMuted ? "Muted" : "\(Int((normalizedLevel * 100).rounded())) percent")
+    func updateNSView(_ view: AppKitAudioLevelMeterView, context: Context) {
+        view.configure(levels: levels, identity: identity, isMuted: isMuted)
     }
 }
 
-private struct AudioLevelMeter: View {
-    let level: Double
+private struct AudioLevelMeter: NSViewRepresentable {
+    let levels: AppLevelStore
+    let identity: AudioAppIdentity
     let isMuted: Bool
-    private let thresholds = [0.01, 0.03, 0.10, 0.20, 0.32, 0.50, 0.70, 0.90]
 
-    var body: some View {
-        VStack(spacing: 1) {
-            ForEach(thresholds.indices.reversed(), id: \.self) { index in
-                Capsule().fill(color(index).opacity(level >= thresholds[index] ? 1 : 0.18))
-            }
-        }
-        .frame(width: 10, height: 34)
-        .animation(.linear(duration: 0.08), value: level)
+    func makeNSView(context: Context) -> AppKitAudioLevelMeterView {
+        let view = AppKitAudioLevelMeterView(style: .segmented)
+        view.configure(levels: levels, identity: identity, isMuted: isMuted)
+        return view
     }
 
-    private func color(_ index: Int) -> Color {
-        if isMuted { return .secondary }
-        if index >= 7 { return .red }
-        if index >= 5 { return .yellow }
-        return .green
+    func updateNSView(_ view: AppKitAudioLevelMeterView, context: Context) {
+        view.configure(levels: levels, identity: identity, isMuted: isMuted)
+    }
+}
+
+@MainActor
+private final class AppKitAudioLevelMeterView: NSView {
+    enum Style {
+        case compact
+        case segmented
+    }
+
+    private static let thresholds = [0.01, 0.03, 0.10, 0.20, 0.32, 0.50, 0.70, 0.90]
+
+    private let style: Style
+    private let backgroundLayer = CALayer()
+    private let fillLayer = CALayer()
+    private let segmentLayers: [CALayer]
+    private weak var levelStore: AppLevelStore?
+    private var identity: AudioAppIdentity?
+    private var levelSubscription: AnyCancellable?
+    private var currentLevel = 0.0
+    private var isMuted = false
+
+    init(style: Style) {
+        self.style = style
+        segmentLayers = style == .segmented
+            ? Self.thresholds.map { _ in CALayer() }
+            : []
+        super.init(frame: .zero)
+
+        wantsLayer = true
+        layer = CALayer()
+        switch style {
+        case .compact:
+            layer?.addSublayer(backgroundLayer)
+            layer?.addSublayer(fillLayer)
+        case .segmented:
+            segmentLayers.forEach { layer?.addSublayer($0) }
+        }
+        setAccessibilityElement(true)
+        setAccessibilityRole(.levelIndicator)
+        setAccessibilityLabel("Audio level")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is unavailable")
+    }
+
+    func configure(
+        levels: AppLevelStore,
+        identity: AudioAppIdentity,
+        isMuted: Bool
+    ) {
+        let sourceChanged = levelStore !== levels || self.identity != identity
+        levelStore = levels
+        self.identity = identity
+        self.isMuted = isMuted
+
+        if sourceChanged {
+            levelSubscription = levels.$levels.sink { [weak self] values in
+                self?.apply(level: values[identity] ?? 0)
+            }
+        } else {
+            apply(level: levels.level(for: identity))
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        updateLayers()
+    }
+
+    private func apply(level: Double) {
+        currentLevel = level.isFinite ? min(max(level, 0), 1) : 0
+        setAccessibilityValue(
+            isMuted
+                ? "Muted"
+                : "\(Int((currentLevel * 100).rounded())) percent"
+        )
+        updateLayers()
+    }
+
+    private func updateLayers() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+
+        switch style {
+        case .compact:
+            let radius = bounds.height / 2
+            backgroundLayer.frame = bounds
+            backgroundLayer.cornerRadius = radius
+            backgroundLayer.backgroundColor = NSColor.secondaryLabelColor
+                .withAlphaComponent(0.18).cgColor
+            fillLayer.frame = CGRect(
+                x: bounds.minX,
+                y: bounds.minY,
+                width: bounds.width * currentLevel,
+                height: bounds.height
+            )
+            fillLayer.cornerRadius = radius
+            fillLayer.backgroundColor = (isMuted
+                ? NSColor.secondaryLabelColor
+                : NSColor.systemGreen).cgColor
+
+        case .segmented:
+            let spacing: CGFloat = 1
+            let segmentHeight = max(
+                (bounds.height - spacing * CGFloat(segmentLayers.count - 1))
+                    / CGFloat(segmentLayers.count),
+                0
+            )
+            for index in segmentLayers.indices {
+                let segment = segmentLayers[index]
+                segment.frame = CGRect(
+                    x: bounds.minX,
+                    y: bounds.minY + CGFloat(index) * (segmentHeight + spacing),
+                    width: bounds.width,
+                    height: segmentHeight
+                )
+                segment.cornerRadius = segmentHeight / 2
+                segment.backgroundColor = segmentColor(index).cgColor
+                segment.opacity = currentLevel >= Self.thresholds[index] ? 1 : 0.18
+            }
+        }
+    }
+
+    private func segmentColor(_ index: Int) -> NSColor {
+        if isMuted { return .secondaryLabelColor }
+        if index >= 7 { return .systemRed }
+        if index >= 5 { return .systemYellow }
+        return .systemGreen
     }
 }

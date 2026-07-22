@@ -40,6 +40,10 @@ final class AudioControlStore: ObservableObject {
     @Published private(set) var outputVolumeState: OutputVolumeState = .init()
     @Published private(set) var deviceVolumeStates: [String: OutputVolumeState] = [:]
 
+    /// Live meter levels live on their own object so the ~10 Hz stream does not
+    /// invalidate views bound to this store. See [[AppLevelStore]].
+    let appLevels = AppLevelStore()
+
     private var bootstrapTask: Task<Void, Never>?
     private var topologyObservationTask: Task<Void, Never>?
     private var outputObservationTask: Task<Void, Never>?
@@ -278,15 +282,15 @@ final class AudioControlStore: ObservableObject {
     }
 
     private func applyAppLevels(_ levels: [AudioAppIdentity: Double]) {
-        var changed = false
-        for index in appSnapshots.indices {
-            let level = min(max(levels[appSnapshots[index].identity] ?? 0, 0), 1)
-            if abs(appSnapshots[index].level - level) > 0.0001 {
-                appSnapshots[index].level = level
-                changed = true
-            }
+        // Publish only to the dedicated level store. Writing meter values into
+        // `appSnapshots`/`displayRows` would fire this store's objectWillChange
+        // ~10x/sec and force a full-window SwiftUI relayout every tick.
+        var clamped: [AudioAppIdentity: Double] = [:]
+        clamped.reserveCapacity(levels.count)
+        for snapshot in appSnapshots {
+            clamped[snapshot.identity] = min(max(levels[snapshot.identity] ?? 0, 0), 1)
         }
-        if changed { rebuildDisplayRows() }
+        appLevels.apply(clamped)
     }
 
     // MARK: - Permission lifecycle
@@ -1162,7 +1166,6 @@ final class AudioControlStore: ObservableObject {
                 displayName: snapshot?.displayName ?? appSettings.displayName,
                 isActive: active,
                 isPinned: pinned,
-                level: snapshot?.level ?? 0,
                 settings: appSettings
             )
         }.sorted { lhs, rhs in

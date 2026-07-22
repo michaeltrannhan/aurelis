@@ -35,7 +35,9 @@ final class CoreAudioPeakMeter {
 /// single atomic peak publication.
 final class CoreAudioPCMRenderer {
     static let realtimeHeapAllocationBudget = 0
-    static let callbackBudgetMicroseconds = 2_000.0
+    /// At 48 kHz with 128-frame callbacks, 250 µs keeps one fully active tap
+    /// below roughly ten percent of one core even in the unoptimized test build.
+    static let callbackBudgetMicroseconds = 250.0
 
     let inputFormat: CoreAudioPCMFormat
     let outputFormat: CoreAudioPCMFormat
@@ -135,35 +137,41 @@ final class CoreAudioPCMRenderer {
         var peak: Float = 0
         var globalOutputChannel = 0
 
-        for frame in 0..<frameCount {
+        var frame = 0
+        while frame < frameCount {
             gainScratch[frame] = localRamp.next(targetGain: targetGain)
+            frame += 1
         }
 
-        for bufferIndex in 0..<outputs.count {
+        var bufferIndex = 0
+        while bufferIndex < outputs.count {
             let buffer = outputs[bufferIndex]
             let bufferChannelCount = Int(buffer.mNumberChannels)
             guard bufferChannelCount > 0,
                   let samples = buffer.mData?.assumingMemoryBound(to: Float.self) else {
                 return
             }
-            for frame in 0..<frameCount {
+            frame = 0
+            while frame < frameCount {
                 let frameOffset = frame * bufferChannelCount
-                for localChannel in 0..<bufferChannelCount {
+                var localChannel = 0
+                while localChannel < bufferChannelCount {
                     let outputChannel = globalOutputChannel + localChannel
-                    guard outputChannel < outputFormat.channelCount else { continue }
-                    let inputChannel = outputChannel % inputFormat.channelCount
-                    let input = inputScratch[frame * inputFormat.channelCount + inputChannel]
-                    let equalized = eqProcessor.processSample(
-                        input,
-                        channel: outputChannel,
-                        snapshot: eqSnapshot
-                    )
-                    let output = CoreAudioSoftLimiter.apply(equalized * gainScratch[frame])
-                    samples[frameOffset + localChannel] = output
-                    peak = max(peak, abs(output))
+                    if outputChannel < outputFormat.channelCount {
+                        let inputChannel = outputChannel % inputFormat.channelCount
+                        let input = inputScratch[frame * inputFormat.channelCount + inputChannel]
+                        let equalized = eqSnapshot.processSample(input, channel: outputChannel)
+                        let output = CoreAudioSoftLimiter.apply(equalized * gainScratch[frame])
+                        samples[frameOffset + localChannel] = output
+                        let magnitude = output < 0 ? -output : output
+                        if magnitude > peak { peak = magnitude }
+                    }
+                    localChannel += 1
                 }
+                frame += 1
             }
             globalOutputChannel += bufferChannelCount
+            bufferIndex += 1
         }
 
         ramp = localRamp
@@ -179,6 +187,8 @@ final class CoreAudioPCMRenderer {
         gainScratch: UInt,
         coefficientsA: UInt,
         coefficientsB: UInt,
+        activeSectionsA: UInt,
+        activeSectionsB: UInt,
         delays: UInt
     ) {
         let eq = eqProcessor.storageFingerprint
@@ -187,6 +197,8 @@ final class CoreAudioPCMRenderer {
             UInt(bitPattern: gainScratch.baseAddress!),
             eq.coefficientsA,
             eq.coefficientsB,
+            eq.activeSectionsA,
+            eq.activeSectionsB,
             eq.delays
         )
     }
@@ -197,21 +209,27 @@ final class CoreAudioPCMRenderer {
         frameCount: Int
     ) {
         var globalInputChannel = 0
-        for bufferIndex in 0..<inputs.count {
+        var bufferIndex = 0
+        while bufferIndex < inputs.count {
             let buffer = inputs[bufferIndex]
             let bufferChannelCount = Int(buffer.mNumberChannels)
             guard bufferChannelCount > 0,
                   let samples = buffer.mData?.assumingMemoryBound(to: Float.self) else {
                 return
             }
-            for frame in 0..<frameCount {
+            var frame = 0
+            while frame < frameCount {
                 let frameOffset = frame * bufferChannelCount
                 let scratchOffset = frame * inputFormat.channelCount + globalInputChannel
-                for localChannel in 0..<bufferChannelCount {
+                var localChannel = 0
+                while localChannel < bufferChannelCount {
                     inputScratch[scratchOffset + localChannel] = samples[frameOffset + localChannel]
+                    localChannel += 1
                 }
+                frame += 1
             }
             globalInputChannel += bufferChannelCount
+            bufferIndex += 1
         }
     }
 
@@ -224,25 +242,30 @@ final class CoreAudioPCMRenderer {
 
         var capacity = Int.max
         var channelTotal = 0
-        for index in 0..<buffers.count {
+        var index = 0
+        while index < buffers.count {
             let buffer = buffers[index]
             let channels = Int(buffer.mNumberChannels)
             guard channels == format.bufferChannelCounts[index],
                   buffer.mData != nil else { return 0 }
             channelTotal += channels
             let sampleCount = Int(buffer.mDataByteSize) / MemoryLayout<Float>.stride
-            capacity = min(capacity, sampleCount / channels)
+            let bufferCapacity = sampleCount / channels
+            if bufferCapacity < capacity { capacity = bufferCapacity }
+            index += 1
         }
         return channelTotal == format.channelCount && capacity != Int.max ? capacity : 0
     }
 
     @inline(__always)
     private static func zeroAll(_ outputs: UnsafeMutableAudioBufferListPointer) {
-        for index in 0..<outputs.count {
+        var index = 0
+        while index < outputs.count {
             let buffer = outputs[index]
             if let data = buffer.mData, buffer.mDataByteSize > 0 {
                 memset(data, 0, Int(buffer.mDataByteSize))
             }
+            index += 1
         }
     }
 }

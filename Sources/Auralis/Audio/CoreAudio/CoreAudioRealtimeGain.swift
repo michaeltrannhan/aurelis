@@ -24,12 +24,23 @@ struct CoreAudioGainRamp {
     var currentGain: Float
     var coefficient: Float
 
+    @inline(__always)
     mutating func next(targetGain: Float) -> Float {
-        let target = targetGain.isFinite ? max(targetGain, 0) : 1
+        let target = targetGain.isFinite ? (targetGain > 0 ? targetGain : 0) : 1
         if !currentGain.isFinite { currentGain = target }
-        let coefficient = coefficient.isFinite ? min(max(coefficient, 0), 1) : 1
-        currentGain += (target - currentGain) * coefficient
-        if abs(target - currentGain) < 1.0e-7 { currentGain = target }
+        let clampedCoefficient: Float
+        if !coefficient.isFinite {
+            clampedCoefficient = 1
+        } else if coefficient < 0 {
+            clampedCoefficient = 0
+        } else if coefficient > 1 {
+            clampedCoefficient = 1
+        } else {
+            clampedCoefficient = coefficient
+        }
+        currentGain += (target - currentGain) * clampedCoefficient
+        let remainder = target - currentGain
+        if remainder > -1.0e-7, remainder < 1.0e-7 { currentGain = target }
         return currentGain
     }
 
@@ -50,9 +61,10 @@ enum CoreAudioSoftLimiter {
     static let threshold: Float = 0.95
     static let ceiling: Float = 1.0
 
+    @inline(__always)
     static func apply(_ sample: Float) -> Float {
         guard sample.isFinite else { return 0 }
-        let absolute = abs(sample)
+        let absolute = sample < 0 ? -sample : sample
         guard absolute >= 1.0e-20 else { return 0 }
         guard absolute > threshold else { return sample }
         let headroom = ceiling - threshold

@@ -50,7 +50,8 @@ struct AuralisApp: App {
     }
 
     private var menuBarSymbol: String {
-        let loudest = store.displayRows.max { $0.level < $1.level }
+        let levels = store.appLevels.levels
+        let loudest = store.displayRows.max { (levels[$0.identity] ?? 0) < (levels[$1.identity] ?? 0) }
         return MenuBarIconState.symbolName(
             style: store.settings.customization.menuBarIconStyle,
             volume: loudest?.settings.volume ?? 1,

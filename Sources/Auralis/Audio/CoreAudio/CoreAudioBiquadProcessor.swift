@@ -2,8 +2,70 @@ import Darwin.C
 import Foundation
 
 struct CoreAudioBiquadRenderSnapshot {
-    fileprivate let coefficients: UnsafePointer<Double>
-    fileprivate let isEnabled: Bool
+    let coefficients: UnsafePointer<Double>
+    let activeSectionIndices: UnsafePointer<Int32>
+    let activeSectionCount: Int
+    let delays: UnsafeMutablePointer<Double>
+    let sectionCount: Int
+    let channelCount: Int
+
+    var isEnabled: Bool { activeSectionCount > 0 }
+
+    /// CPU-hot render operation. Keeping the raw storage in this value allows
+    /// the callback to inline the fixed pointer walk without crossing two
+    /// class-method wrappers for every sample.
+    @inline(__always)
+    func processSample(_ input: Float, channel: Int) -> Float {
+        guard channel >= 0, channel < channelCount, input.isFinite else {
+            if channel >= 0, channel < channelCount { resetDelayBuffers(for: channel) }
+            return 0
+        }
+        guard activeSectionCount > 0 else { return input }
+
+        var sample = Double(input)
+        let channelDelayOffset = channel * sectionCount * 2
+        var activeIndex = 0
+        while activeIndex < activeSectionCount {
+            let section = Int(activeSectionIndices[activeIndex])
+            let coefficientOffset = section * 5
+            let delayOffset = channelDelayOffset + section * 2
+
+            let output = coefficients[coefficientOffset] * sample + delays[delayOffset]
+            let delay1 = coefficients[coefficientOffset + 1] * sample
+                - coefficients[coefficientOffset + 3] * output
+                + delays[delayOffset + 1]
+            let delay2 = coefficients[coefficientOffset + 2] * sample
+                - coefficients[coefficientOffset + 4] * output
+
+            delays[delayOffset] = Self.flushDenormal(delay1)
+            delays[delayOffset + 1] = Self.flushDenormal(delay2)
+            sample = Self.flushDenormal(output)
+            activeIndex += 1
+        }
+
+        let floatLimit = Double(Float.greatestFiniteMagnitude)
+        guard sample.isFinite, sample >= -floatLimit, sample <= floatLimit else {
+            resetDelayBuffers(for: channel)
+            return 0
+        }
+        return Float(sample)
+    }
+
+    @inline(__always)
+    private func resetDelayBuffers(for channel: Int) {
+        let offset = channel * sectionCount * 2
+        memset(
+            delays + offset,
+            0,
+            sectionCount * 2 * MemoryLayout<Double>.stride
+        )
+    }
+
+    @inline(__always)
+    private static func flushDenormal(_ value: Double) -> Double {
+        let threshold = 1.0e-24
+        return value > -threshold && value < threshold ? 0 : value
+    }
 }
 
 /// Queue-confined multi-channel biquad cascade. Coefficients and delay storage
@@ -11,17 +73,18 @@ struct CoreAudioBiquadRenderSnapshot {
 /// completely before publishing it, so render observes one immutable snapshot
 /// for the entire callback without locks, allocation, or reference swapping.
 final class CoreAudioBiquadProcessor {
-    private static let denormalThreshold = 1.0e-24
     private static let coefficientMagnitudeLimit = 64.0
 
     let sectionCount: Int
     let channelCount: Int
     private let coefficientBankA: UnsafeMutableBufferPointer<Double>
     private let coefficientBankB: UnsafeMutableBufferPointer<Double>
+    private let activeSectionBankA: UnsafeMutableBufferPointer<Int32>
+    private let activeSectionBankB: UnsafeMutableBufferPointer<Int32>
     private let delays: UnsafeMutableBufferPointer<Double>
     private var activeBankIndex = 0
-    private var bankAEnabled = false
-    private var bankBEnabled = false
+    private var bankAActiveSectionCount = 0
+    private var bankBActiveSectionCount = 0
 
     init(sectionCount: Int, channelCount: Int = 2) {
         self.sectionCount = max(sectionCount, 1)
@@ -29,23 +92,30 @@ final class CoreAudioBiquadProcessor {
         let coefficientCount = self.sectionCount * 5
         coefficientBankA = .allocate(capacity: coefficientCount)
         coefficientBankB = .allocate(capacity: coefficientCount)
+        activeSectionBankA = .allocate(capacity: self.sectionCount)
+        activeSectionBankB = .allocate(capacity: self.sectionCount)
         delays = .allocate(capacity: self.channelCount * self.sectionCount * 2)
         Self.initializeUnity(coefficientBankA, sectionCount: self.sectionCount)
         Self.initializeUnity(coefficientBankB, sectionCount: self.sectionCount)
+        activeSectionBankA.initialize(repeating: 0)
+        activeSectionBankB.initialize(repeating: 0)
         delays.initialize(repeating: 0)
     }
 
     deinit {
         coefficientBankA.deallocate()
         coefficientBankB.deallocate()
+        activeSectionBankA.deallocate()
+        activeSectionBankB.deallocate()
         delays.deallocate()
     }
 
     func update(coefficients: [Double], isEnabled: Bool) {
         let destination = activeBankIndex == 0 ? coefficientBankB : coefficientBankA
+        let activeSections = activeBankIndex == 0 ? activeSectionBankB : activeSectionBankA
         let destinationIndex = activeBankIndex == 0 ? 1 : 0
         let hasExpectedCount = coefficients.count == sectionCount * 5
-        var hasNonUnitySection = false
+        var activeSectionCount = 0
 
         for section in 0..<sectionCount {
             let destinationOffset = section * 5
@@ -54,20 +124,25 @@ final class CoreAudioBiquadProcessor {
                 Self.writeUnity(to: destination, offset: destinationOffset)
                 continue
             }
+            var sectionIsUnity = true
             for coefficient in 0..<5 {
                 let value = coefficients[destinationOffset + coefficient]
                 destination[destinationOffset + coefficient] = value
                 if abs(value - CoreAudioBiquadMath.unityCoefficients[coefficient]) > 1.0e-12 {
-                    hasNonUnitySection = true
+                    sectionIsUnity = false
                 }
+            }
+            if !sectionIsUnity {
+                activeSections[activeSectionCount] = Int32(section)
+                activeSectionCount += 1
             }
         }
 
-        let enabled = isEnabled && hasNonUnitySection
+        if !isEnabled { activeSectionCount = 0 }
         if destinationIndex == 0 {
-            bankAEnabled = enabled
+            bankAActiveSectionCount = activeSectionCount
         } else {
-            bankBEnabled = enabled
+            bankBActiveSectionCount = activeSectionCount
         }
         activeBankIndex = destinationIndex
     }
@@ -85,12 +160,20 @@ final class CoreAudioBiquadProcessor {
         if activeBankIndex == 0 {
             return CoreAudioBiquadRenderSnapshot(
                 coefficients: UnsafePointer(coefficientBankA.baseAddress!),
-                isEnabled: bankAEnabled
+                activeSectionIndices: UnsafePointer(activeSectionBankA.baseAddress!),
+                activeSectionCount: bankAActiveSectionCount,
+                delays: delays.baseAddress!,
+                sectionCount: sectionCount,
+                channelCount: channelCount
             )
         }
         return CoreAudioBiquadRenderSnapshot(
             coefficients: UnsafePointer(coefficientBankB.baseAddress!),
-            isEnabled: bankBEnabled
+            activeSectionIndices: UnsafePointer(activeSectionBankB.baseAddress!),
+            activeSectionCount: bankBActiveSectionCount,
+            delays: delays.baseAddress!,
+            sectionCount: sectionCount,
+            channelCount: channelCount
         )
     }
 
@@ -100,41 +183,7 @@ final class CoreAudioBiquadProcessor {
         channel: Int,
         snapshot: CoreAudioBiquadRenderSnapshot
     ) -> Float {
-        guard channel >= 0, channel < channelCount, input.isFinite else {
-            if channel >= 0, channel < channelCount { resetDelayBuffers(for: channel) }
-            return 0
-        }
-        guard snapshot.isEnabled else { return input }
-
-        var sample = Double(input)
-        let channelDelayOffset = channel * sectionCount * 2
-        for section in 0..<sectionCount {
-            let coefficientOffset = section * 5
-            let delayOffset = channelDelayOffset + section * 2
-            let coefficients = snapshot.coefficients
-
-            let output = coefficients[coefficientOffset] * sample + delays[delayOffset]
-            let delay1 = coefficients[coefficientOffset + 1] * sample
-                - coefficients[coefficientOffset + 3] * output
-                + delays[delayOffset + 1]
-            let delay2 = coefficients[coefficientOffset + 2] * sample
-                - coefficients[coefficientOffset + 4] * output
-
-            guard output.isFinite, delay1.isFinite, delay2.isFinite else {
-                resetDelayBuffers(for: channel)
-                return 0
-            }
-            delays[delayOffset] = Self.flushDenormal(delay1)
-            delays[delayOffset + 1] = Self.flushDenormal(delay2)
-            sample = Self.flushDenormal(output)
-        }
-        guard sample.isFinite,
-              abs(sample) <= Double(Float.greatestFiniteMagnitude) else {
-            resetDelayBuffers(for: channel)
-            return 0
-        }
-        let result = Float(sample)
-        return result.isFinite ? result : 0
+        snapshot.processSample(input, channel: channel)
     }
 
     /// Convenience interleaved entry point used by focused DSP tests. The
@@ -162,10 +211,18 @@ final class CoreAudioBiquadProcessor {
         }
     }
 
-    var storageFingerprint: (coefficientsA: UInt, coefficientsB: UInt, delays: UInt) {
+    var storageFingerprint: (
+        coefficientsA: UInt,
+        coefficientsB: UInt,
+        activeSectionsA: UInt,
+        activeSectionsB: UInt,
+        delays: UInt
+    ) {
         (
             UInt(bitPattern: coefficientBankA.baseAddress!),
             UInt(bitPattern: coefficientBankB.baseAddress!),
+            UInt(bitPattern: activeSectionBankA.baseAddress!),
+            UInt(bitPattern: activeSectionBankB.baseAddress!),
             UInt(bitPattern: delays.baseAddress!)
         )
     }
@@ -178,11 +235,6 @@ final class CoreAudioBiquadProcessor {
             0,
             sectionCount * 2 * MemoryLayout<Double>.stride
         )
-    }
-
-    @inline(__always)
-    private static func flushDenormal(_ value: Double) -> Double {
-        abs(value) < denormalThreshold ? 0 : value
     }
 
     private static func initializeUnity(

@@ -307,6 +307,8 @@ final class CoreAudioPCMRendererTests: XCTestCase {
         XCTAssertEqual(before.gainScratch, after.gainScratch)
         XCTAssertEqual(before.coefficientsA, after.coefficientsA)
         XCTAssertEqual(before.coefficientsB, after.coefficientsB)
+        XCTAssertEqual(before.activeSectionsA, after.activeSectionsA)
+        XCTAssertEqual(before.activeSectionsB, after.activeSectionsB)
         XCTAssertEqual(before.delays, after.delays)
         if ProcessInfo.processInfo.environment["AURALIS_INSTRUMENTED_TESTS"] != "1" {
             XCTAssertLessThan(
@@ -352,6 +354,8 @@ final class CoreAudioPCMRendererTests: XCTestCase {
         XCTAssertEqual(after.gainScratch, before.gainScratch)
         XCTAssertEqual(after.coefficientsA, before.coefficientsA)
         XCTAssertEqual(after.coefficientsB, before.coefficientsB)
+        XCTAssertEqual(after.activeSectionsA, before.activeSectionsA)
+        XCTAssertEqual(after.activeSectionsB, before.activeSectionsB)
         XCTAssertEqual(after.delays, before.delays)
         XCTAssertTrue(output.samples(inBuffer: 0).allSatisfy(\.isFinite))
         if ProcessInfo.processInfo.environment["AURALIS_INSTRUMENTED_TESTS"] != "1" {

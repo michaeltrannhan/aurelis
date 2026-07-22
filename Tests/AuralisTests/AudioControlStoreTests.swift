@@ -66,7 +66,7 @@ final class AudioControlStoreTests: XCTestCase {
         XCTAssertEqual(store.displayRows.count, 1)
         XCTAssertEqual(store.displayRows[0].displayName, "Music")
         XCTAssertTrue(store.displayRows[0].isActive)
-        XCTAssertEqual(store.displayRows[0].level, 0.8)
+        XCTAssertEqual(store.appSnapshots[0].level, 0.8)
         XCTAssertEqual(store.settings.appDisplayOrder, [music])
     }
 
@@ -82,7 +82,6 @@ final class AudioControlStoreTests: XCTestCase {
         XCTAssertEqual(store.displayRows.count, 1)
         XCTAssertEqual(store.displayRows[0].displayName, "Music")
         XCTAssertEqual(store.displayRows[0].settings.volume, 1)
-        XCTAssertEqual(store.displayRows[0].level, 0.6)
         XCTAssertEqual(store.settings.appSettings[music]?.displayName, "Music")
     }
 
@@ -98,8 +97,8 @@ final class AudioControlStoreTests: XCTestCase {
         )
         try await store.refresh()
         let updated = expectation(description: "meter level published")
-        let cancellable = store.$displayRows.sink { rows in
-            if rows.first?.level == 0.75 { updated.fulfill() }
+        let cancellable = store.appLevels.$levels.sink { levels in
+            if levels[music] == 0.75 { updated.fulfill() }
         }
 
         await store.startBackendObservation()
@@ -107,7 +106,7 @@ final class AudioControlStoreTests: XCTestCase {
         await fulfillment(of: [updated], timeout: 1)
         await store.stopBackendObservation()
 
-        XCTAssertEqual(store.displayRows.first?.level, 0.75)
+        XCTAssertEqual(store.appLevels.level(for: music), 0.75)
         XCTAssertEqual(backend.fetchCount, 1, "Meter polling must not repeat process/device discovery")
         withExtendedLifetime(cancellable) {}
     }

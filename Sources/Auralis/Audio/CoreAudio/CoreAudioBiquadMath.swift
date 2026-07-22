@@ -30,6 +30,11 @@ enum CoreAudioBiquadMath {
             return unityCoefficients
         }
 
+        // A zero-gain peaking filter is mathematically transparent, but the
+        // cookbook coefficients are not the literal unity tuple. Returning
+        // unity here lets the render path omit untouched EQ bands entirely.
+        guard abs(gainDB) >= 0.0001 else { return unityCoefficients }
+
         let amplitude = pow(10, gainDB / 40)
         let omega = 2 * Double.pi * frequency / sampleRate
         let sine = sin(omega)

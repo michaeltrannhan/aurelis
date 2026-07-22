@@ -35,6 +35,7 @@ struct AppControlStoreExecutor {
     func perform(_ action: AppControlAction, frontmostBundleID: String?, selectedAppID: AudioAppIdentity?) {
         guard let identity = AppControlTargetResolver.resolve(
             rows: store.displayRows,
+            levels: store.appLevels.levels,
             frontmostBundleID: frontmostBundleID,
             selectedAppID: selectedAppID
         ), let current = store.displayRows.first(where: { $0.identity == identity })?.settings else {

@@ -214,6 +214,7 @@ final class ExternalControlsCoordinator: ObservableObject {
         let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         guard let identity = AppControlTargetResolver.resolve(
             rows: rows,
+            levels: store.appLevels.levels,
             frontmostBundleID: frontmost,
             selectedAppID: nil
         ), let row = rows.first(where: { $0.identity == identity }) else { return }

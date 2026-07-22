@@ -48,7 +48,13 @@ final class CoreAudioGraphicEQProcessor {
         processor.process(input: input, output: output, frameCount: frameCount)
     }
 
-    var storageFingerprint: (coefficientsA: UInt, coefficientsB: UInt, delays: UInt) {
+    var storageFingerprint: (
+        coefficientsA: UInt,
+        coefficientsB: UInt,
+        activeSectionsA: UInt,
+        activeSectionsB: UInt,
+        delays: UInt
+    ) {
         processor.storageFingerprint
     }
 

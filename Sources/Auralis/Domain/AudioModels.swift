@@ -318,7 +318,6 @@ struct DisplayableAppRow: Identifiable, Equatable, Sendable {
     var displayName: String
     var isActive: Bool
     var isPinned: Bool
-    var level: Double
     var settings: AppAudioSettings
 
     var id: AudioAppIdentity { identity }

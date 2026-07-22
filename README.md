@@ -6,6 +6,36 @@ The application, executable, Swift/Xcode targets, widget, bundle identifiers, UR
 
 Signed builds require the `com.michaeltrannhan.Auralis`, `com.michaeltrannhan.Auralis.Widget`, and `group.com.michaeltrannhan.Auralis` capabilities in the selected Apple Developer team. On first launch, grant Screen & System Audio Recording and Accessibility, then add the widget from the gallery.
 
+## Install
+
+Prerequisites: Xcode with an Apple ID signed in under **Settings → Accounts**, and [xcodegen](https://github.com/yonaskolb/XcodeGen):
+
+```sh
+brew install xcodegen
+```
+
+One command builds the signed Release app, installs it, registers the desktop widget, and launches Auralis:
+
+```sh
+Scripts/install-app.sh
+```
+
+This installs to `/Applications`. For a per-user install that needs no admin rights:
+
+```sh
+Scripts/install-app.sh --user
+```
+
+which installs to `~/Applications` instead. Keep only one installed copy: two `Auralis.app` bundles share one bundle identifier, which duplicates the widget gallery entry and confuses AppIntent delivery; the installer refuses to proceed when it detects a second copy.
+
+After the first launch:
+
+1. Grant **Screen & System Audio Recording** when prompted (required to see and control per-app audio).
+2. Grant **Accessibility** when prompted (required for media-key and popup behavior).
+3. Click the date/time in the menu bar → **Edit Widgets** → search **Auralis** and drag a widget to the desktop.
+
+Useful flags: `--skip-build` reinstalls the last Release build, `--no-launch` installs without starting the app. `Scripts/install-app.sh --help` lists all options.
+
 ## Build
 
 ```sh
@@ -51,7 +81,7 @@ bounded local files `~/Library/Logs/Auralis/Auralis.log` and
 `Auralis.log.1`. There is no remote telemetry or user/audio-content collection;
 those two files can be attached to a bug report.
 
-`build-debug-app.sh` and `build-release-app.sh` are the two build entry points.
+`build-debug-app.sh` and `build-release-app.sh` are the two build entry points; `install-app.sh` chains the Release build into a full installation.
 Both use the shared internal builder to regenerate the Xcode project via
 [xcodegen](https://github.com/yonaskolb/XcodeGen), build via `xcodebuild`,
 validate the embedded widget and serialized App Intent parameters, and reject a

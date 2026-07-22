@@ -20,6 +20,27 @@ final class CoreAudioBiquadMathTests: XCTestCase {
         let coefficients = CoreAudioBiquadMath.coefficientsForEQCurve(EQCurve(), sampleRate: 48000)
 
         XCTAssertEqual(coefficients.count, EQCurve.bandCount * 5)
+        XCTAssertEqual(
+            coefficients,
+            CoreAudioBiquadMath.unityCoefficientsForSections(EQCurve.bandCount)
+        )
+    }
+
+    func testRenderSnapshotContainsOnlyChangedEQSections() {
+        var curve = EQCurve()
+        curve.setGain(6, at: 5)
+        let processor = CoreAudioBiquadProcessor(
+            sectionCount: EQCurve.bandCount,
+            channelCount: 2
+        )
+        processor.update(
+            coefficients: CoreAudioBiquadMath.coefficientsForEQCurve(curve, sampleRate: 48_000),
+            isEnabled: true
+        )
+
+        let snapshot = processor.renderSnapshot()
+        XCTAssertEqual(snapshot.activeSectionCount, 1)
+        XCTAssertEqual(snapshot.activeSectionIndices[0], 5)
     }
 
     func testBandsAtOrAboveNyquistBypass() {

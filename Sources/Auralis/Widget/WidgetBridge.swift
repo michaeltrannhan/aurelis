@@ -213,7 +213,7 @@ final class WidgetBridge: ObservableObject {
                 displayName: row.displayName,
                 isActive: row.isActive,
                 isPinned: row.isPinned,
-                level: row.level,
+                level: store.appLevels.level(for: row.identity),
                 volume: row.settings.volume,
                 isMuted: row.settings.isMuted,
                 boost: row.settings.boost.rawValue,

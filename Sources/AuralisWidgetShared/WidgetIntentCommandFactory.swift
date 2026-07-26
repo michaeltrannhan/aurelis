@@ -51,6 +51,34 @@ public enum WidgetIntentCommandFactory {
         return validated(.outputDevice(identity: deviceID, muted: muted, createdAt: now), now: now)
     }
 
+    public static func setOutputDeviceVolume(
+        deviceID: String,
+        volume: Double,
+        now: Date = Date()
+    ) -> WidgetCommand? {
+        guard !deviceID.isEmpty else { return nil }
+        return validated(
+            .outputDeviceVolume(identity: deviceID, volume: volume, createdAt: now),
+            now: now
+        )
+    }
+
+    public static func selectOutputDevice(
+        deviceID: String,
+        now: Date = Date()
+    ) -> WidgetCommand? {
+        guard !deviceID.isEmpty else { return nil }
+        return validated(.selectOutputDevice(identity: deviceID, createdAt: now), now: now)
+    }
+
+    public static func applyProfile(
+        profileID: String,
+        now: Date = Date()
+    ) -> WidgetCommand? {
+        guard UUID(uuidString: profileID) != nil else { return nil }
+        return validated(.applyProfile(identity: profileID, createdAt: now), now: now)
+    }
+
     public static func refresh(now: Date = Date()) -> WidgetCommand {
         .refresh(createdAt: now)
     }

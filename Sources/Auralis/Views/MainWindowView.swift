@@ -36,6 +36,8 @@ struct MainWindowView: View {
                 .font(.caption.weight(.medium)).foregroundStyle(.secondary)
                 .padding(.horizontal, 10).padding(.vertical, 6)
                 .background(.quaternary, in: Capsule())
+            ProfileMenuButton(store: store)
+                .frame(maxWidth: 150)
             Button { store.refreshIntent() } label: { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(.plain).help("Refresh audio apps")
             Button {

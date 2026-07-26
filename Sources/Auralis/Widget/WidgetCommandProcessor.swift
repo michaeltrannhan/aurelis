@@ -187,6 +187,25 @@ enum WidgetCommandStoreExecutor {
                 throw WidgetCommandExecutionError.outputDeviceNotFound(command.targetIdentity ?? "")
             }
             try await store.setDeviceMuted(muted, for: identity)
+        case let (.outputDevice, .setVolume(volume)):
+            guard let identity = command.targetIdentity,
+                  store.devices.contains(where: { $0.id == identity }) else {
+                throw WidgetCommandExecutionError.outputDeviceNotFound(command.targetIdentity ?? "")
+            }
+            try await store.setDeviceVolume(volume, for: identity)
+        case (.outputDevice, .selectOutput):
+            guard let identity = command.targetIdentity,
+                  store.devices.contains(where: { $0.id == identity }) else {
+                throw WidgetCommandExecutionError.outputDeviceNotFound(command.targetIdentity ?? "")
+            }
+            try await store.setDefaultOutputDevice(identity)
+        case (.profile, .applyProfile):
+            guard let rawID = command.targetIdentity,
+                  let profileID = UUID(uuidString: rawID),
+                  store.settings.profiles.contains(where: { $0.id == profileID }) else {
+                throw WidgetCommandExecutionError.unsupportedAction
+            }
+            try await store.applyProfile(profileID)
         case (.host, .refresh):
             try await store.refresh()
         default:

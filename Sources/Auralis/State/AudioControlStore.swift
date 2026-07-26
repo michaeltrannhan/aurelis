@@ -5,6 +5,9 @@ private enum AudioControlStoreError: LocalizedError {
     case appUnavailable(String)
     case outputVolumeUnsupported(String)
     case outputMuteUnsupported(String)
+    case outputDeviceUnavailable(String)
+    case profileUnavailable
+    case profileNameRequired
     case shuttingDown
 
     var errorDescription: String? {
@@ -12,6 +15,9 @@ private enum AudioControlStoreError: LocalizedError {
         case let .appUnavailable(identity): "The audio app \(identity) is unavailable."
         case let .outputVolumeUnsupported(device): "\(device) does not expose a settable output volume."
         case let .outputMuteUnsupported(device): "\(device) does not expose a settable mute control."
+        case let .outputDeviceUnavailable(device): "The output device \(device) is unavailable."
+        case .profileUnavailable: "The selected audio profile is unavailable."
+        case .profileNameRequired: "Enter a name for the audio profile."
         case .shuttingDown: "The audio engine is shutting down."
         }
     }
@@ -61,7 +67,17 @@ final class AudioControlStore: ObservableObject {
         let control: AudioEditControl
     }
 
+    private struct DeviceSettingsApplication: Sendable {
+        let deviceUID: String
+        let volume: Double?
+        let isMuted: Bool?
+    }
+
     var statusMessage: String { operationState.message }
+
+    var activeProfile: AudioProfile? {
+        settings.profiles.first { $0.id == settings.activeProfileID }
+    }
 
     var permissionRequirements: [PermissionRequirement] {
         permissions.requirements
@@ -384,6 +400,10 @@ final class AudioControlStore: ObservableObject {
         launchIntent { store in try? await store.setDeviceMuted(muted, for: deviceUID) }
     }
 
+    func setDefaultOutputDeviceIntent(_ deviceUID: String) {
+        launchIntent { store in try? await store.setDefaultOutputDevice(deviceUID) }
+    }
+
     func toggleDeviceMuteIntent(for deviceUID: String) {
         setDeviceMutedIntent(!(deviceVolumeStates[deviceUID]?.isMuted ?? false), for: deviceUID)
     }
@@ -393,6 +413,7 @@ final class AudioControlStore: ObservableObject {
         if let key = activeEditKeys[lookup] {
             ensureSettings(for: identity, in: &settings)
             settings.appSettings[identity]?.setVolume(volume)
+            settings.activeProfileID = nil
             rebuildDisplayRows()
             scheduleEditPreview(key)
         } else {
@@ -413,6 +434,7 @@ final class AudioControlStore: ObservableObject {
         if let key = activeEditKeys[lookup] {
             ensureSettings(for: identity, in: &settings)
             settings.appSettings[identity]?.eq.setGain(gain, at: band)
+            settings.activeProfileID = nil
             rebuildDisplayRows()
             scheduleEditPreview(key)
         } else {
@@ -477,6 +499,26 @@ final class AudioControlStore: ObservableObject {
         launchIntent { store in try? await store.restoreAllIgnoredApps() }
     }
 
+    func createProfileIntent(named name: String) {
+        launchIntent { store in _ = try? await store.createProfile(named: name) }
+    }
+
+    func updateProfileIntent(_ profileID: UUID) {
+        launchIntent { store in try? await store.updateProfile(profileID) }
+    }
+
+    func applyProfileIntent(_ profileID: UUID) {
+        launchIntent { store in try? await store.applyProfile(profileID) }
+    }
+
+    func deleteProfileIntent(_ profileID: UUID) {
+        launchIntent { store in try? await store.deleteProfile(profileID) }
+    }
+
+    func renameProfileIntent(_ profileID: UUID, name: String) {
+        launchIntent { store in try? await store.renameProfile(profileID, to: name) }
+    }
+
     // MARK: - Output mutations
 
     func setOutputVolume(_ volume: Double) async throws {
@@ -486,15 +528,30 @@ final class AudioControlStore: ObservableObject {
                 throw AudioControlStoreError.outputVolumeUnsupported(outputVolumeState.deviceName ?? "The default output")
             }
             let clamped = min(max(volume.isFinite ? volume : outputVolumeState.volume, 0), 1)
-            do {
-                try await engine.setOutputVolume(clamped)
-                outputVolumeState.volume = clamped
-                dismissIssue(id: "output-volume")
-                InternalDiagnostics.record("audio", "output.volume applied=\(clamped)")
-            } catch {
-                reportMutationFailure(error, id: "output-volume", domain: .backend)
-                throw error
+            let previousVolume = outputVolumeState.volume
+            var desired = settings
+            desired.activeProfileID = nil
+            if let device = devices.first(where: \.isDefault) {
+                desired.deviceSettings[device.id] = DeviceAudioSettings(
+                    displayName: device.name,
+                    volume: clamped,
+                    isMuted: outputVolumeState.isMuted
+                )
             }
+            try await performSettingsTransaction(
+                desired: desired,
+                issueID: "output-volume",
+                engineDomain: .backend,
+                app: nil,
+                engineWork: { [engine] in try await engine.setOutputVolume(clamped) },
+                finalize: { _ in },
+                compensate: { [engine] _ in try await engine.setOutputVolume(previousVolume) }
+            )
+            outputVolumeState.volume = clamped
+            if let deviceID = devices.first(where: \.isDefault)?.id {
+                deviceVolumeStates[deviceID]?.volume = clamped
+            }
+            InternalDiagnostics.record("audio", "output.volume applied=\(clamped)")
         }
     }
 
@@ -504,15 +561,30 @@ final class AudioControlStore: ObservableObject {
             guard outputVolumeState.capabilities.canSetMute else {
                 throw AudioControlStoreError.outputMuteUnsupported(outputVolumeState.deviceName ?? "The default output")
             }
-            do {
-                try await engine.setOutputMuted(muted)
-                outputVolumeState.isMuted = muted
-                dismissIssue(id: "output-mute")
-                InternalDiagnostics.record("audio", "output.mute applied=\(muted)")
-            } catch {
-                reportMutationFailure(error, id: "output-mute", domain: .backend)
-                throw error
+            let previousMuted = outputVolumeState.isMuted
+            var desired = settings
+            desired.activeProfileID = nil
+            if let device = devices.first(where: \.isDefault) {
+                desired.deviceSettings[device.id] = DeviceAudioSettings(
+                    displayName: device.name,
+                    volume: outputVolumeState.volume,
+                    isMuted: muted
+                )
             }
+            try await performSettingsTransaction(
+                desired: desired,
+                issueID: "output-mute",
+                engineDomain: .backend,
+                app: nil,
+                engineWork: { [engine] in try await engine.setOutputMuted(muted) },
+                finalize: { _ in },
+                compensate: { [engine] _ in try await engine.setOutputMuted(previousMuted) }
+            )
+            outputVolumeState.isMuted = muted
+            if let deviceID = devices.first(where: \.isDefault)?.id {
+                deviceVolumeStates[deviceID]?.isMuted = muted
+            }
+            InternalDiagnostics.record("audio", "output.mute applied=\(muted)")
         }
     }
 
@@ -524,18 +596,37 @@ final class AudioControlStore: ObservableObject {
                 throw AudioControlStoreError.outputVolumeUnsupported(state.deviceName ?? deviceUID)
             }
             let clamped = min(max(volume.isFinite ? volume : state.volume, 0), 1)
-            do {
-                try await engine.setOutputVolume(clamped, forUID: deviceUID)
-                deviceVolumeStates[deviceUID]?.volume = clamped
-                dismissIssue(id: "device-volume-\(deviceUID)")
-                InternalDiagnostics.record(
-                    "audio",
-                    "device.volume id=\(deviceUID) applied=\(clamped)"
-                )
-            } catch {
-                reportMutationFailure(error, id: "device-volume-\(deviceUID)", domain: .backend, device: deviceUID)
-                throw error
+            guard let device = devices.first(where: { $0.id == deviceUID }) else {
+                throw AudioControlStoreError.outputDeviceUnavailable(deviceUID)
             }
+            var desired = settings
+            desired.activeProfileID = nil
+            desired.deviceSettings[deviceUID] = DeviceAudioSettings(
+                displayName: device.name,
+                volume: clamped,
+                isMuted: state.isMuted
+            )
+            try await performSettingsTransaction(
+                desired: desired,
+                issueID: "device-volume-\(deviceUID)",
+                engineDomain: .backend,
+                app: nil,
+                engineWork: { [engine] in
+                    try await engine.setOutputVolume(clamped, forUID: deviceUID)
+                },
+                finalize: { _ in },
+                compensate: { [engine] _ in
+                    try await engine.setOutputVolume(state.volume, forUID: deviceUID)
+                }
+            )
+            deviceVolumeStates[deviceUID]?.volume = clamped
+            if device.isDefault {
+                outputVolumeState.volume = clamped
+            }
+            InternalDiagnostics.record(
+                "audio",
+                "device.volume id=\(deviceUID) applied=\(clamped)"
+            )
         }
     }
 
@@ -546,18 +637,326 @@ final class AudioControlStore: ObservableObject {
             guard state.capabilities.canSetMute else {
                 throw AudioControlStoreError.outputMuteUnsupported(state.deviceName ?? deviceUID)
             }
-            do {
-                try await engine.setOutputMuted(muted, forUID: deviceUID)
-                deviceVolumeStates[deviceUID]?.isMuted = muted
-                dismissIssue(id: "device-mute-\(deviceUID)")
-                InternalDiagnostics.record(
-                    "audio",
-                    "device.mute id=\(deviceUID) applied=\(muted)"
-                )
-            } catch {
-                reportMutationFailure(error, id: "device-mute-\(deviceUID)", domain: .backend, device: deviceUID)
-                throw error
+            guard let device = devices.first(where: { $0.id == deviceUID }) else {
+                throw AudioControlStoreError.outputDeviceUnavailable(deviceUID)
             }
+            var desired = settings
+            desired.activeProfileID = nil
+            desired.deviceSettings[deviceUID] = DeviceAudioSettings(
+                displayName: device.name,
+                volume: state.volume,
+                isMuted: muted
+            )
+            try await performSettingsTransaction(
+                desired: desired,
+                issueID: "device-mute-\(deviceUID)",
+                engineDomain: .backend,
+                app: nil,
+                engineWork: { [engine] in
+                    try await engine.setOutputMuted(muted, forUID: deviceUID)
+                },
+                finalize: { _ in },
+                compensate: { [engine] _ in
+                    try await engine.setOutputMuted(state.isMuted, forUID: deviceUID)
+                }
+            )
+            deviceVolumeStates[deviceUID]?.isMuted = muted
+            if device.isDefault {
+                outputVolumeState.isMuted = muted
+            }
+            InternalDiagnostics.record(
+                "audio",
+                "device.mute id=\(deviceUID) applied=\(muted)"
+            )
+        }
+    }
+
+    func setDefaultOutputDevice(_ deviceUID: String) async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            guard let device = devices.first(where: { $0.id == deviceUID }) else {
+                throw AudioControlStoreError.outputDeviceUnavailable(deviceUID)
+            }
+            let previousDefault = devices.first(where: \.isDefault)?.id
+            var desired = settings
+            desired.preferredOutputDeviceID = deviceUID
+            desired.activeProfileID = nil
+            try await performSettingsTransaction(
+                desired: desired,
+                issueID: "default-output-\(deviceUID)",
+                engineDomain: .backend,
+                app: nil,
+                engineWork: { [engine] in
+                    try await engine.setDefaultOutputDevice(forUID: deviceUID)
+                },
+                finalize: { _ in },
+                compensate: { [engine] _ in
+                    if let previousDefault {
+                        try await engine.setDefaultOutputDevice(forUID: previousDefault)
+                    }
+                }
+            )
+            devices = devices.map {
+                AudioDeviceSnapshot(id: $0.id, name: $0.name, isDefault: $0.id == deviceUID)
+            }
+            if let state = deviceVolumeStates[deviceUID] {
+                outputVolumeState = state
+            }
+            InternalDiagnostics.record(
+                "audio",
+                "device.default id=\(deviceUID) name=\(device.name)"
+            )
+        }
+    }
+
+    // MARK: - Profiles
+
+    @discardableResult
+    func createProfile(named name: String) async throws -> UUID {
+        await waitUntilReady()
+        return try await withMutationGate {
+            let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalizedName.isEmpty else {
+                throw AudioControlStoreError.profileNameRequired
+            }
+            let profile = makeCurrentProfile(name: normalizedName)
+            var desired = settings
+            desired.profiles.append(profile)
+            desired.activeProfileID = profile.id
+            try await performSettingsTransaction(
+                desired: desired,
+                issueID: "profile-create-\(profile.id.uuidString)",
+                engineDomain: .backend,
+                app: nil,
+                engineWork: { () },
+                finalize: { _ in },
+                compensate: { _ in }
+            )
+            return profile.id
+        }
+    }
+
+    func updateProfile(_ profileID: UUID) async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            guard let index = settings.profiles.firstIndex(where: { $0.id == profileID }) else {
+                throw AudioControlStoreError.profileUnavailable
+            }
+            let existing = settings.profiles[index]
+            var updated = makeCurrentProfile(name: existing.name, id: existing.id)
+            updated.createdAt = existing.createdAt
+            var desired = settings
+            desired.profiles[index] = updated.normalized
+            desired.activeProfileID = profileID
+            try await performSettingsTransaction(
+                desired: desired,
+                issueID: "profile-update-\(profileID.uuidString)",
+                engineDomain: .backend,
+                app: nil,
+                engineWork: { () },
+                finalize: { _ in },
+                compensate: { _ in }
+            )
+        }
+    }
+
+    func renameProfile(_ profileID: UUID, to name: String) async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalizedName.isEmpty else {
+                throw AudioControlStoreError.profileNameRequired
+            }
+            guard let index = settings.profiles.firstIndex(where: { $0.id == profileID }) else {
+                throw AudioControlStoreError.profileUnavailable
+            }
+            var desired = settings
+            desired.profiles[index].name = String(normalizedName.prefix(80))
+            desired.profiles[index].updatedAt = Date()
+            try await performSettingsTransaction(
+                desired: desired,
+                issueID: "profile-rename-\(profileID.uuidString)",
+                engineDomain: .backend,
+                app: nil,
+                engineWork: { () },
+                finalize: { _ in },
+                compensate: { _ in }
+            )
+        }
+    }
+
+    func deleteProfile(_ profileID: UUID) async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            guard settings.profiles.contains(where: { $0.id == profileID }) else {
+                throw AudioControlStoreError.profileUnavailable
+            }
+            var desired = settings
+            desired.profiles.removeAll { $0.id == profileID }
+            if desired.activeProfileID == profileID {
+                desired.activeProfileID = nil
+            }
+            try await performSettingsTransaction(
+                desired: desired,
+                issueID: "profile-delete-\(profileID.uuidString)",
+                engineDomain: .backend,
+                app: nil,
+                engineWork: { () },
+                finalize: { _ in },
+                compensate: { _ in }
+            )
+        }
+    }
+
+    func applyProfile(_ profileID: UUID) async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            guard let profile = settings.profiles.first(where: { $0.id == profileID }) else {
+                throw AudioControlStoreError.profileUnavailable
+            }
+
+            let previous = settings
+            var desired = previous
+            for (identity, appSettings) in profile.appSettings {
+                desired.appSettings[identity] = appSettings.normalized
+            }
+            for (deviceUID, deviceSettings) in profile.deviceSettings {
+                desired.deviceSettings[deviceUID] = deviceSettings.normalized
+            }
+            desired.preferredOutputDeviceID = profile.preferredOutputDeviceID
+            desired.activeProfileID = profileID
+
+            let activeAppIDs = Set(appSnapshots.map(\.identity))
+            let desiredAppCommands = profile.appSettings
+                .filter { activeAppIDs.contains($0.key) }
+                .flatMap { Self.profileCommands(for: $0.key, settings: $0.value) }
+            let previousAppCommands = profile.appSettings.keys
+                .filter { activeAppIDs.contains($0) }
+                .compactMap { identity in previous.appSettings[identity].map { (identity, $0) } }
+                .flatMap { Self.profileCommands(for: $0.0, settings: $0.1) }
+
+            let desiredDeviceApplications = makeDeviceApplications(from: profile.deviceSettings)
+            let previousDeviceApplications = makeCurrentDeviceApplications(
+                for: Set(profile.deviceSettings.keys)
+            )
+            let availableDeviceIDs = Set(devices.map(\.id))
+            let desiredDefault = profile.preferredOutputDeviceID.flatMap {
+                availableDeviceIDs.contains($0) ? $0 : nil
+            }
+            let previousDefault = devices.first(where: \.isDefault)?.id
+
+            try await performSettingsTransaction(
+                desired: desired,
+                issueID: "profile-apply-\(profileID.uuidString)",
+                engineDomain: .backend,
+                app: nil,
+                engineWork: { [engine] in
+                    if let desiredDefault {
+                        try await engine.setDefaultOutputDevice(forUID: desiredDefault)
+                    }
+                    for application in desiredDeviceApplications {
+                        if let volume = application.volume {
+                            try await engine.setOutputVolume(volume, forUID: application.deviceUID)
+                        }
+                        if let isMuted = application.isMuted {
+                            try await engine.setOutputMuted(isMuted, forUID: application.deviceUID)
+                        }
+                    }
+                    try await engine.apply(desiredAppCommands)
+                },
+                finalize: { _ in },
+                compensate: { [engine] _ in
+                    if let previousDefault {
+                        try await engine.setDefaultOutputDevice(forUID: previousDefault)
+                    }
+                    for application in previousDeviceApplications {
+                        if let volume = application.volume {
+                            try await engine.setOutputVolume(volume, forUID: application.deviceUID)
+                        }
+                        if let isMuted = application.isMuted {
+                            try await engine.setOutputMuted(isMuted, forUID: application.deviceUID)
+                        }
+                    }
+                    try await engine.apply(previousAppCommands)
+                }
+            )
+
+            for application in desiredDeviceApplications {
+                if let volume = application.volume {
+                    deviceVolumeStates[application.deviceUID]?.volume = volume
+                }
+                if let isMuted = application.isMuted {
+                    deviceVolumeStates[application.deviceUID]?.isMuted = isMuted
+                }
+            }
+            if let desiredDefault {
+                devices = devices.map {
+                    AudioDeviceSnapshot(id: $0.id, name: $0.name, isDefault: $0.id == desiredDefault)
+                }
+                if let state = deviceVolumeStates[desiredDefault] {
+                    outputVolumeState = state
+                }
+            }
+            rebuildDisplayRows()
+            InternalDiagnostics.record(
+                "audio",
+                "profile.applied id=\(profileID.uuidString) name=\(profile.name)"
+            )
+        }
+    }
+
+    private func makeCurrentProfile(
+        name: String,
+        id: UUID = UUID()
+    ) -> AudioProfile {
+        AudioProfile(
+            id: id,
+            name: name,
+            appSettings: settings.appSettings,
+            deviceSettings: capturedDeviceSettings(),
+            preferredOutputDeviceID: devices.first(where: \.isDefault)?.id
+                ?? settings.preferredOutputDeviceID,
+            updatedAt: Date()
+        )
+    }
+
+    private func capturedDeviceSettings() -> [String: DeviceAudioSettings] {
+        var captured = settings.deviceSettings
+        for device in devices {
+            guard let state = deviceVolumeStates[device.id] else { continue }
+            captured[device.id] = DeviceAudioSettings(
+                displayName: device.name,
+                volume: state.volume,
+                isMuted: state.isMuted
+            )
+        }
+        return captured
+    }
+
+    private func makeDeviceApplications(
+        from desired: [String: DeviceAudioSettings]
+    ) -> [DeviceSettingsApplication] {
+        desired.compactMap { deviceUID, settings in
+            guard devices.contains(where: { $0.id == deviceUID }),
+                  let state = deviceVolumeStates[deviceUID] else { return nil }
+            return DeviceSettingsApplication(
+                deviceUID: deviceUID,
+                volume: state.capabilities.canSetVolume ? settings.volume : nil,
+                isMuted: state.capabilities.canSetMute ? settings.isMuted : nil
+            )
+        }
+    }
+
+    private func makeCurrentDeviceApplications(
+        for deviceUIDs: Set<String>
+    ) -> [DeviceSettingsApplication] {
+        deviceUIDs.compactMap { deviceUID in
+            guard let state = deviceVolumeStates[deviceUID] else { return nil }
+            return DeviceSettingsApplication(
+                deviceUID: deviceUID,
+                volume: state.capabilities.canSetVolume ? state.volume : nil,
+                isMuted: state.capabilities.canSetMute ? state.isMuted : nil
+            )
         }
     }
 
@@ -715,6 +1114,7 @@ final class AudioControlStore: ObservableObject {
             }
             mutation(&desiredApp)
             desired.appSettings[identity] = desiredApp.normalized
+            desired.activeProfileID = nil
             let command = Self.backendCommand(for: identity, settings: desiredApp, issuePrefix: issuePrefix)
             let compensation = Self.backendCommand(for: identity, settings: previous.appSettings[identity] ?? previousApp, issuePrefix: issuePrefix)
             try await performSettingsTransaction(
@@ -1211,6 +1611,19 @@ final class AudioControlStore: ObservableObject {
         case "route": .setRoute(identity, settings.route.normalized)
         default: .setVolume(identity, settings.volume)
         }
+    }
+
+    private static func profileCommands(
+        for identity: AudioAppIdentity,
+        settings: AppAudioSettings
+    ) -> [AudioBackendCommand] {
+        [
+            .setRoute(identity, settings.route.normalized),
+            .setVolume(identity, settings.volume),
+            .setMuted(identity, settings.isMuted),
+            .setBoost(identity, settings.boost),
+            .setEQ(identity, settings.eq)
+        ]
     }
 
     // MARK: - Coordination helpers and issues

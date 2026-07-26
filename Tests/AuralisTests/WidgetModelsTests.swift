@@ -31,7 +31,11 @@ final class WidgetModelsTests: XCTestCase {
                 .init(id: "usb", name: "USB", volume: 0.8, isMuted: false, isDefault: false),
                 .init(id: "main", name: "Main", volume: 0.7, isMuted: false, isDefault: true)
             ],
-            apps: apps
+            apps: apps,
+            profiles: [
+                .init(id: "11111111-1111-1111-1111-111111111111", name: "Home")
+            ],
+            activeProfileID: "11111111-1111-1111-1111-111111111111"
         )
 
         let presentation = WidgetMixerPresentation(
@@ -43,6 +47,7 @@ final class WidgetModelsTests: XCTestCase {
         XCTAssertEqual(presentation.statusText, "Ready")
         XCTAssertEqual(presentation.defaultDevice?.id, "main")
         XCTAssertEqual(presentation.apps.map(\.id), ["app-0", "app-1", "app-2"])
+        XCTAssertEqual(presentation.activeProfile?.name, "Home")
         XCTAssertEqual(presentation.activeCountText, "4 active")
         XCTAssertEqual(
             WidgetMixerPresentation.appValue(apps[0]),
@@ -83,13 +88,29 @@ final class WidgetModelsTests: XCTestCase {
             XCTUnwrap(WidgetIntentCommandFactory.setAppBoost(appID: "music", boost: 3, now: now)),
             XCTUnwrap(WidgetIntentCommandFactory.setEQBandGain(appID: "music", band: 4, gain: -2.5, now: now)),
             XCTUnwrap(WidgetIntentCommandFactory.setOutputDeviceMuted(deviceID: "usb", muted: false, now: now)),
+            XCTUnwrap(WidgetIntentCommandFactory.setOutputDeviceVolume(deviceID: "usb", volume: 0.65, now: now)),
+            XCTUnwrap(WidgetIntentCommandFactory.selectOutputDevice(deviceID: "usb", now: now)),
+            XCTUnwrap(WidgetIntentCommandFactory.applyProfile(profileID: "11111111-1111-1111-1111-111111111111", now: now)),
             WidgetIntentCommandFactory.refresh(now: now)
         ]
 
-        XCTAssertEqual(commands.map(\.targetType), [.app, .app, .app, .app, .outputDevice, .host])
+        XCTAssertEqual(
+            commands.map(\.targetType),
+            [.app, .app, .app, .app, .outputDevice, .outputDevice, .outputDevice, .profile, .host]
+        )
         XCTAssertEqual(
             commands.map(\.action),
-            [.setMuted(true), .setVolume(0.4), .setBoost(3), .setEQBandGain(band: 4, gain: -2.5), .setMuted(false), .refresh]
+            [
+                .setMuted(true),
+                .setVolume(0.4),
+                .setBoost(3),
+                .setEQBandGain(band: 4, gain: -2.5),
+                .setMuted(false),
+                .setVolume(0.65),
+                .selectOutput,
+                .applyProfile,
+                .refresh
+            ]
         )
         for command in commands {
             XCTAssertEqual(command.schemaVersion, WidgetCommand.currentSchemaVersion)
@@ -105,6 +126,9 @@ final class WidgetModelsTests: XCTestCase {
         XCTAssertNil(WidgetIntentCommandFactory.setEQBandGain(appID: "music", band: 10, gain: 0))
         XCTAssertNil(WidgetIntentCommandFactory.setEQBandGain(appID: "music", band: 0, gain: 25))
         XCTAssertNil(WidgetIntentCommandFactory.setOutputDeviceMuted(deviceID: "", muted: true))
+        XCTAssertNil(WidgetIntentCommandFactory.setOutputDeviceVolume(deviceID: "usb", volume: 2))
+        XCTAssertNil(WidgetIntentCommandFactory.selectOutputDevice(deviceID: ""))
+        XCTAssertNil(WidgetIntentCommandFactory.applyProfile(profileID: "not-a-uuid"))
     }
 
     func testSnapshotDecodingDefaultsMalformedFieldsAndNormalizesEQ() throws {
@@ -189,6 +213,9 @@ final class WidgetModelsTests: XCTestCase {
             .app(identity: "music", action: .setBoost(3), createdAt: now),
             .app(identity: "music", action: .setEQBandGain(band: 4, gain: -1.5), createdAt: now),
             .outputDevice(identity: "built-in", muted: true, createdAt: now),
+            .outputDeviceVolume(identity: "built-in", volume: 0.7, createdAt: now),
+            .selectOutputDevice(identity: "built-in", createdAt: now),
+            .applyProfile(identity: UUID().uuidString, createdAt: now),
             .refresh(createdAt: now)
         ]
 
@@ -218,7 +245,7 @@ final class WidgetModelsTests: XCTestCase {
             createdAt: now,
             targetType: .outputDevice,
             targetIdentity: "speakers",
-            action: .setVolume(0.5)
+            action: .setBoost(2)
         )
         let invalidValue = WidgetCommand.app(identity: "music", action: .setVolume(2), createdAt: now)
 

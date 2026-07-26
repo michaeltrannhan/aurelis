@@ -71,16 +71,23 @@ struct AuralisProvider: TimelineProvider {
             activeAppCount: 2,
             volumeStep: 0.05,
             devices: [
-                WidgetSnapshot.DeviceSummary(id: "default", name: "MacBook Speakers", volume: 0.75, isMuted: false, isDefault: true)
+                WidgetSnapshot.DeviceSummary(id: "default", name: "MacBook Speakers", volume: 0.75, isMuted: false, isDefault: true),
+                WidgetSnapshot.DeviceSummary(id: "home", name: "Living Room", volume: 0.62, isMuted: false, isDefault: false),
+                WidgetSnapshot.DeviceSummary(id: "display", name: "Studio Display", volume: 0.48, isMuted: false, isDefault: false)
             ],
-            apps: apps
+            apps: apps,
+            profiles: [
+                WidgetSnapshot.ProfileSummary(id: "11111111-1111-1111-1111-111111111111", name: "Home"),
+                WidgetSnapshot.ProfileSummary(id: "22222222-2222-2222-2222-222222222222", name: "Office"),
+                WidgetSnapshot.ProfileSummary(id: "33333333-3333-3333-3333-333333333333", name: "Focus")
+            ],
+            activeProfileID: "11111111-1111-1111-1111-111111111111"
         )
     }()
 }
 
-/// Mixer widget — systemMedium shows device output + per-app rows with mute
-/// toggle, volume up/down, and boost cycle. systemSmall shows a compact
-/// output-volume summary with mute toggle.
+/// Mixer widget — small is a focused master-output remote, medium combines
+/// master output with two app rows, and large adds profiles plus output choice.
 struct AuralisMixerWidget: Widget {
     let kind: String = "AuralisMixerWidget"
 
@@ -92,8 +99,8 @@ struct AuralisMixerWidget: Widget {
                 }
         }
         .configurationDisplayName("Auralis Mixer")
-        .description("Per-app volume, mute, and boost controls on your desktop.")
-        .supportedFamilies([.systemSmall, .systemMedium])
+        .description("Profiles, output selection, master volume, and per-app controls.")
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
 

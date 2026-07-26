@@ -225,6 +225,9 @@ final class WidgetBridge: ObservableObject {
         let statusMessage = hostState == .running
             ? store.statusMessage
             : "Auralis is closed. Open it to use widget controls."
+        let profiles = store.settings.profiles.map {
+            WidgetSnapshot.ProfileSummary(id: $0.id.uuidString, name: $0.name)
+        }
         return WidgetSnapshot(
             generatedAt: now,
             hostState: hostState,
@@ -233,7 +236,9 @@ final class WidgetBridge: ObservableObject {
             activeAppCount: store.displayRows.filter(\.isActive).count,
             volumeStep: store.settings.customization.volumeStep.fraction,
             devices: devices,
-            apps: apps
+            apps: apps,
+            profiles: profiles,
+            activeProfileID: store.settings.activeProfileID?.uuidString
         )
     }
 

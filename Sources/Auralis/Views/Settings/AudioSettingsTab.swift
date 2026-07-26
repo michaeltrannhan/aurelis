@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AudioSettingsTab: View {
     @ObservedObject var store: AudioControlStore
+    @State private var newProfileName = ""
 
     var body: some View {
         Form {
@@ -43,6 +44,46 @@ struct AudioSettingsTab: View {
                     }
                 }
                 settingsHelper("Changing EQ range reclamps existing per-app EQ curves to the selected dB limit.")
+            }
+
+            Section("Audio Profiles") {
+                HStack {
+                    TextField("New profile name", text: $newProfileName)
+                    Button("Save Current") {
+                        let name = newProfileName
+                        newProfileName = ""
+                        store.createProfileIntent(named: name)
+                    }
+                    .disabled(newProfileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
+                if store.settings.profiles.isEmpty {
+                    settingsHelper("Profiles capture app controls, per-device volume and mute, plus your preferred output.")
+                } else {
+                    ForEach(store.settings.profiles) { profile in
+                        HStack(spacing: 10) {
+                            Image(systemName: profile.id == store.settings.activeProfileID
+                                ? "checkmark.circle.fill"
+                                : "circle")
+                                .foregroundStyle(profile.id == store.settings.activeProfileID ? Color.accentColor : Color.secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(profile.name)
+                                Text("\(profile.appSettings.count) apps · \(profile.deviceSettings.count) devices")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Apply") { store.applyProfileIntent(profile.id) }
+                            Button("Update") { store.updateProfileIntent(profile.id) }
+                            Button(role: .destructive) {
+                                store.deleteProfileIntent(profile.id)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .help("Delete \(profile.name)")
+                        }
+                    }
+                }
             }
         }
         .formStyle(.grouped)

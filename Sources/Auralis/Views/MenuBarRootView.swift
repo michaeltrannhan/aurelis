@@ -292,6 +292,8 @@ struct MenuBarRootView: View {
 
     private var headerActions: some View {
         HStack(spacing: 3) {
+            ProfileMenuButton(store: store, compact: true)
+
             Button {
                 store.refreshIntent()
             } label: {

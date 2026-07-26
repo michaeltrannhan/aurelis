@@ -1,6 +1,6 @@
 # Auralis
 
-Auralis is a macOS SwiftUI menu-bar audio controller inspired by FineTune. Phases 0–8 and 10 are implemented in code, including CoreAudio discovery and process taps, per-app volume/mute/boost/EQ, single- and multi-device routing, global controls, typed recovery state, first-run guidance, and versioned JSON persistence.
+Auralis is a macOS SwiftUI menu-bar audio controller inspired by FineTune. It includes CoreAudio discovery and process taps, per-app volume/mute/boost/EQ, single- and multi-device routing, reusable audio profiles, reconnect-aware output settings, global controls, typed recovery state, first-run guidance, and versioned JSON persistence.
 
 The application, executable, Swift/Xcode targets, widget, bundle identifiers, URL scheme, and release artifacts all use the Auralis identity.
 
@@ -94,13 +94,20 @@ brew install xcodegen
 
 ## Desktop Widget
 
-Auralis ships two macOS WidgetKit configurations across three supported sizes:
+Auralis ships two macOS WidgetKit configurations:
 
-- **Auralis Mixer / systemSmall** — output device volume + mute toggle + open-app link.
-- **Auralis Mixer / systemMedium** — up to 3 app rows with mute toggle, volume up/down, boost cycle, and refresh (visual parity with the desktop mixer window).
+- **Auralis Mixer / systemSmall** — a focused master-output remote with volume down/up, mute, current profile, and active-app status.
+- **Auralis Mixer / systemMedium** — master output with quick output cycling plus two app rows with mute, volume, boost, and refresh.
+- **Auralis Mixer / systemLarge** — profile switching, direct output selection, master volume/mute, and three app mixer rows.
 - **Auralis EQ / systemLarge** — a focused 10-band EQ chart with ±0.5 dB buttons per band.
 
-Interactive controls (mute `Toggle`, volume/boost/EQ `Button`s) are backed by `AppIntent`s that queue commands into a shared App Group container. The app drains the queue via a `DispatchSource` file watcher and applies changes to its `AudioControlStore`. The app writes a `WidgetSnapshot` (compact Codable summary) to the same container on every store change so the widget always renders fresh state.
+Interactive controls are backed by `AppIntent`s that queue absolute commands into a shared App Group container. This includes output selection, device and app volume/mute, profile application, boost, EQ, and refresh. The app drains the queue via a `DispatchSource` file watcher and applies changes to its `AudioControlStore`. The app writes a `WidgetSnapshot` (compact Codable summary) to the same container on every store change so the widget always renders fresh state.
+
+## Profiles and device reconnects
+
+Changing an output device's volume, mute state, or selecting it as the default output in Auralis is persisted by device UID. Auralis reapplies that state at launch and when that device disconnects and later reconnects. It deliberately does not overwrite ordinary hardware-key or Control Center changes while the device remains connected.
+
+Profiles are available from the main-window header, menu-bar popup, Audio settings, and the large Mixer widget. Saving a profile captures per-app volume, mute, boost, EQ and routes; per-device volume and mute; and the current preferred output. Applying a profile restores the available parts immediately and retains missing-device intent for the next reconnect.
 
 ### Widget architecture
 
@@ -199,6 +206,8 @@ notarization, permissions, audio routes, and widget behavior on physical hardwar
 - Menu-bar popup app named Auralis.
 - Desktop widget (systemSmall/Medium/Large) with interactive mute, volume, boost, and EQ controls via AppIntents.
 - CoreAudio active output app and output device discovery.
+- Reconnect-aware per-device volume/mute restoration and preferred default-output selection.
+- Named profiles for app controls, output routes, device controls, and preferred output.
 - Per-app volume, mute, boost, pin, ignore, and 10-band EQ state.
 - Per-app follow-default, single-output, and ordered multi-output routing through private CoreAudio aggregate devices, with active-device and matching-sample-rate validation.
 - Early per-app volume, mute, and boost processing through private CoreAudio process taps.

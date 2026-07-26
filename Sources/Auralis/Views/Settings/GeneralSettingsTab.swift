@@ -26,7 +26,7 @@ struct GeneralSettingsTab: View {
                 Button("Reset All Settings", role: .destructive) {
                     confirmsReset = true
                 }
-                settingsHelper("Clears app volume, mute, boost, EQ, pinned apps, ignored apps, order, and customization.")
+                settingsHelper("Clears app and device controls, profiles, preferred output, pinned apps, ignored apps, order, and customization.")
             }
 
             if !store.settings.ignoredAppIDs.isEmpty {

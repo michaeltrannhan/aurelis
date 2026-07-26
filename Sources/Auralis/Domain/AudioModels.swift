@@ -313,6 +313,133 @@ struct AppAudioSettings: Codable, Equatable, Sendable {
     }
 }
 
+struct DeviceAudioSettings: Codable, Equatable, Sendable {
+    var displayName: String
+    var volume: Double
+    var isMuted: Bool
+
+    init(
+        displayName: String,
+        volume: Double,
+        isMuted: Bool
+    ) {
+        self.displayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.volume = min(max(volume.isFinite ? volume : 1, 0), 1)
+        self.isMuted = isMuted
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case displayName
+        case volume
+        case isMuted
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            displayName: container.tolerant(String.self, forKey: .displayName) ?? "Output Device",
+            volume: container.tolerantDouble(forKey: .volume) ?? 1,
+            isMuted: container.tolerant(Bool.self, forKey: .isMuted) ?? false
+        )
+    }
+
+    var normalized: DeviceAudioSettings {
+        DeviceAudioSettings(
+            displayName: displayName.isEmpty ? "Output Device" : displayName,
+            volume: volume,
+            isMuted: isMuted
+        )
+    }
+}
+
+struct AudioProfile: Codable, Equatable, Identifiable, Sendable {
+    var id: UUID
+    var name: String
+    var appSettings: [AudioAppIdentity: AppAudioSettings]
+    var deviceSettings: [String: DeviceAudioSettings]
+    var preferredOutputDeviceID: String?
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        appSettings: [AudioAppIdentity: AppAudioSettings],
+        deviceSettings: [String: DeviceAudioSettings],
+        preferredOutputDeviceID: String?,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.name = Self.normalizedName(name)
+        self.appSettings = Dictionary(
+            uniqueKeysWithValues: appSettings
+                .filter { $0.key.isPersistable }
+                .map { ($0.key, $0.value.normalized) }
+        )
+        self.deviceSettings = Dictionary(
+            uniqueKeysWithValues: deviceSettings.compactMap { key, value in
+                let normalizedID = Self.normalizedDeviceID(key)
+                return normalizedID.map { ($0, value.normalized) }
+            }
+        )
+        self.preferredOutputDeviceID = Self.normalizedDeviceID(preferredOutputDeviceID)
+        self.createdAt = Self.finiteDate(createdAt)
+        self.updatedAt = Self.finiteDate(updatedAt)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case appSettings
+        case deviceSettings
+        case preferredOutputDeviceID
+        case createdAt
+        case updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let now = Date()
+        self.init(
+            id: container.tolerant(UUID.self, forKey: .id) ?? UUID(),
+            name: container.tolerant(String.self, forKey: .name) ?? "Profile",
+            appSettings: container.tolerant([AudioAppIdentity: AppAudioSettings].self, forKey: .appSettings) ?? [:],
+            deviceSettings: container.tolerant([String: DeviceAudioSettings].self, forKey: .deviceSettings) ?? [:],
+            preferredOutputDeviceID: container.tolerant(String.self, forKey: .preferredOutputDeviceID),
+            createdAt: container.tolerant(Date.self, forKey: .createdAt) ?? now,
+            updatedAt: container.tolerant(Date.self, forKey: .updatedAt) ?? now
+        )
+    }
+
+    var normalized: AudioProfile {
+        AudioProfile(
+            id: id,
+            name: name,
+            appSettings: appSettings,
+            deviceSettings: deviceSettings,
+            preferredOutputDeviceID: preferredOutputDeviceID,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
+    private static func normalizedName(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return String((trimmed.isEmpty ? "Profile" : trimmed).prefix(80))
+    }
+
+    private static func normalizedDeviceID(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func finiteDate(_ date: Date) -> Date {
+        date.timeIntervalSinceReferenceDate.isFinite ? date : Date()
+    }
+}
+
 struct DisplayableAppRow: Identifiable, Equatable, Sendable {
     var identity: AudioAppIdentity
     var displayName: String

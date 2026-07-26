@@ -67,12 +67,34 @@ private struct TolerantAppSettings: Decodable {
     }
 }
 
+private struct TolerantDeviceSettings: Decodable {
+    var values: [String: DeviceAudioSettings]
+
+    init(from decoder: Decoder) throws {
+        let object = try decoder.container(keyedBy: DynamicCodingKey.self)
+        var decoded: [String: DeviceAudioSettings] = [:]
+        for key in object.allKeys {
+            let identity = key.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !identity.isEmpty,
+                  let settings = try? object.decode(DeviceAudioSettings.self, forKey: key) else {
+                continue
+            }
+            decoded[identity] = settings
+        }
+        values = decoded
+    }
+}
+
 struct PersistedSettings: Codable, Equatable, Sendable {
-    static let currentVersion = 3
+    static let currentVersion = 4
 
     var version: Int
     var customization: AppCustomization
     var appSettings: [AudioAppIdentity: AppAudioSettings]
+    var deviceSettings: [String: DeviceAudioSettings]
+    var preferredOutputDeviceID: String?
+    var profiles: [AudioProfile]
+    var activeProfileID: UUID?
     var pinnedAppIDs: Set<AudioAppIdentity>
     var ignoredAppIDs: Set<AudioAppIdentity>
     var appDisplayOrder: [AudioAppIdentity]
@@ -82,6 +104,10 @@ struct PersistedSettings: Codable, Equatable, Sendable {
         version: Int = currentVersion,
         customization: AppCustomization = AppCustomization(),
         appSettings: [AudioAppIdentity: AppAudioSettings] = [:],
+        deviceSettings: [String: DeviceAudioSettings] = [:],
+        preferredOutputDeviceID: String? = nil,
+        profiles: [AudioProfile] = [],
+        activeProfileID: UUID? = nil,
         pinnedAppIDs: Set<AudioAppIdentity> = [],
         ignoredAppIDs: Set<AudioAppIdentity> = [],
         appDisplayOrder: [AudioAppIdentity] = [],
@@ -94,6 +120,21 @@ struct PersistedSettings: Codable, Equatable, Sendable {
                 .filter { $0.key.isPersistable }
                 .map { ($0.key, $0.value.normalized) }
         )
+        self.deviceSettings = Dictionary(
+            uniqueKeysWithValues: deviceSettings.compactMap { key, value in
+                let identity = key.trimmingCharacters(in: .whitespacesAndNewlines)
+                return identity.isEmpty ? nil : (identity, value.normalized)
+            }
+        )
+        let preferred = preferredOutputDeviceID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.preferredOutputDeviceID = preferred?.isEmpty == false ? preferred : nil
+        var seenProfileIDs = Set<UUID>()
+        self.profiles = profiles
+            .map(\.normalized)
+            .filter { seenProfileIDs.insert($0.id).inserted }
+        self.activeProfileID = self.profiles.contains(where: { $0.id == activeProfileID })
+            ? activeProfileID
+            : nil
         self.pinnedAppIDs = Set(pinnedAppIDs.filter(\.isPersistable))
         self.ignoredAppIDs = Set(ignoredAppIDs.filter(\.isPersistable))
         self.appDisplayOrder = Self.deduplicated(appDisplayOrder.filter(\.isPersistable))
@@ -104,6 +145,10 @@ struct PersistedSettings: Codable, Equatable, Sendable {
         case version
         case customization
         case appSettings
+        case deviceSettings
+        case preferredOutputDeviceID
+        case profiles
+        case activeProfileID
         case pinnedAppIDs
         case ignoredAppIDs
         case appDisplayOrder
@@ -125,6 +170,10 @@ struct PersistedSettings: Codable, Equatable, Sendable {
         self.init(
             customization: decodedCustomization,
             appSettings: values.tolerant(TolerantAppSettings.self, forKey: .appSettings)?.values ?? [:],
+            deviceSettings: values.tolerant(TolerantDeviceSettings.self, forKey: .deviceSettings)?.values ?? [:],
+            preferredOutputDeviceID: values.tolerant(String.self, forKey: .preferredOutputDeviceID),
+            profiles: values.tolerant(TolerantArray<AudioProfile>.self, forKey: .profiles)?.values ?? [],
+            activeProfileID: values.tolerant(UUID.self, forKey: .activeProfileID),
             pinnedAppIDs: Set(values.tolerant(TolerantArray<AudioAppIdentity>.self, forKey: .pinnedAppIDs)?.values ?? []),
             ignoredAppIDs: Set(values.tolerant(TolerantArray<AudioAppIdentity>.self, forKey: .ignoredAppIDs)?.values ?? []),
             appDisplayOrder: values.tolerant(TolerantArray<AudioAppIdentity>.self, forKey: .appDisplayOrder)?.values ?? [],
@@ -214,6 +263,10 @@ struct SettingsStore: Sendable {
         let canonical = PersistedSettings(
             customization: settings.customization,
             appSettings: settings.appSettings,
+            deviceSettings: settings.deviceSettings,
+            preferredOutputDeviceID: settings.preferredOutputDeviceID,
+            profiles: settings.profiles,
+            activeProfileID: settings.activeProfileID,
             pinnedAppIDs: settings.pinnedAppIDs,
             ignoredAppIDs: settings.ignoredAppIDs,
             appDisplayOrder: settings.appDisplayOrder,

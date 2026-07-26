@@ -7,6 +7,7 @@ final class MockAudioBackend: AudioBackend {
     var applyError: Error?
     var outputVolume: Double = 0.75
     var outputMuted: Bool = false
+    private(set) var selectedDefaultOutputDeviceID: String?
     /// Per-device UID volume/mute state for `AudioBackendOutputVolumeControlling`.
     /// Entries not present here fall back to the default `outputVolume`/`outputMuted`.
     var perDeviceVolume: [String: Double] = [:]
@@ -96,6 +97,16 @@ extension MockAudioBackend: AudioBackendOutputVolumeControlling {
 
     func setOutputMuted(_ muted: Bool, forUID uid: String) throws {
         perDeviceMuted[uid] = muted
+    }
+
+    func setDefaultOutputDevice(forUID uid: String) throws {
+        guard snapshot.devices.contains(where: { $0.id == uid }) else {
+            throw NSError(domain: "MockAudioBackend", code: 404)
+        }
+        selectedDefaultOutputDeviceID = uid
+        snapshot.devices = snapshot.devices.map {
+            AudioDeviceSnapshot(id: $0.id, name: $0.name, isDefault: $0.id == uid)
+        }
     }
 
     func startObservingOutputVolume(_ onChange: @escaping @Sendable () -> Void) {

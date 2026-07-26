@@ -101,6 +101,8 @@ protocol AudioBackendOutputVolumeControlling: AnyObject {
     func setOutputMuted(_ muted: Bool) throws
     /// Sets an arbitrary output device's mute flag by UID.
     func setOutputMuted(_ muted: Bool, forUID uid: String) throws
+    /// Makes an available output device the macOS system default.
+    func setDefaultOutputDevice(forUID uid: String) throws
     /// Installs a HAL listener that fires when the default output device,
     /// its volume, or its mute state changes. The closure is invoked on an
     /// arbitrary queue; the store hops to the main actor.

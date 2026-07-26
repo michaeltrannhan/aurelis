@@ -7,7 +7,10 @@ public struct WidgetMixerPresentation: Equatable, Sendable {
     public let controlsEnabled: Bool
     public let statusText: String
     public let defaultDevice: WidgetSnapshot.DeviceSummary?
+    public let devices: [WidgetSnapshot.DeviceSummary]
     public let apps: [WidgetSnapshot.AppSummary]
+    public let profiles: [WidgetSnapshot.ProfileSummary]
+    public let activeProfile: WidgetSnapshot.ProfileSummary?
     public let activeCountText: String
 
     public init(
@@ -18,7 +21,10 @@ public struct WidgetMixerPresentation: Equatable, Sendable {
         controlsEnabled = snapshot.isHostAvailable(at: date)
         statusText = controlsEnabled ? snapshot.statusMessage : "Open Auralis to use controls"
         defaultDevice = snapshot.devices.first(where: \.isDefault) ?? snapshot.devices.first
+        devices = snapshot.devices
         apps = Array(snapshot.apps.prefix(max(maximumAppCount, 0)))
+        profiles = snapshot.profiles
+        activeProfile = snapshot.profiles.first { $0.id == snapshot.activeProfileID }
         activeCountText = "\(snapshot.activeAppCount) active"
     }
 
@@ -38,6 +44,11 @@ public struct WidgetMixerPresentation: Equatable, Sendable {
 
     public static func boostLabel(name: String) -> String {
         "Cycle \(name) boost"
+    }
+
+    public static func outputValue(_ device: WidgetSnapshot.DeviceSummary) -> String {
+        let percent = Int((device.volume * 100).rounded())
+        return "\(percent) percent volume, \(device.isMuted ? "muted" : "unmuted")"
     }
 
     public static func eqBandLabel(

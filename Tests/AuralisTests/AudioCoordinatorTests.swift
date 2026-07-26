@@ -81,6 +81,145 @@ final class AudioCoordinatorTests: XCTestCase {
         try await coordinator.relaunchApp()
         XCTAssertEqual(client.relaunchCount, 1)
     }
+
+    func testDeviceSettingsRestoreOnStartupAndReconnectWithoutFightingLiveChanges() async throws {
+        let device = AudioDeviceSnapshot(id: "home-speaker", name: "Home Speaker")
+        let backend = ReconnectOutputBackend(device: device, volume: 0.2, isMuted: false)
+        let engine = AudioEngineActor(
+            backend: backend,
+            initialMode: .mock,
+            backendFactory: { _ in MockAudioBackend() }
+        )
+        let settings = PersistedSettings(
+            deviceSettings: [
+                device.id: DeviceAudioSettings(
+                    displayName: device.name,
+                    volume: 0.68,
+                    isMuted: true
+                )
+            ],
+            preferredOutputDeviceID: device.id
+        )
+
+        var snapshot = try await engine.fetchSnapshot(
+            settings: settings,
+            permissionAllowsTaps: false
+        )
+        XCTAssertEqual(snapshot.output.devices[device.id]?.volume ?? -1, 0.68, accuracy: 0.001)
+        XCTAssertTrue(snapshot.output.devices[device.id]?.isMuted ?? false)
+        XCTAssertEqual(backend.selectedDefaultOutputDeviceID, device.id)
+
+        backend.setState(volume: 0.31, isMuted: false, for: device.id)
+        snapshot = try await engine.fetchSnapshot(
+            settings: settings,
+            permissionAllowsTaps: false
+        )
+        XCTAssertEqual(snapshot.output.devices[device.id]?.volume ?? -1, 0.31, accuracy: 0.001)
+        XCTAssertFalse(snapshot.output.devices[device.id]?.isMuted ?? true)
+
+        backend.setDevices([])
+        _ = try await engine.fetchSnapshot(settings: settings, permissionAllowsTaps: false)
+        backend.setDevices([device])
+        snapshot = try await engine.fetchSnapshot(
+            settings: settings,
+            permissionAllowsTaps: false
+        )
+        XCTAssertEqual(snapshot.output.devices[device.id]?.volume ?? -1, 0.68, accuracy: 0.001)
+        XCTAssertTrue(snapshot.output.devices[device.id]?.isMuted ?? false)
+    }
+}
+
+private final class ReconnectOutputBackend: AudioBackend, AudioBackendOutputVolumeControlling, @unchecked Sendable {
+    private let lock = NSLock()
+    private var devices: [AudioDeviceSnapshot]
+    private var volumes: [String: Double]
+    private var muted: [String: Bool]
+    private var selectedDefault: String?
+
+    init(device: AudioDeviceSnapshot, volume: Double, isMuted: Bool) {
+        devices = [device]
+        volumes = [device.id: volume]
+        muted = [device.id: isMuted]
+    }
+
+    var selectedDefaultOutputDeviceID: String? {
+        lock.withLock { selectedDefault }
+    }
+
+    func setDevices(_ devices: [AudioDeviceSnapshot]) {
+        lock.withLock { self.devices = devices }
+    }
+
+    func setState(volume: Double, isMuted: Bool, for uid: String) {
+        lock.withLock {
+            volumes[uid] = volume
+            muted[uid] = isMuted
+        }
+    }
+
+    func fetchSnapshot() throws -> AudioBackendSnapshot {
+        lock.withLock { AudioBackendSnapshot(devices: devices) }
+    }
+
+    func apply(_ command: AudioBackendCommand) throws {}
+
+    func readOutputVolume() throws -> OutputVolumeState {
+        guard let uid = lock.withLock({
+            selectedDefault
+                ?? devices.first(where: \.isDefault)?.id
+                ?? devices.first?.id
+        }) else { throw NSError(domain: "ReconnectOutputBackend", code: 404) }
+        return try readOutputVolume(forUID: uid)
+    }
+
+    func readOutputVolume(forUID uid: String) throws -> OutputVolumeState {
+        lock.withLock {
+            OutputVolumeState(
+                volume: volumes[uid] ?? 1,
+                isMuted: muted[uid] ?? false,
+                deviceName: devices.first(where: { $0.id == uid })?.name,
+                capabilities: .controllable
+            )
+        }
+    }
+
+    func setOutputVolume(_ volume: Double) throws {
+        guard let uid = lock.withLock({
+            selectedDefault
+                ?? devices.first(where: \.isDefault)?.id
+                ?? devices.first?.id
+        }) else { throw NSError(domain: "ReconnectOutputBackend", code: 404) }
+        try setOutputVolume(volume, forUID: uid)
+    }
+
+    func setOutputVolume(_ volume: Double, forUID uid: String) throws {
+        lock.withLock { volumes[uid] = volume }
+    }
+
+    func setOutputMuted(_ muted: Bool) throws {
+        guard let uid = lock.withLock({
+            selectedDefault
+                ?? devices.first(where: \.isDefault)?.id
+                ?? devices.first?.id
+        }) else { throw NSError(domain: "ReconnectOutputBackend", code: 404) }
+        try setOutputMuted(muted, forUID: uid)
+    }
+
+    func setOutputMuted(_ muted: Bool, forUID uid: String) throws {
+        lock.withLock { self.muted[uid] = muted }
+    }
+
+    func setDefaultOutputDevice(forUID uid: String) throws {
+        lock.withLock {
+            selectedDefault = uid
+            devices = devices.map {
+                AudioDeviceSnapshot(id: $0.id, name: $0.name, isDefault: $0.id == uid)
+            }
+        }
+    }
+
+    func startObservingOutputVolume(_ onChange: @escaping @Sendable () -> Void) {}
+    func stopObservingOutputVolume() {}
 }
 
 private final class CoordinatorBackend: AudioBackend, AudioBackendStatusProviding, AudioBackendTapSynchronizing, @unchecked Sendable {

@@ -93,6 +93,73 @@ struct SetOutputDeviceMutedIntent: AppIntent {
     }
 }
 
+struct SetOutputDeviceVolumeIntent: AppIntent {
+    static let title: LocalizedStringResource = "Set Output Device Volume"
+    static let description = IntentDescription("Set a Mac output device's volume from the widget.")
+    static var isDiscoverable: Bool { false }
+
+    @Parameter(title: "Output Device Identifier")
+    var deviceID: String
+
+    @Parameter(title: "Volume")
+    var volume: Double
+
+    init() { self.deviceID = ""; self.volume = 1 }
+    init(deviceID: String, volume: Double) {
+        self.deviceID = deviceID
+        self.volume = volume
+    }
+
+    func perform() async throws -> some IntentResult {
+        guard let command = WidgetIntentCommandFactory.setOutputDeviceVolume(
+            deviceID: deviceID,
+            volume: volume
+        ) else { return .result() }
+        try WidgetIntentCommandSender.enqueue(command)
+        return .result()
+    }
+}
+
+struct SetDefaultOutputDeviceIntent: AppIntent {
+    static let title: LocalizedStringResource = "Choose Default Output"
+    static let description = IntentDescription("Choose the Mac's default audio output from the widget.")
+    static var isDiscoverable: Bool { false }
+
+    @Parameter(title: "Output Device Identifier")
+    var deviceID: String
+
+    init() { self.deviceID = "" }
+    init(deviceID: String) { self.deviceID = deviceID }
+
+    func perform() async throws -> some IntentResult {
+        guard let command = WidgetIntentCommandFactory.selectOutputDevice(deviceID: deviceID) else {
+            return .result()
+        }
+        try WidgetIntentCommandSender.enqueue(command)
+        return .result()
+    }
+}
+
+struct ApplyAudioProfileIntent: AppIntent {
+    static let title: LocalizedStringResource = "Apply Audio Profile"
+    static let description = IntentDescription("Apply a saved Auralis audio profile from the widget.")
+    static var isDiscoverable: Bool { false }
+
+    @Parameter(title: "Profile Identifier")
+    var profileID: String
+
+    init() { self.profileID = "" }
+    init(profileID: String) { self.profileID = profileID }
+
+    func perform() async throws -> some IntentResult {
+        guard let command = WidgetIntentCommandFactory.applyProfile(profileID: profileID) else {
+            return .result()
+        }
+        try WidgetIntentCommandSender.enqueue(command)
+        return .result()
+    }
+}
+
 struct SetBoostAppIntent: AppIntent {
     static let title: LocalizedStringResource = "Set App Boost"
     static let description = IntentDescription("Set an app's audio boost level from the widget.")

@@ -777,6 +777,8 @@ final class AudioControlStoreTests: XCTestCase {
         store.setDeviceVolumeIntent(-0.3, for: "usb")
         await store.waitForPendingOperations()
         XCTAssertEqual(backend.perDeviceVolume["usb"] ?? -1, 0, accuracy: 0.001)
+        XCTAssertEqual(store.settings.deviceSettings["usb"]?.volume ?? -1, 0, accuracy: 0.001)
+        XCTAssertEqual(try store.settingsStore.load().deviceSettings["usb"]?.volume ?? -1, 0, accuracy: 0.001)
     }
 
     func testToggleDeviceMuteIntentFlipsPerDeviceMute() async throws {
@@ -795,6 +797,44 @@ final class AudioControlStoreTests: XCTestCase {
         await store.waitForPendingOperations()
         XCTAssertFalse(backend.perDeviceMuted["usb"] ?? true)
         XCTAssertFalse(store.deviceVolumeStates["usb"]?.isMuted ?? true)
+        XCTAssertFalse(try store.settingsStore.load().deviceSettings["usb"]?.isMuted ?? true)
+    }
+
+    func testProfilesCaptureApplyAndPersistAppDeviceAndPreferredOutputSettings() async throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let builtIn = AudioDeviceSnapshot(id: "built-in", name: "MacBook Speakers", isDefault: true)
+        let home = AudioDeviceSnapshot(id: "home-speaker", name: "Home Speaker")
+        let backend = MockAudioBackend(
+            apps: [AudioAppSnapshot(identity: music, displayName: "Music")],
+            devices: [builtIn, home]
+        )
+        let store = try makeStore(backend: backend)
+        try await store.refresh()
+        try await store.setVolume(0.35, for: music)
+        try await store.setDeviceVolume(0.62, for: home.id)
+        try await store.setDeviceMuted(true, for: home.id)
+        try await store.setDefaultOutputDevice(home.id)
+
+        let profileID = try await store.createProfile(named: "Home")
+        XCTAssertEqual(store.activeProfile?.name, "Home")
+
+        try await store.setVolume(0.9, for: music)
+        try await store.setDeviceVolume(0.2, for: home.id)
+        try await store.setDeviceMuted(false, for: home.id)
+        try await store.setDefaultOutputDevice(builtIn.id)
+        XCTAssertNil(store.settings.activeProfileID)
+
+        try await store.applyProfile(profileID)
+
+        XCTAssertEqual(store.settings.appSettings[music]?.volume ?? -1, 0.35, accuracy: 0.001)
+        XCTAssertEqual(store.deviceVolumeStates[home.id]?.volume ?? -1, 0.62, accuracy: 0.001)
+        XCTAssertTrue(store.deviceVolumeStates[home.id]?.isMuted ?? false)
+        XCTAssertEqual(store.devices.first(where: \.isDefault)?.id, home.id)
+        XCTAssertEqual(store.settings.activeProfileID, profileID)
+        let saved = try store.settingsStore.load()
+        XCTAssertEqual(saved.profiles.first?.name, "Home")
+        XCTAssertEqual(saved.profiles.first?.preferredOutputDeviceID, home.id)
+        XCTAssertEqual(saved.activeProfileID, profileID)
     }
 
     private func grantedClient() -> FakePermissionClient {

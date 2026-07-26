@@ -58,6 +58,23 @@ struct OutputVolumeSection: View {
         let presentation = OutputControlPresentation(capabilities: state.capabilities)
 
         return HStack(spacing: layout == .desktop ? 10 : 6) {
+            Button {
+                store.setDefaultOutputDeviceIntent(device.id)
+            } label: {
+                Image(systemName: device.isDefault ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: layout.iconSize))
+                    .foregroundStyle(device.isDefault ? Color.accentColor : Color.secondary)
+                    .frame(width: layout.muteSize, height: layout.muteSize)
+            }
+            .buttonStyle(.plain)
+            .disabled(device.isDefault)
+            .help(device.isDefault ? "\(device.name) is the default output" : "Use \(device.name) as the default output")
+            .accessibilityLabel(
+                device.isDefault
+                    ? "\(device.name), current default output"
+                    : "Use \(device.name) as default output"
+            )
+
             if presentation.showsMute {
                 Button {
                     store.toggleDeviceMuteIntent(for: device.id)

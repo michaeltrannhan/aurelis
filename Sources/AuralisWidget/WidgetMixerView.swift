@@ -15,7 +15,11 @@ struct AuralisMixerWidgetView: View {
     let entry: AuralisEntry
 
     private var presentation: WidgetMixerPresentation {
-        WidgetMixerPresentation(snapshot: entry.snapshot, date: entry.date, maximumAppCount: 3)
+        WidgetMixerPresentation(
+            snapshot: entry.snapshot,
+            date: entry.date,
+            maximumAppCount: entry.family == .systemLarge ? 3 : 2
+        )
     }
 
     private var controlsEnabled: Bool {
@@ -30,6 +34,8 @@ struct AuralisMixerWidgetView: View {
         switch entry.family {
         case .systemSmall:
             smallBody
+        case .systemLarge:
+            largeBody
         default:
             mediumBody
         }
@@ -38,20 +44,24 @@ struct AuralisMixerWidgetView: View {
     // MARK: - systemSmall
 
     private var smallBody: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 6) {
                 AuralisWidgetMark()
                     .frame(width: 22, height: 22)
-                Text("Auralis")
-                    .font(.headline)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Auralis")
+                        .font(.subheadline.weight(.semibold))
+                    Text(presentation.activeProfile?.name ?? "Master Output")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 Spacer(minLength: 0)
+                Link(destination: URL(string: "auralis://open")!) {
+                    Image(systemName: "arrow.up.right")
+                        .font(.caption.weight(.semibold))
+                }
             }
-            Text(statusText)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-
-            Divider()
 
             if let device = presentation.defaultDevice {
                 smallDeviceRow(device)
@@ -62,59 +72,60 @@ struct AuralisMixerWidgetView: View {
             }
 
             Spacer(minLength: 0)
-
-            Link(destination: URL(string: "auralis://open")!) {
-                Label("Open Mixer", systemImage: "arrow.up.right.square")
-                    .font(.caption2.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-            }
+            Text(controlsEnabled ? presentation.activeCountText : statusText)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
         }
         .padding(4)
     }
 
     private func smallDeviceRow(_ device: WidgetSnapshot.DeviceSummary) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Image(systemName: device.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    .foregroundStyle(device.isMuted ? Color.red : Color.accentColor)
-                    .font(.callout)
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 4) {
+                Image(systemName: "hifispeaker.fill")
+                    .foregroundStyle(Color.accentColor)
+                    .font(.caption)
                 Text(device.name)
                     .font(.caption.weight(.medium))
                     .lineLimit(1)
                 Spacer(minLength: 0)
-                Text("\(Int((device.volume * 100).rounded()))%")
-                    .font(.caption.monospacedDigit())
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text("\(Int((device.volume * 100).rounded()))")
+                    .font(.system(size: 27, weight: .semibold, design: .rounded).monospacedDigit())
+                Text("%")
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-            }
-            Gauge(value: device.volume, in: 0...1) {
-                EmptyView()
-            }
-            .gaugeStyle(.accessoryLinear)
-            .tint(device.isMuted ? .secondary : .accentColor)
-            Button(intent: SetOutputDeviceMutedIntent(deviceID: device.id, muted: !device.isMuted)) {
+                Spacer()
                 Image(systemName: device.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    .font(.caption)
                     .foregroundStyle(device.isMuted ? Color.red : Color.accentColor)
             }
-            .disabled(!controlsEnabled)
-            .help(device.isMuted ? "Unmute \(device.name)" : "Mute \(device.name)")
-            .accessibilityLabel(
-                WidgetMixerPresentation.muteLabel(name: device.name, isMuted: device.isMuted)
+
+            WidgetOutputControls(
+                device: device,
+                volumeStep: entry.snapshot.volumeStep,
+                controlsEnabled: controlsEnabled
             )
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(device.name)
+        .accessibilityValue(WidgetMixerPresentation.outputValue(device))
     }
 
     // MARK: - systemMedium
 
     private var mediumBody: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 5) {
             mediumHeader
-            Divider()
+            if let device = presentation.defaultDevice {
+                mediumOutputRow(device)
+            }
             mediumRows
             Spacer(minLength: 0)
-            mediumFooter
         }
-        .padding(6)
+        .padding(5)
     }
 
     private var mediumHeader: some View {
@@ -144,9 +155,46 @@ struct AuralisMixerWidgetView: View {
         }
     }
 
+    private func mediumOutputRow(_ device: WidgetSnapshot.DeviceSummary) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "hifispeaker.fill")
+                .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(device.name)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                Text(presentation.activeProfile?.name ?? "Master output")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if presentation.devices.count > 1, let nextDevice {
+                Button(intent: SetDefaultOutputDeviceIntent(deviceID: nextDevice.id)) {
+                    Image(systemName: "arrow.triangle.swap")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .disabled(!controlsEnabled)
+                .help("Switch output to \(nextDevice.name)")
+            }
+
+            Text("\(Int((device.volume * 100).rounded()))%")
+                .font(.caption2.monospacedDigit().weight(.semibold))
+                .frame(width: 30, alignment: .trailing)
+
+            WidgetOutputControls(
+                device: device,
+                volumeStep: entry.snapshot.volumeStep,
+                controlsEnabled: controlsEnabled
+            )
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
+    }
+
     private var mediumRows: some View {
         let apps = presentation.apps
-        return VStack(spacing: 4) {
+        return VStack(spacing: 3) {
             ForEach(apps) { app in
                 WidgetAppRow(
                     app: app,
@@ -165,19 +213,190 @@ struct AuralisMixerWidgetView: View {
         }
     }
 
-    private var mediumFooter: some View {
-        HStack {
-            Text("Open app for full mixer")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+    private var nextDevice: WidgetSnapshot.DeviceSummary? {
+        guard let current = presentation.defaultDevice,
+              let index = presentation.devices.firstIndex(where: { $0.id == current.id }),
+              presentation.devices.count > 1 else { return nil }
+        return presentation.devices[(index + 1) % presentation.devices.count]
+    }
+
+    // MARK: - systemLarge
+
+    private var largeBody: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            mediumHeader
+            largeProfiles
+            largeOutputs
+            largeApps
             Spacer(minLength: 0)
-            Link(destination: URL(string: "auralis://open")!) {
-                Label("Open", systemImage: "arrow.up.right.square")
-                    .font(.caption2.weight(.semibold))
+        }
+        .padding(6)
+    }
+
+    @ViewBuilder
+    private var largeProfiles: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            sectionLabel("PROFILES", systemImage: "square.stack.3d.up.fill")
+            HStack(spacing: 5) {
+                if presentation.profiles.isEmpty {
+                    Link(destination: URL(string: "auralis://open")!) {
+                        Label("Create profiles in Auralis", systemImage: "plus")
+                            .font(.caption2.weight(.semibold))
+                    }
+                } else {
+                    ForEach(Array(presentation.profiles.prefix(3))) { profile in
+                        Button(intent: ApplyAudioProfileIntent(profileID: profile.id)) {
+                            HStack(spacing: 3) {
+                                Image(systemName: profile.id == entry.snapshot.activeProfileID
+                                    ? "checkmark.circle.fill"
+                                    : "circle")
+                                Text(profile.name)
+                                    .lineLimit(1)
+                            }
+                            .font(.system(size: 10, weight: .semibold))
+                            .padding(.horizontal, 7)
+                            .frame(height: 24)
+                            .background(
+                                profile.id == entry.snapshot.activeProfileID
+                                    ? Color.accentColor.opacity(0.16)
+                                    : Color.secondary.opacity(0.09),
+                                in: Capsule()
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!controlsEnabled)
+                    }
+                }
+                Spacer(minLength: 0)
             }
         }
     }
 
+    private var largeOutputs: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            sectionLabel("OUTPUTS", systemImage: "hifispeaker.2.fill")
+            if let device = presentation.defaultDevice {
+                HStack(spacing: 7) {
+                    Image(systemName: "hifispeaker.fill")
+                        .foregroundStyle(Color.accentColor)
+                    Text(device.name)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Text("\(Int((device.volume * 100).rounded()))%")
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                    WidgetOutputControls(
+                        device: device,
+                        volumeStep: entry.snapshot.volumeStep,
+                        controlsEnabled: controlsEnabled
+                    )
+                }
+                .padding(.horizontal, 8).padding(.vertical, 5)
+                .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 8))
+
+                HStack(spacing: 5) {
+                    ForEach(Array(presentation.devices.prefix(3))) { candidate in
+                        Button(intent: SetDefaultOutputDeviceIntent(deviceID: candidate.id)) {
+                            HStack(spacing: 3) {
+                                Image(systemName: candidate.isDefault ? "checkmark.circle.fill" : "circle")
+                                Text(candidate.name)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
+                            }
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(candidate.isDefault ? Color.accentColor : Color.primary)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 23)
+                            .background(
+                                candidate.isDefault
+                                    ? Color.accentColor.opacity(0.12)
+                                    : Color.secondary.opacity(0.08),
+                                in: RoundedRectangle(cornerRadius: 6)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!controlsEnabled || candidate.isDefault)
+                        .help(candidate.isDefault
+                            ? "\(candidate.name) is the current output"
+                            : "Use \(candidate.name) as output")
+                    }
+                }
+            } else {
+                Text("No output devices")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+            }
+        }
+    }
+
+    private var largeApps: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            sectionLabel("APPLICATIONS", systemImage: "waveform")
+            ForEach(presentation.apps) { app in
+                WidgetAppRow(
+                    app: app,
+                    volumeStep: entry.snapshot.volumeStep,
+                    controlsEnabled: controlsEnabled,
+                    showEQButton: false
+                )
+            }
+            if presentation.apps.isEmpty {
+                Text("No active audio apps")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            }
+        }
+    }
+
+    private func sectionLabel(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.system(size: 9, weight: .bold))
+            .tracking(0.7)
+            .foregroundStyle(.secondary)
+    }
+}
+
+private struct WidgetOutputControls: View {
+    let device: WidgetSnapshot.DeviceSummary
+    let volumeStep: Double
+    let controlsEnabled: Bool
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Button(intent: SetOutputDeviceVolumeIntent(deviceID: device.id, volume: stepped(-1))) {
+                Image(systemName: "minus")
+                    .font(.system(size: 9, weight: .bold))
+                    .frame(width: 18, height: 18)
+            }
+            .disabled(!controlsEnabled)
+            .accessibilityLabel(WidgetMixerPresentation.volumeLabel(name: device.name, direction: -1))
+
+            Button(intent: SetOutputDeviceMutedIntent(deviceID: device.id, muted: !device.isMuted)) {
+                Image(systemName: device.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(device.isMuted ? Color.red : Color.accentColor)
+                    .frame(width: 20, height: 18)
+            }
+            .disabled(!controlsEnabled)
+            .accessibilityLabel(WidgetMixerPresentation.muteLabel(name: device.name, isMuted: device.isMuted))
+
+            Button(intent: SetOutputDeviceVolumeIntent(deviceID: device.id, volume: stepped(1))) {
+                Image(systemName: "plus")
+                    .font(.system(size: 9, weight: .bold))
+                    .frame(width: 18, height: 18)
+            }
+            .disabled(!controlsEnabled)
+            .accessibilityLabel(WidgetMixerPresentation.volumeLabel(name: device.name, direction: 1))
+        }
+    }
+
+    private func stepped(_ direction: Double) -> Double {
+        min(max(device.volume + direction * volumeStep, 0), 1)
+    }
 }
 
 /// One app row in the mixer widget. Visual parity with `AppRowView.desktopBody`

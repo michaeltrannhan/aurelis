@@ -45,6 +45,27 @@ final class CoreAudioOutputVolumeController: @unchecked Sendable {
         try setMute(muted, for: deviceID)
     }
 
+    func setDefaultOutputDevice(forUID uid: String) throws {
+        let deviceID = try deviceObjectID(forUID: uid)
+        var address = Self.defaultOutputDeviceAddress()
+        var value = deviceID
+        let status = AudioObjectSetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            UInt32(MemoryLayout<AudioObjectID>.size),
+            &value
+        )
+        guard status == noErr else {
+            throw CoreAudioDiscoveryError.propertyReadFailed(
+                objectID: AudioObjectID(kAudioObjectSystemObject),
+                selector: kAudioHardwarePropertyDefaultOutputDevice,
+                status: status
+            )
+        }
+    }
+
     func startObserving(_ onChange: @escaping @Sendable () -> Void) {
         guard self.onChange == nil else { return }
         self.onChange = onChange

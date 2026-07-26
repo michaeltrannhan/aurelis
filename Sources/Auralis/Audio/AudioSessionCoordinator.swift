@@ -57,6 +57,7 @@ actor AudioEngineActor {
     private var backend: (any AudioBackend)?
     private var mode: BackendMode
     private var restoredBackendIdentities: Set<AudioAppIdentity> = []
+    private var restoredOutputDeviceUIDs: Set<String> = []
     private var lastDevices: [AudioDeviceSnapshot] = []
 
     private var topologyObservationTask: Task<Void, Never>?
@@ -71,6 +72,7 @@ actor AudioEngineActor {
         let previousBackend: any AudioBackend
         let previousMode: BackendMode
         let previousRestoredIdentities: Set<AudioAppIdentity>
+        let previousRestoredOutputDeviceUIDs: Set<String>
         let wasObserving: Bool
         let isNoOp: Bool
     }
@@ -117,10 +119,9 @@ actor AudioEngineActor {
         permissionAllowsTaps: Bool
     ) throws -> AudioEngineSnapshot {
         let backend = ensureBackend()
-        let snapshot = try backend.fetchSnapshot()
-        lastDevices = snapshot.devices
+        var snapshot = try backend.fetchSnapshot()
 
-        var restoreIssue: String?
+        var restoreIssues: [String] = []
         for app in snapshot.apps where !restoredBackendIdentities.contains(app.identity) {
             let appSettings = settings.appSettings[app.identity] ?? AppAudioSettings(
                 displayName: app.displayName,
@@ -133,9 +134,17 @@ actor AudioEngineActor {
                 }
                 restoredBackendIdentities.insert(app.identity)
             } catch {
-                if restoreIssue == nil { restoreIssue = error.localizedDescription }
+                restoreIssues.append(error.localizedDescription)
             }
         }
+
+        restoreOutputSettings(
+            settings,
+            snapshot: &snapshot,
+            backend: backend,
+            issues: &restoreIssues
+        )
+        lastDevices = snapshot.devices
 
         let tapIssue: String?
         do {
@@ -158,7 +167,7 @@ actor AudioEngineActor {
             backend: snapshot,
             output: output,
             statusMessage: status,
-            restoreIssue: restoreIssue,
+            restoreIssue: restoreIssues.first,
             tapIssue: tapIssue
         )
     }
@@ -205,6 +214,10 @@ actor AudioEngineActor {
         try (ensureBackend() as? AudioBackendOutputVolumeControlling)?.setOutputMuted(muted, forUID: uid)
     }
 
+    func setDefaultOutputDevice(forUID uid: String) throws {
+        try (ensureBackend() as? AudioBackendOutputVolumeControlling)?.setDefaultOutputDevice(forUID: uid)
+    }
+
     func startObservation(
         debounceNanoseconds: UInt64 = 250_000_000,
         meterIntervalNanoseconds: UInt64 = 100_000_000
@@ -233,6 +246,7 @@ actor AudioEngineActor {
                 previousBackend: current,
                 previousMode: mode,
                 previousRestoredIdentities: restoredBackendIdentities,
+                previousRestoredOutputDeviceUIDs: restoredOutputDeviceUIDs,
                 wasObserving: wasObserving,
                 isNoOp: true
             )
@@ -252,12 +266,14 @@ actor AudioEngineActor {
             previousBackend: current,
             previousMode: mode,
             previousRestoredIdentities: restoredBackendIdentities,
+            previousRestoredOutputDeviceUIDs: restoredOutputDeviceUIDs,
             wasObserving: wasObserving,
             isNoOp: false
         )
         backend = backendFactory(newMode)
         mode = newMode
         restoredBackendIdentities.removeAll()
+        restoredOutputDeviceUIDs.removeAll()
         lastDevices = []
         if wasObserving { startObservationInternal() }
         return token
@@ -287,6 +303,7 @@ actor AudioEngineActor {
         backend = pending.previousBackend
         mode = pending.previousMode
         restoredBackendIdentities = pending.previousRestoredIdentities
+        restoredOutputDeviceUIDs = pending.previousRestoredOutputDeviceUIDs
         pendingSwitch = nil
         if pending.wasObserving { startObservationInternal() }
     }
@@ -407,6 +424,59 @@ actor AudioEngineActor {
                 ?? OutputVolumeState(deviceName: device.name)
         }
         return AudioOutputSnapshot(defaultOutput: defaultState, devices: deviceStates)
+    }
+
+    private func restoreOutputSettings(
+        _ settings: PersistedSettings,
+        snapshot: inout AudioBackendSnapshot,
+        backend: any AudioBackend,
+        issues: inout [String]
+    ) {
+        let availableUIDs = Set(snapshot.devices.map(\.id))
+        restoredOutputDeviceUIDs.formIntersection(availableUIDs)
+        let newlyAvailableUIDs = availableUIDs.subtracting(restoredOutputDeviceUIDs)
+        guard !newlyAvailableUIDs.isEmpty else { return }
+        guard let output = backend as? AudioBackendOutputVolumeControlling else {
+            restoredOutputDeviceUIDs.formUnion(newlyAvailableUIDs)
+            return
+        }
+
+        var failedUIDs = Set<String>()
+        if let preferred = settings.preferredOutputDeviceID,
+           newlyAvailableUIDs.contains(preferred),
+           snapshot.devices.contains(where: { $0.id == preferred && !$0.isDefault }) {
+            do {
+                try output.setDefaultOutputDevice(forUID: preferred)
+                snapshot.devices = snapshot.devices.map {
+                    AudioDeviceSnapshot(id: $0.id, name: $0.name, isDefault: $0.id == preferred)
+                }
+            } catch {
+                failedUIDs.insert(preferred)
+                issues.append("Couldn’t restore preferred output: \(error.localizedDescription)")
+            }
+        }
+
+        for uid in newlyAvailableUIDs {
+            guard let desired = settings.deviceSettings[uid] else {
+                if !failedUIDs.contains(uid) {
+                    restoredOutputDeviceUIDs.insert(uid)
+                }
+                continue
+            }
+            do {
+                let current = try output.readOutputVolume(forUID: uid)
+                if current.capabilities.canSetVolume {
+                    try output.setOutputVolume(desired.volume, forUID: uid)
+                }
+                if current.capabilities.canSetMute {
+                    try output.setOutputMuted(desired.isMuted, forUID: uid)
+                }
+                restoredOutputDeviceUIDs.insert(uid)
+            } catch {
+                failedUIDs.insert(uid)
+                issues.append("Couldn’t restore \(desired.displayName): \(error.localizedDescription)")
+            }
+        }
     }
 
     private static func restoreCommands(

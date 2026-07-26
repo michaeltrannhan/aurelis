@@ -175,6 +175,10 @@ extension CoreAudioDiscoveryBackend: AudioBackendOutputVolumeControlling {
         try outputVolumeController.setOutputMuted(muted, forUID: uid)
     }
 
+    func setDefaultOutputDevice(forUID uid: String) throws {
+        try outputVolumeController.setDefaultOutputDevice(forUID: uid)
+    }
+
     func startObservingOutputVolume(_ onChange: @escaping @Sendable () -> Void) {
         outputVolumeController.startObserving(onChange)
     }

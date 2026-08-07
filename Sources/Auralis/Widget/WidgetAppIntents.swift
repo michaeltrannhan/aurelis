@@ -160,6 +160,82 @@ struct ApplyAudioProfileIntent: AppIntent {
     }
 }
 
+struct AssignAudioPresetToCurrentOutputIntent: AppIntent {
+    static let title: LocalizedStringResource = "Assign Audio Preset to Current Output"
+    static let description = IntentDescription(
+        "Use a saved Auralis preset, including per-app EQ, for the current output."
+    )
+    static var isDiscoverable: Bool { false }
+
+    @Parameter(title: "Profile Identifier")
+    var profileID: String
+
+    init() { self.profileID = "" }
+    init(profileID: String) { self.profileID = profileID }
+
+    func perform() async throws -> some IntentResult {
+        guard let command = WidgetIntentCommandFactory.assignProfileToCurrentOutput(
+            profileID: profileID
+        ) else {
+            return .result()
+        }
+        try WidgetIntentCommandSender.enqueue(command)
+        return .result()
+    }
+}
+
+struct SetAllAppsMutedIntent: AppIntent {
+    static let title: LocalizedStringResource = "Set All Active Apps Mute"
+    static let description = IntentDescription("Mute or unmute every active audio app from the widget.")
+    static var isDiscoverable: Bool { false }
+
+    @Parameter(title: "Muted")
+    var muted: Bool
+
+    init() { self.muted = false }
+    init(muted: Bool) { self.muted = muted }
+
+    func perform() async throws -> some IntentResult {
+        try WidgetIntentCommandSender.enqueue(
+            WidgetIntentCommandFactory.setAllAppsMuted(muted)
+        )
+        return .result()
+    }
+}
+
+struct SetAllAppsVolumeIntent: AppIntent {
+    static let title: LocalizedStringResource = "Set All Active Apps Volume"
+    static let description = IntentDescription("Set every active audio app to the same volume from the widget.")
+    static var isDiscoverable: Bool { false }
+
+    @Parameter(title: "Volume")
+    var volume: Double
+
+    init() { self.volume = 0.5 }
+    init(volume: Double) { self.volume = volume }
+
+    func perform() async throws -> some IntentResult {
+        guard let command = WidgetIntentCommandFactory.setAllAppsVolume(volume) else {
+            return .result()
+        }
+        try WidgetIntentCommandSender.enqueue(command)
+        return .result()
+    }
+}
+
+struct RevertProfileChangesIntent: AppIntent {
+    static let title: LocalizedStringResource = "Revert Audio Profile Changes"
+    static let description = IntentDescription("Restore the active global and output profiles from the widget.")
+    static var isDiscoverable: Bool { false }
+
+    func perform() async throws -> some IntentResult {
+        try WidgetIntentCommandSender.enqueue(
+            WidgetIntentCommandFactory.revertProfileChanges()
+        )
+        return .result()
+    }
+}
+
 struct SetBoostAppIntent: AppIntent {
     static let title: LocalizedStringResource = "Set App Boost"
     static let description = IntentDescription("Set an app's audio boost level from the widget.")

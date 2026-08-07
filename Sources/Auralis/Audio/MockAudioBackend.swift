@@ -5,11 +5,8 @@ final class MockAudioBackend: AudioBackend {
     private(set) var commands: [AudioBackendCommand] = []
     var fetchError: Error?
     var applyError: Error?
-    var outputVolume: Double = 0.75
-    var outputMuted: Bool = false
     private(set) var selectedDefaultOutputDeviceID: String?
     /// Per-device UID volume/mute state for `AudioBackendOutputVolumeControlling`.
-    /// Entries not present here fall back to the default `outputVolume`/`outputMuted`.
     var perDeviceVolume: [String: Double] = [:]
     var perDeviceMuted: [String: Bool] = [:]
 
@@ -65,34 +62,17 @@ extension MockAudioBackend: AudioBackendOutputVolumeControlling {
         snapshot.devices.first(where: { $0.id == uid })?.name
     }
 
-    func readOutputVolume() throws -> OutputVolumeState {
-        OutputVolumeState(
-            volume: outputVolume,
-            isMuted: outputMuted,
-            deviceName: "MacBook Speakers",
-            capabilities: .controllable
-        )
-    }
-
     func readOutputVolume(forUID uid: String) throws -> OutputVolumeState {
         OutputVolumeState(
-            volume: perDeviceVolume[uid] ?? outputVolume,
-            isMuted: perDeviceMuted[uid] ?? outputMuted,
+            volume: perDeviceVolume[uid] ?? 0.75,
+            isMuted: perDeviceMuted[uid] ?? false,
             deviceName: deviceName(forUID: uid),
             capabilities: .controllable
         )
     }
 
-    func setOutputVolume(_ volume: Double) throws {
-        outputVolume = min(max(volume, 0), 1)
-    }
-
     func setOutputVolume(_ volume: Double, forUID uid: String) throws {
         perDeviceVolume[uid] = min(max(volume, 0), 1)
-    }
-
-    func setOutputMuted(_ muted: Bool) throws {
-        outputMuted = muted
     }
 
     func setOutputMuted(_ muted: Bool, forUID uid: String) throws {

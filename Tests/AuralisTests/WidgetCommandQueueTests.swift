@@ -206,7 +206,7 @@ final class WidgetCommandQueueTests: XCTestCase {
         let layout = try makeLayout()
         let device = AudioDeviceSnapshot(id: "usb-speakers", name: "USB Speakers", isDefault: true)
         let backend = MockAudioBackend(devices: [device])
-        let store = try makeStore(backend: backend)
+        let store = makeStore(backend: backend)
         try await store.refresh()
         let command = WidgetCommand.outputDevice(identity: device.id, muted: true)
         try WidgetCommandQueue.enqueue(command, layout: layout)
@@ -225,6 +225,45 @@ final class WidgetCommandQueueTests: XCTestCase {
         XCTAssertEqual(report.results.first?.status, .applied)
         XCTAssertEqual(backend.perDeviceMuted[device.id], true)
         XCTAssertEqual(store.deviceVolumeStates[device.id]?.isMuted, true)
+    }
+
+    @MainActor
+    func testAssignPresetCommandUsesCurrentOutputAndAppliesItsEQ() async throws {
+        let layout = try makeLayout()
+        let music = AudioAppIdentity(rawValue: "music")
+        let display = AudioDeviceSnapshot(
+            id: "lg-ultrafine",
+            name: "LG UltraFine",
+            isDefault: true
+        )
+        let backend = MockAudioBackend(
+            apps: [AudioAppSnapshot(identity: music, displayName: "Music", isActive: true)],
+            devices: [display]
+        )
+        let store = makeStore(backend: backend)
+        try await store.refresh()
+        try await store.setEQGain(4, band: 1, for: music)
+        let blackstarID = try await store.createProfile(named: "Blackstar", scope: .global)
+        try await store.setEQGain(0, band: 1, for: music)
+        let command = WidgetCommand.assignProfileToCurrentOutput(
+            identity: blackstarID.uuidString
+        )
+        try WidgetCommandQueue.enqueue(command, layout: layout)
+        let processor = WidgetCommandProcessor(
+            layout: layout,
+            execute: { try await WidgetCommandStoreExecutor.apply($0, to: store) },
+            publishSnapshot: {
+                let snapshot = WidgetBridge.makeSnapshot(from: store)
+                try WidgetSnapshotWriter.write(snapshot, layout: layout)
+                return snapshot.generatedAt
+            }
+        )
+
+        let report = await processor.drain()
+
+        XCTAssertEqual(report.results.first?.status, .applied)
+        XCTAssertEqual(store.outputConfiguration(for: display.id)?.name, "Blackstar")
+        XCTAssertEqual(store.settings.appSettings[music]?.eq.gains[1], 4)
     }
 
     @MainActor
@@ -274,7 +313,7 @@ final class WidgetCommandQueueTests: XCTestCase {
 
     @MainActor
     func testMissingAppGroupIsPublishedAsConfigurationIssue() async throws {
-        let store = try makeStore(backend: MockAudioBackend())
+        let store = makeStore(backend: MockAudioBackend())
         let bridge = WidgetBridge(
             store: store,
             layoutResolver: { throw WidgetIPCError.appGroupUnavailable("missing.group") },
@@ -296,7 +335,7 @@ final class WidgetCommandQueueTests: XCTestCase {
         let backend = MockAudioBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music")
         ])
-        let store = try makeStore(backend: backend)
+        let store = makeStore(backend: backend)
         try await store.refresh()
         let command = WidgetCommand.app(identity: music.rawValue, action: .setVolume(0.25))
         let applied = expectation(description: "bridge published command acknowledgment")
@@ -353,9 +392,9 @@ final class WidgetCommandQueueTests: XCTestCase {
     }
 
     @MainActor
-    private func makeStore(backend: MockAudioBackend) throws -> AudioControlStore {
+    private func makeStore(backend: MockAudioBackend) -> AudioControlStore {
         let settingsURL = temporaryFileURL(prefix: "AuralisWidgetSettings", filename: "settings.json")
-        return try AudioControlStore(
+        return AudioControlStore(
             settingsStore: SettingsStore(settingsURL: settingsURL),
             backend: backend
         )

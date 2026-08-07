@@ -21,7 +21,11 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
     public private(set) var devices: [DeviceSummary]
     public private(set) var apps: [AppSummary]
     public private(set) var profiles: [ProfileSummary]
+    public private(set) var activeGlobalProfileID: String?
+    public private(set) var activeLocalProfileID: String?
+    /// Compatibility mirror containing the most-specific active profile.
     public private(set) var activeProfileID: String?
+    public private(set) var profileHasOverrides: Bool
 
     public init(
         generatedAt: Date,
@@ -33,7 +37,10 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
         devices: [DeviceSummary],
         apps: [AppSummary],
         profiles: [ProfileSummary] = [],
-        activeProfileID: String? = nil
+        activeGlobalProfileID: String? = nil,
+        activeLocalProfileID: String? = nil,
+        activeProfileID: String? = nil,
+        profileHasOverrides: Bool = false
     ) {
         self.generatedAt = Self.finiteDate(generatedAt)
         self.hostState = hostState
@@ -44,9 +51,13 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
         self.devices = devices
         self.apps = apps
         self.profiles = profiles
-        self.activeProfileID = activeProfileID.flatMap {
-            WidgetWireNormalization.optionalIdentity($0)
-        }
+        let legacyID = activeProfileID.flatMap(WidgetWireNormalization.optionalIdentity)
+        let globalID = activeGlobalProfileID.flatMap(WidgetWireNormalization.optionalIdentity)
+        let localID = activeLocalProfileID.flatMap(WidgetWireNormalization.optionalIdentity)
+        self.activeGlobalProfileID = globalID ?? (localID == nil ? legacyID : nil)
+        self.activeLocalProfileID = localID
+        self.activeProfileID = localID ?? globalID ?? legacyID
+        self.profileHasOverrides = profileHasOverrides && self.activeProfileID != nil
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -59,22 +70,28 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
         case devices
         case apps
         case profiles
+        case activeGlobalProfileID
+        case activeLocalProfileID
         case activeProfileID
+        case profileHasOverrides
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
-            generatedAt: container.widgetTolerant(Date.self, forKey: .generatedAt) ?? .distantPast,
-            hostState: container.widgetTolerant(WidgetHostState.self, forKey: .hostState) ?? .stopped,
-            hostUpdatedAt: container.widgetTolerant(Date.self, forKey: .hostUpdatedAt) ?? .distantPast,
-            statusMessage: container.widgetTolerant(String.self, forKey: .statusMessage) ?? "Open Auralis to use widget controls.",
-            activeAppCount: container.widgetTolerant(Int.self, forKey: .activeAppCount) ?? 0,
-            volumeStep: container.widgetTolerantDouble(forKey: .volumeStep) ?? 0.05,
-            devices: container.widgetTolerant(WidgetTolerantArray<DeviceSummary>.self, forKey: .devices)?.values ?? [],
-            apps: container.widgetTolerant(WidgetTolerantArray<AppSummary>.self, forKey: .apps)?.values ?? [],
-            profiles: container.widgetTolerant(WidgetTolerantArray<ProfileSummary>.self, forKey: .profiles)?.values ?? [],
-            activeProfileID: container.widgetTolerant(String.self, forKey: .activeProfileID)
+            generatedAt: container.tolerant(Date.self, forKey: .generatedAt) ?? .distantPast,
+            hostState: container.tolerant(WidgetHostState.self, forKey: .hostState) ?? .stopped,
+            hostUpdatedAt: container.tolerant(Date.self, forKey: .hostUpdatedAt) ?? .distantPast,
+            statusMessage: container.tolerant(String.self, forKey: .statusMessage) ?? "Open Auralis to use widget controls.",
+            activeAppCount: container.tolerant(Int.self, forKey: .activeAppCount) ?? 0,
+            volumeStep: container.tolerantDouble(forKey: .volumeStep) ?? 0.05,
+            devices: container.tolerant(TolerantArray<DeviceSummary>.self, forKey: .devices)?.values ?? [],
+            apps: container.tolerant(TolerantArray<AppSummary>.self, forKey: .apps)?.values ?? [],
+            profiles: container.tolerant(TolerantArray<ProfileSummary>.self, forKey: .profiles)?.values ?? [],
+            activeGlobalProfileID: container.tolerant(String.self, forKey: .activeGlobalProfileID),
+            activeLocalProfileID: container.tolerant(String.self, forKey: .activeLocalProfileID),
+            activeProfileID: container.tolerant(String.self, forKey: .activeProfileID),
+            profileHasOverrides: container.tolerant(Bool.self, forKey: .profileHasOverrides) ?? false
         )
     }
 
@@ -110,7 +127,7 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            let id = container.widgetTolerant(String.self, forKey: .id) ?? ""
+            let id = container.tolerant(String.self, forKey: .id) ?? ""
             guard !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw DecodingError.dataCorrupted(
                     DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Device identity cannot be empty")
@@ -118,10 +135,10 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
             }
             self.init(
                 id: id,
-                name: container.widgetTolerant(String.self, forKey: .name) ?? id,
-                volume: container.widgetTolerantDouble(forKey: .volume) ?? 1,
-                isMuted: container.widgetTolerant(Bool.self, forKey: .isMuted) ?? false,
-                isDefault: container.widgetTolerant(Bool.self, forKey: .isDefault) ?? false
+                name: container.tolerant(String.self, forKey: .name) ?? id,
+                volume: container.tolerantDouble(forKey: .volume) ?? 1,
+                isMuted: container.tolerant(Bool.self, forKey: .isMuted) ?? false,
+                isDefault: container.tolerant(Bool.self, forKey: .isDefault) ?? false
             )
         }
     }
@@ -171,7 +188,7 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            let id = container.widgetTolerant(String.self, forKey: .id) ?? ""
+            let id = container.tolerant(String.self, forKey: .id) ?? ""
             guard !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw DecodingError.dataCorrupted(
                     DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "App identity cannot be empty")
@@ -179,37 +196,61 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
             }
             self.init(
                 id: id,
-                displayName: container.widgetTolerant(String.self, forKey: .displayName) ?? id,
-                isActive: container.widgetTolerant(Bool.self, forKey: .isActive) ?? false,
-                isPinned: container.widgetTolerant(Bool.self, forKey: .isPinned) ?? false,
-                level: container.widgetTolerantDouble(forKey: .level) ?? 0,
-                volume: container.widgetTolerantDouble(forKey: .volume) ?? 1,
-                isMuted: container.widgetTolerant(Bool.self, forKey: .isMuted) ?? false,
-                boost: container.widgetTolerantDouble(forKey: .boost) ?? 1,
-                routeLabel: container.widgetTolerant(String.self, forKey: .routeLabel) ?? "Follow Default",
-                eqGains: container.widgetTolerant(WidgetTolerantDoubleArray.self, forKey: .eqGains)?.values ?? [],
-                eqRange: container.widgetTolerantDouble(forKey: .eqRange) ?? 12
+                displayName: container.tolerant(String.self, forKey: .displayName) ?? id,
+                isActive: container.tolerant(Bool.self, forKey: .isActive) ?? false,
+                isPinned: container.tolerant(Bool.self, forKey: .isPinned) ?? false,
+                level: container.tolerantDouble(forKey: .level) ?? 0,
+                volume: container.tolerantDouble(forKey: .volume) ?? 1,
+                isMuted: container.tolerant(Bool.self, forKey: .isMuted) ?? false,
+                boost: container.tolerantDouble(forKey: .boost) ?? 1,
+                routeLabel: container.tolerant(String.self, forKey: .routeLabel) ?? "Follow Default",
+                eqGains: container.tolerant(TolerantDoubleArray.self, forKey: .eqGains)?.values ?? [],
+                eqRange: container.tolerantDouble(forKey: .eqRange) ?? 12
             )
         }
     }
 
     public struct ProfileSummary: Codable, Equatable, Identifiable, Sendable {
+        public enum Scope: String, Codable, Equatable, Sendable {
+            case global
+            case outputDevice
+        }
+
         public private(set) var id: String
         public private(set) var name: String
+        public private(set) var scope: Scope
+        public private(set) var outputDeviceID: String?
+        public private(set) var matchingGlobalPresetID: String?
 
-        public init(id: String, name: String) {
+        public init(
+            id: String,
+            name: String,
+            scope: Scope = .global,
+            outputDeviceID: String? = nil,
+            matchingGlobalPresetID: String? = nil
+        ) {
             self.id = WidgetWireNormalization.identity(id, fallback: "unknown-profile")
             self.name = name.isEmpty ? "Profile" : String(name.prefix(80))
+            self.scope = scope
+            self.outputDeviceID = scope == .outputDevice
+                ? outputDeviceID.flatMap(WidgetWireNormalization.optionalIdentity)
+                : nil
+            self.matchingGlobalPresetID = scope == .outputDevice
+                ? matchingGlobalPresetID.flatMap(WidgetWireNormalization.optionalIdentity)
+                : nil
         }
 
         private enum CodingKeys: String, CodingKey {
             case id
             case name
+            case scope
+            case outputDeviceID
+            case matchingGlobalPresetID
         }
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            let id = container.widgetTolerant(String.self, forKey: .id) ?? ""
+            let id = container.tolerant(String.self, forKey: .id) ?? ""
             guard !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw DecodingError.dataCorrupted(
                     DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Profile identity cannot be empty")
@@ -217,7 +258,13 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
             }
             self.init(
                 id: id,
-                name: container.widgetTolerant(String.self, forKey: .name) ?? "Profile"
+                name: container.tolerant(String.self, forKey: .name) ?? "Profile",
+                scope: container.tolerant(Scope.self, forKey: .scope) ?? .global,
+                outputDeviceID: container.tolerant(String.self, forKey: .outputDeviceID),
+                matchingGlobalPresetID: container.tolerant(
+                    String.self,
+                    forKey: .matchingGlobalPresetID
+                )
             )
         }
     }
@@ -268,6 +315,8 @@ public enum WidgetCommandAction: Codable, Equatable, Sendable {
     case setEQBandGain(band: Int, gain: Double)
     case selectOutput
     case applyProfile
+    case assignProfileToCurrentOutput
+    case revertProfileChanges
     case refresh
 
     private enum CodingKeys: String, CodingKey {
@@ -275,7 +324,8 @@ public enum WidgetCommandAction: Codable, Equatable, Sendable {
     }
 
     private enum Kind: String, Codable {
-        case setMuted, setVolume, setBoost, setEQBandGain, selectOutput, applyProfile, refresh
+        case setMuted, setVolume, setBoost, setEQBandGain, selectOutput, applyProfile
+        case assignProfileToCurrentOutput, revertProfileChanges, refresh
     }
 
     public init(from decoder: Decoder) throws {
@@ -297,6 +347,10 @@ public enum WidgetCommandAction: Codable, Equatable, Sendable {
             self = .selectOutput
         case .applyProfile:
             self = .applyProfile
+        case .assignProfileToCurrentOutput:
+            self = .assignProfileToCurrentOutput
+        case .revertProfileChanges:
+            self = .revertProfileChanges
         case .refresh:
             self = .refresh
         }
@@ -322,6 +376,10 @@ public enum WidgetCommandAction: Codable, Equatable, Sendable {
             try container.encode(Kind.selectOutput, forKey: .type)
         case .applyProfile:
             try container.encode(Kind.applyProfile, forKey: .type)
+        case .assignProfileToCurrentOutput:
+            try container.encode(Kind.assignProfileToCurrentOutput, forKey: .type)
+        case .revertProfileChanges:
+            try container.encode(Kind.revertProfileChanges, forKey: .type)
         case .refresh:
             try container.encode(Kind.refresh, forKey: .type)
         }
@@ -352,7 +410,7 @@ public enum WidgetCommandValidationError: String, Error, Codable, Equatable, Loc
 
 /// Versioned per-file command envelope used by the widget command directory.
 public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
-    public static let currentSchemaVersion = 2
+    public static let currentSchemaVersion = 5
     public static let defaultLifetime: TimeInterval = 30
     public static let maximumLifetime: TimeInterval = 120
 
@@ -389,10 +447,10 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
         createdAt: Date = Date(),
         lifetime: TimeInterval = WidgetCommand.defaultLifetime
     ) -> WidgetCommand {
-        WidgetCommand(
+        make(
             id: id,
             createdAt: createdAt,
-            expiresAt: createdAt.addingTimeInterval(lifetime),
+            lifetime: lifetime,
             targetType: .app,
             targetIdentity: identity,
             action: action
@@ -406,10 +464,10 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
         createdAt: Date = Date(),
         lifetime: TimeInterval = WidgetCommand.defaultLifetime
     ) -> WidgetCommand {
-        WidgetCommand(
+        make(
             id: id,
             createdAt: createdAt,
-            expiresAt: createdAt.addingTimeInterval(lifetime),
+            lifetime: lifetime,
             targetType: .outputDevice,
             targetIdentity: identity,
             action: .setMuted(muted)
@@ -423,10 +481,10 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
         createdAt: Date = Date(),
         lifetime: TimeInterval = WidgetCommand.defaultLifetime
     ) -> WidgetCommand {
-        WidgetCommand(
+        make(
             id: id,
             createdAt: createdAt,
-            expiresAt: createdAt.addingTimeInterval(lifetime),
+            lifetime: lifetime,
             targetType: .outputDevice,
             targetIdentity: identity,
             action: .setVolume(volume)
@@ -439,10 +497,10 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
         createdAt: Date = Date(),
         lifetime: TimeInterval = WidgetCommand.defaultLifetime
     ) -> WidgetCommand {
-        WidgetCommand(
+        make(
             id: id,
             createdAt: createdAt,
-            expiresAt: createdAt.addingTimeInterval(lifetime),
+            lifetime: lifetime,
             targetType: .outputDevice,
             targetIdentity: identity,
             action: .selectOutput
@@ -455,13 +513,29 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
         createdAt: Date = Date(),
         lifetime: TimeInterval = WidgetCommand.defaultLifetime
     ) -> WidgetCommand {
-        WidgetCommand(
+        make(
             id: id,
             createdAt: createdAt,
-            expiresAt: createdAt.addingTimeInterval(lifetime),
+            lifetime: lifetime,
             targetType: .profile,
             targetIdentity: identity,
             action: .applyProfile
+        )
+    }
+
+    public static func assignProfileToCurrentOutput(
+        id: UUID = UUID(),
+        identity: String,
+        createdAt: Date = Date(),
+        lifetime: TimeInterval = WidgetCommand.defaultLifetime
+    ) -> WidgetCommand {
+        make(
+            id: id,
+            createdAt: createdAt,
+            lifetime: lifetime,
+            targetType: .profile,
+            targetIdentity: identity,
+            action: .assignProfileToCurrentOutput
         )
     }
 
@@ -470,13 +544,78 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
         createdAt: Date = Date(),
         lifetime: TimeInterval = WidgetCommand.defaultLifetime
     ) -> WidgetCommand {
+        make(
+            id: id,
+            createdAt: createdAt,
+            lifetime: lifetime,
+            targetType: .host,
+            targetIdentity: nil,
+            action: .refresh
+        )
+    }
+
+    public static func setAllAppsMuted(
+        id: UUID = UUID(),
+        muted: Bool,
+        createdAt: Date = Date(),
+        lifetime: TimeInterval = WidgetCommand.defaultLifetime
+    ) -> WidgetCommand {
+        make(
+            id: id,
+            createdAt: createdAt,
+            lifetime: lifetime,
+            targetType: .host,
+            targetIdentity: nil,
+            action: .setMuted(muted)
+        )
+    }
+
+    public static func setAllAppsVolume(
+        id: UUID = UUID(),
+        volume: Double,
+        createdAt: Date = Date(),
+        lifetime: TimeInterval = WidgetCommand.defaultLifetime
+    ) -> WidgetCommand {
+        make(
+            id: id,
+            createdAt: createdAt,
+            lifetime: lifetime,
+            targetType: .host,
+            targetIdentity: nil,
+            action: .setVolume(volume)
+        )
+    }
+
+    public static func revertProfileChanges(
+        id: UUID = UUID(),
+        createdAt: Date = Date(),
+        lifetime: TimeInterval = WidgetCommand.defaultLifetime
+    ) -> WidgetCommand {
+        make(
+            id: id,
+            createdAt: createdAt,
+            lifetime: lifetime,
+            targetType: .host,
+            targetIdentity: nil,
+            action: .revertProfileChanges
+        )
+    }
+
+    private static func make(
+        id: UUID,
+        createdAt: Date,
+        lifetime: TimeInterval,
+        targetType: WidgetCommandTargetType,
+        targetIdentity: String?,
+        action: WidgetCommandAction
+    ) -> WidgetCommand {
         WidgetCommand(
             id: id,
             createdAt: createdAt,
             expiresAt: createdAt.addingTimeInterval(lifetime),
-            targetType: .host,
-            targetIdentity: nil,
-            action: .refresh
+            targetType: targetType,
+            targetIdentity: targetIdentity,
+            action: action
         )
     }
 
@@ -503,9 +642,12 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
         }
 
         switch (targetType, action) {
-        case (.host, .refresh):
-            guard identity == nil || identity?.isEmpty == true else {
-                throw WidgetCommandValidationError.invalidIdentity
+        case (.host, .refresh), (.host, .setMuted), (.host, .revertProfileChanges):
+            try Self.requireNoIdentity(identity)
+        case let (.host, .setVolume(value)):
+            try Self.requireNoIdentity(identity)
+            guard value.isFinite, (0...1).contains(value) else {
+                throw WidgetCommandValidationError.invalidValue
             }
         case (.app, .setMuted):
             try Self.requireIdentity(identity)
@@ -537,6 +679,8 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
             try Self.requireIdentity(identity)
         case (.profile, .applyProfile):
             try Self.requireIdentity(identity)
+        case (.profile, .assignProfileToCurrentOutput):
+            try Self.requireIdentity(identity)
         default:
             throw WidgetCommandValidationError.invalidAction
         }
@@ -544,6 +688,12 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
 
     private static func requireIdentity(_ identity: String?) throws {
         guard let identity, !identity.isEmpty else {
+            throw WidgetCommandValidationError.invalidIdentity
+        }
+    }
+
+    private static func requireNoIdentity(_ identity: String?) throws {
+        guard identity == nil || identity?.isEmpty == true else {
             throw WidgetCommandValidationError.invalidIdentity
         }
     }

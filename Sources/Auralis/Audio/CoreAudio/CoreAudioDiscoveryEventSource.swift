@@ -45,9 +45,9 @@ final class CoreAudioDiscoveryEventSource {
         addListener(ListenerKey(objectID: AudioObjectID(kAudioObjectSystemObject), selector: selector))
     }
 
-    /// Refreshes per-device listeners after a HAL device-list change. Nominal
-    /// rate changes keep active controller coefficients current; aggregate full
-    /// and active-list changes cause Follow Default to be re-resolved.
+    /// Refreshes per-device listeners after a HAL device-list change. Alive
+    /// changes catch transports that briefly remain enumerated during unplug;
+    /// nominal-rate and aggregate changes keep active routes current.
     func refreshDeviceListeners() {
         let deviceIDs: [AudioObjectID] = (try? CoreAudioPropertyReader.array(
             objectID: AudioObjectID(kAudioObjectSystemObject),
@@ -55,6 +55,12 @@ final class CoreAudioDiscoveryEventSource {
         )) ?? []
         var desired = Set<ListenerKey>()
         for deviceID in deviceIDs {
+            if CoreAudioPropertyReader.hasProperty(
+                objectID: deviceID,
+                selector: kAudioDevicePropertyDeviceIsAlive
+            ) {
+                desired.insert(ListenerKey(objectID: deviceID, selector: kAudioDevicePropertyDeviceIsAlive))
+            }
             if CoreAudioPropertyReader.hasProperty(
                 objectID: deviceID,
                 selector: kAudioDevicePropertyNominalSampleRate

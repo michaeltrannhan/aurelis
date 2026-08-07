@@ -33,9 +33,19 @@ final class WidgetModelsTests: XCTestCase {
             ],
             apps: apps,
             profiles: [
-                .init(id: "11111111-1111-1111-1111-111111111111", name: "Home")
+                .init(id: "11111111-1111-1111-1111-111111111111", name: "Everywhere"),
+                .init(
+                    id: "22222222-2222-2222-2222-222222222222",
+                    name: "Home",
+                    scope: .outputDevice,
+                    outputDeviceID: "main",
+                    matchingGlobalPresetID: "11111111-1111-1111-1111-111111111111"
+                ),
+                .init(id: "33333333-3333-3333-3333-333333333333", name: "Home")
             ],
-            activeProfileID: "11111111-1111-1111-1111-111111111111"
+            activeGlobalProfileID: "11111111-1111-1111-1111-111111111111",
+            activeLocalProfileID: "22222222-2222-2222-2222-222222222222",
+            profileHasOverrides: true
         )
 
         let presentation = WidgetMixerPresentation(
@@ -47,7 +57,13 @@ final class WidgetModelsTests: XCTestCase {
         XCTAssertEqual(presentation.statusText, "Ready")
         XCTAssertEqual(presentation.defaultDevice?.id, "main")
         XCTAssertEqual(presentation.apps.map(\.id), ["app-0", "app-1", "app-2"])
-        XCTAssertEqual(presentation.activeProfile?.name, "Home")
+        XCTAssertEqual(presentation.activeGlobalProfile?.name, "Everywhere")
+        XCTAssertEqual(presentation.activeLocalProfile?.name, "Home")
+        XCTAssertEqual(presentation.localProfiles.map(\.name), ["Home"])
+        XCTAssertTrue(presentation.isPresetActive(presentation.globalProfiles[0]))
+        XCTAssertFalse(presentation.isPresetActive(presentation.globalProfiles[1]))
+        XCTAssertFalse(presentation.profileHasOverrides)
+        XCTAssertTrue(presentation.hasActiveApps)
         XCTAssertEqual(presentation.activeCountText, "4 active")
         XCTAssertEqual(
             WidgetMixerPresentation.appValue(apps[0]),
@@ -77,7 +93,51 @@ final class WidgetModelsTests: XCTestCase {
             maximumAppCount: 3
         )
         XCTAssertFalse(closedPresentation.controlsEnabled)
+        XCTAssertFalse(closedPresentation.hasActiveApps)
         XCTAssertEqual(closedPresentation.statusText, "Open Auralis to use controls")
+    }
+
+    func testWidgetPresentationRejectsActiveProfilesOutsideTheSelectedOutputAndScope() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let wrongScopeID = "11111111-1111-1111-1111-111111111111"
+        let wrongOutputID = "22222222-2222-2222-2222-222222222222"
+        let snapshot = WidgetSnapshot(
+            generatedAt: now,
+            hostState: .running,
+            hostUpdatedAt: now,
+            statusMessage: "Ready",
+            activeAppCount: 0,
+            volumeStep: 0.05,
+            devices: [
+                .init(id: "main", name: "Main", volume: 1, isMuted: false, isDefault: true)
+            ],
+            apps: [],
+            profiles: [
+                .init(
+                    id: wrongScopeID,
+                    name: "Local",
+                    scope: .outputDevice,
+                    outputDeviceID: "main"
+                ),
+                .init(
+                    id: wrongOutputID,
+                    name: "Other Output",
+                    scope: .outputDevice,
+                    outputDeviceID: "other"
+                )
+            ],
+            activeGlobalProfileID: wrongScopeID,
+            activeLocalProfileID: wrongOutputID
+        )
+
+        let presentation = WidgetMixerPresentation(
+            snapshot: snapshot,
+            date: now,
+            maximumAppCount: 3
+        )
+
+        XCTAssertNil(presentation.activeGlobalProfile)
+        XCTAssertNil(presentation.activeLocalProfile)
     }
 
     func testWidgetIntentFactoryMapsAndValidatesEveryInteractiveControl() throws {
@@ -91,12 +151,16 @@ final class WidgetModelsTests: XCTestCase {
             XCTUnwrap(WidgetIntentCommandFactory.setOutputDeviceVolume(deviceID: "usb", volume: 0.65, now: now)),
             XCTUnwrap(WidgetIntentCommandFactory.selectOutputDevice(deviceID: "usb", now: now)),
             XCTUnwrap(WidgetIntentCommandFactory.applyProfile(profileID: "11111111-1111-1111-1111-111111111111", now: now)),
+            XCTUnwrap(WidgetIntentCommandFactory.assignProfileToCurrentOutput(profileID: "11111111-1111-1111-1111-111111111111", now: now)),
+            WidgetIntentCommandFactory.setAllAppsMuted(true, now: now),
+            XCTUnwrap(WidgetIntentCommandFactory.setAllAppsVolume(0.5, now: now)),
+            WidgetIntentCommandFactory.revertProfileChanges(now: now),
             WidgetIntentCommandFactory.refresh(now: now)
         ]
 
         XCTAssertEqual(
             commands.map(\.targetType),
-            [.app, .app, .app, .app, .outputDevice, .outputDevice, .outputDevice, .profile, .host]
+            [.app, .app, .app, .app, .outputDevice, .outputDevice, .outputDevice, .profile, .profile, .host, .host, .host, .host]
         )
         XCTAssertEqual(
             commands.map(\.action),
@@ -109,6 +173,10 @@ final class WidgetModelsTests: XCTestCase {
                 .setVolume(0.65),
                 .selectOutput,
                 .applyProfile,
+                .assignProfileToCurrentOutput,
+                .setMuted(true),
+                .setVolume(0.5),
+                .revertProfileChanges,
                 .refresh
             ]
         )
@@ -129,6 +197,10 @@ final class WidgetModelsTests: XCTestCase {
         XCTAssertNil(WidgetIntentCommandFactory.setOutputDeviceVolume(deviceID: "usb", volume: 2))
         XCTAssertNil(WidgetIntentCommandFactory.selectOutputDevice(deviceID: ""))
         XCTAssertNil(WidgetIntentCommandFactory.applyProfile(profileID: "not-a-uuid"))
+        XCTAssertNil(
+            WidgetIntentCommandFactory.assignProfileToCurrentOutput(profileID: "not-a-uuid")
+        )
+        XCTAssertNil(WidgetIntentCommandFactory.setAllAppsVolume(2))
     }
 
     func testSnapshotDecodingDefaultsMalformedFieldsAndNormalizesEQ() throws {
@@ -216,6 +288,10 @@ final class WidgetModelsTests: XCTestCase {
             .outputDeviceVolume(identity: "built-in", volume: 0.7, createdAt: now),
             .selectOutputDevice(identity: "built-in", createdAt: now),
             .applyProfile(identity: UUID().uuidString, createdAt: now),
+            .assignProfileToCurrentOutput(identity: UUID().uuidString, createdAt: now),
+            .setAllAppsMuted(muted: true, createdAt: now),
+            .setAllAppsVolume(volume: 0.5, createdAt: now),
+            .revertProfileChanges(createdAt: now),
             .refresh(createdAt: now)
         ]
 
@@ -247,6 +323,12 @@ final class WidgetModelsTests: XCTestCase {
             targetIdentity: "speakers",
             action: .setBoost(2)
         )
+        let hostWithIdentity = WidgetCommand(
+            createdAt: now,
+            targetType: .host,
+            targetIdentity: "unexpected",
+            action: .refresh
+        )
         let invalidValue = WidgetCommand.app(identity: "music", action: .setVolume(2), createdAt: now)
 
         XCTAssertThrowsError(try expired.validate(now: now)) {
@@ -257,6 +339,9 @@ final class WidgetModelsTests: XCTestCase {
         }
         XCTAssertThrowsError(try mismatched.validate(now: now)) {
             XCTAssertEqual($0 as? WidgetCommandValidationError, .invalidAction)
+        }
+        XCTAssertThrowsError(try hostWithIdentity.validate(now: now)) {
+            XCTAssertEqual($0 as? WidgetCommandValidationError, .invalidIdentity)
         }
         XCTAssertThrowsError(try invalidValue.validate(now: now)) {
             XCTAssertEqual($0 as? WidgetCommandValidationError, .invalidValue)

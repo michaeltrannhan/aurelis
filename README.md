@@ -1,14 +1,19 @@
 # Auralis
 
-Auralis is a macOS SwiftUI menu-bar audio controller inspired by FineTune. It includes CoreAudio discovery and process taps, per-app volume/mute/boost/EQ, single- and multi-device routing, reusable audio profiles, reconnect-aware output settings, global controls, typed recovery state, first-run guidance, and versioned JSON persistence.
+Auralis is a macOS SwiftUI menu-bar audio controller inspired by FineTune. It includes CoreAudio discovery and process taps, per-app volume/mute/boost/EQ, single- and multi-device routing, automatic per-output contexts, reusable preset templates, reconnect-aware output settings, global controls, typed recovery state, first-run guidance, and versioned JSON persistence.
 
 The application, executable, Swift/Xcode targets, widget, bundle identifiers, URL scheme, and release artifacts all use the Auralis identity.
 
-Signed builds require the `com.michaeltrannhan.Auralis`, `com.michaeltrannhan.Auralis.Widget`, and `group.com.michaeltrannhan.Auralis` capabilities in the selected Apple Developer team. On first launch, grant Screen & System Audio Recording and Accessibility, then add the widget from the gallery.
+Signed builds use the `com.michaeltrannhan.Auralis` and
+`com.michaeltrannhan.Auralis.Widget` bundle identifiers. By default, the build
+derives a provisioning-free macOS App Group from the signing certificate's team
+identifier. On first launch, grant Screen & System Audio Recording and
+Accessibility, then add the widget from the gallery.
 
 ## Install
 
-Prerequisites: Xcode with an Apple ID signed in under **Settings → Accounts**, and [xcodegen](https://github.com/yonaskolb/XcodeGen):
+Prerequisites: Xcode, one valid Apple Development code-signing identity in the
+login keychain, and [xcodegen](https://github.com/yonaskolb/XcodeGen):
 
 ```sh
 brew install xcodegen
@@ -84,9 +89,9 @@ those two files can be attached to a bug report.
 `build-debug-app.sh` and `build-release-app.sh` are the two build entry points; `install-app.sh` chains the Release build into a full installation.
 Both use the shared internal builder to regenerate the Xcode project via
 [xcodegen](https://github.com/yonaskolb/XcodeGen), build via `xcodebuild`,
-validate the embedded widget and serialized App Intent parameters, and reject a
-provisioning profile that does not authorize the configured App Group. Install
-xcodegen first:
+validate the embedded widget and serialized App Intent parameters, and verify
+live shared-container access between separately signed app and widget probes.
+Install xcodegen first:
 
 ```sh
 brew install xcodegen
@@ -98,16 +103,30 @@ Auralis ships two macOS WidgetKit configurations:
 
 - **Auralis Mixer / systemSmall** — a focused master-output remote with volume down/up, mute, current profile, and active-app status.
 - **Auralis Mixer / systemMedium** — master output with quick output cycling plus two app rows with mute, volume, boost, and refresh.
-- **Auralis Mixer / systemLarge** — profile switching, direct output selection, master volume/mute, and three app mixer rows.
+- **Auralis Mixer / systemLarge** — a control-center layout with Global/output configuration status, direct output selection, a roomy master volume/mute panel, batch mute/unmute/50% actions, and two full app mixer rows.
 - **Auralis EQ / systemLarge** — a focused 10-band EQ chart with ±0.5 dB buttons per band.
 
-Interactive controls are backed by `AppIntent`s that queue absolute commands into a shared App Group container. This includes output selection, device and app volume/mute, profile application, boost, EQ, and refresh. The app drains the queue via a `DispatchSource` file watcher and applies changes to its `AudioControlStore`. The app writes a `WidgetSnapshot` (compact Codable summary) to the same container on every store change so the widget always renders fresh state.
+Interactive controls are backed by `AppIntent`s that queue absolute commands into a shared App Group container. This includes output selection, device and app volume/mute, profile application, batch active-app controls, boost, EQ, and refresh. The app drains the queue via a `DispatchSource` file watcher and applies changes to its `AudioControlStore`. The app writes a `WidgetSnapshot` (compact Codable summary) to the same container on every store change so the widget always renders fresh state.
 
 ## Profiles and device reconnects
 
 Changing an output device's volume, mute state, or selecting it as the default output in Auralis is persisted by device UID. Auralis reapplies that state at launch and when that device disconnects and later reconnects. It deliberately does not overwrite ordinary hardware-key or Control Center changes while the device remains connected.
 
-Profiles are available from the main-window header, menu-bar popup, Audio settings, and the large Mixer widget. Saving a profile captures per-app volume, mute, boost, EQ and routes; per-device volume and mute; and the current preferred output. Applying a profile restores the available parts immediately and retains missing-device intent for the next reconnect.
+Audio contexts and presets are available from the main-window header, menu-bar
+popup, Audio settings, and the large Mixer widget. Every physical output owns
+an automatically saved context keyed by its CoreAudio UID. That context contains
+the complete per-app mix—routing, volume, mute, boost, and EQ—so LG UltraFine
+settings cannot leak into MacBook Speakers after an unplug or default-output
+change. Newly discovered outputs start neutral: follow the system default,
+default app volume, unmuted, 1× boost, and flat EQ.
+
+Named presets are detached templates. Applying one copies its mix into a single
+output context; later edits remain local to that output and save automatically.
+Unavailable explicit routes temporarily follow the current system output while
+retaining their saved UID for restoration on reconnect. CoreAudio hot-plug
+bursts are stabilized before Auralis commits the final context switch. Version-8
+persistence preserves existing output configurations as automatic contexts and
+keeps Global profiles as copyable presets.
 
 ### Widget architecture
 
@@ -152,11 +171,13 @@ Xcode DerivedData and legacy `.build` output paths.
 - Live audio levels update at the widget's timeline refresh rate (≈60 s steady-state, 1 s after an intent), not in real-time.
 - Widget headers and fallback app rows use the bundled Auralis brand mark and audio glyph. Per-application icons still cannot be resolved through Launch Services from the widget extension.
 
-The bundle script defaults to the project's Apple Development team and identity
-so the Screen & System Audio Recording grant survives rebuilds. Signed builds
-also authorize Xcode to create or download missing provisioning profiles. Make
-sure the appropriate Apple ID is signed in under Xcode's Accounts settings, then
-override the team or identity when needed:
+The bundle script uses an Apple Development identity so the Screen & System
+Audio Recording grant survives rebuilds. When exactly one matching team is
+installed, the script infers its identifier and uses a
+`<TeamIdentifier>.com.michaeltrannhan.Auralis` App Group. Apple supports this
+macOS-specific form without registering the group or embedding provisioning
+profiles, so an Xcode account is not required after the certificate is present.
+Override the inferred team or identity when needed:
 
 ```sh
 DEVELOPMENT_TEAM=TEAMID \
@@ -164,12 +185,25 @@ SIGN_IDENTITY='Apple Development' \
 Scripts/build-debug-app.sh
 ```
 
-Set `ALLOW_PROVISIONING_UPDATES=NO` only when the required certificates and
-profiles are already installed, such as on a locked-down or offline CI runner.
+To use a registered `group.*` App Group instead, opt into Xcode-managed
+provisioning:
 
-If no identity is available, create or import an Apple Development or local Code
-Signing certificate in Keychain Access. Ad-hoc signing is intentionally rejected
-because its designated requirement changes whenever the executable is rebuilt.
+```sh
+DEVELOPMENT_TEAM=TEAMID \
+APP_GROUP_ID=group.com.michaeltrannhan.Auralis \
+CODE_SIGN_STYLE=Automatic \
+REGISTER_APP_GROUPS=YES \
+ALLOW_PROVISIONING_UPDATES=YES \
+Scripts/install-app.sh
+```
+
+That mode requires the corresponding Apple account, bundle identifiers,
+capability, and profiles.
+
+If no identity is available, add an Apple account in Xcode to create an Apple
+Development certificate, or import an existing certificate and private key.
+Ad-hoc signing is intentionally rejected because its designated requirement
+changes whenever the executable is rebuilt.
 For unsigned CI compilation and product verification, use
 `CODE_SIGNING_ALLOWED=NO Scripts/build-debug-app.sh` or
 `CODE_SIGNING_ALLOWED=NO Scripts/build-release-app.sh`. Unsigned output is not a

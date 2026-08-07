@@ -324,12 +324,10 @@ final class AudioTransactionTests: XCTestCase {
         let context = try await makeContext()
         defer { removeContext(context.url) }
 
-        XCTAssertEqual(context.store.outputVolumeState.capabilities, .unavailable)
-        await assertThrows { try await context.store.setOutputVolume(0.2) }
-        await assertThrows { try await context.store.setOutputMuted(true) }
-
-        XCTAssertEqual(context.store.outputVolumeState.volume, 1)
-        XCTAssertFalse(context.store.outputVolumeState.isMuted)
+        XCTAssertTrue(context.store.deviceVolumeStates.isEmpty)
+        await assertThrows { try await context.store.setDeviceVolume(0.2, for: "missing") }
+        await assertThrows { try await context.store.setDeviceMuted(true, for: "missing") }
+        XCTAssertTrue(context.store.deviceVolumeStates.isEmpty)
     }
 
     func testEditSessionsAreKeyedByAppControlBandAndGestureToken() async throws {
@@ -393,7 +391,7 @@ final class AudioTransactionTests: XCTestCase {
         let backend = TransactionBackend(apps: apps ?? [
             AudioAppSnapshot(identity: music, displayName: "Music")
         ])
-        let store = try AudioControlStore(
+        let store = AudioControlStore(
             settingsStore: settingsStore,
             backend: backend,
             backendFactory: backendFactory,

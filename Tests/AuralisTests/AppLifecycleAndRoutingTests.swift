@@ -4,11 +4,24 @@ import XCTest
 
 @MainActor
 final class AppLifecycleCoordinatorTests: XCTestCase {
+    func testRuntimeEnvironmentDetectsOnlyXCTestHostMarkers() {
+        XCTAssertTrue(AuralisRuntimeEnvironment.isRunningTests(in: [
+            "XCTestConfigurationFilePath": "/tmp/tests.xctestconfiguration"
+        ]))
+        XCTAssertTrue(AuralisRuntimeEnvironment.isRunningTests(in: [
+            "XCTestBundlePath": "/tmp/AuralisTests.xctest"
+        ]))
+        XCTAssertFalse(AuralisRuntimeEnvironment.isRunningTests(in: [:]))
+        XCTAssertFalse(AuralisRuntimeEnvironment.isRunningTests(in: [
+            "XCODE_RUNNING_FOR_PREVIEWS": "1"
+        ]))
+    }
+
     func testStartupIsSceneIndependentOrderedAndIdempotent() async throws {
         let events = LifecycleEventLog()
         let controls = RecordingExternalControls(events: events)
         let widget = RecordingWidgetLifecycle(events: events)
-        let store = try makeStore(backend: MockAudioBackend())
+        let store = makeStore(backend: MockAudioBackend())
         let lifecycle = AppLifecycleCoordinator(
             store: store,
             controls: controls,
@@ -41,7 +54,7 @@ final class AppLifecycleCoordinatorTests: XCTestCase {
         backend.fetchError = LifecycleTestError.discovery
         let controls = RecordingExternalControls()
         let widget = RecordingWidgetLifecycle()
-        let store = try makeStore(backend: backend)
+        let store = makeStore(backend: backend)
         let lifecycle = AppLifecycleCoordinator(
             store: store,
             controls: controls,
@@ -62,7 +75,7 @@ final class AppLifecycleCoordinatorTests: XCTestCase {
     func testWidgetStartupFailureIsReportedWithoutUndoingOtherServices() async throws {
         let controls = RecordingExternalControls()
         let widget = RecordingWidgetLifecycle(startResult: false)
-        let store = try makeStore(backend: MockAudioBackend())
+        let store = makeStore(backend: MockAudioBackend())
         let lifecycle = AppLifecycleCoordinator(
             store: store,
             controls: controls,
@@ -80,7 +93,7 @@ final class AppLifecycleCoordinatorTests: XCTestCase {
     func testApplySettingsIsIgnoredAfterTermination() async throws {
         let controls = RecordingExternalControls()
         let widget = RecordingWidgetLifecycle()
-        let store = try makeStore(backend: MockAudioBackend())
+        let store = makeStore(backend: MockAudioBackend())
         let lifecycle = AppLifecycleCoordinator(
             store: store,
             controls: controls,
@@ -99,7 +112,7 @@ final class AppLifecycleCoordinatorTests: XCTestCase {
     func testStopBeforeStartKeepsLifecycleTerminalWithoutStartingServices() async throws {
         let controls = RecordingExternalControls()
         let widget = RecordingWidgetLifecycle()
-        let store = try makeStore(backend: MockAudioBackend())
+        let store = makeStore(backend: MockAudioBackend())
         let lifecycle = AppLifecycleCoordinator(
             store: store,
             controls: controls,
@@ -117,11 +130,11 @@ final class AppLifecycleCoordinatorTests: XCTestCase {
         XCTAssertEqual(widget.startCount, 0)
     }
 
-    private func makeStore(backend: MockAudioBackend) throws -> AudioControlStore {
+    private func makeStore(backend: MockAudioBackend) -> AudioControlStore {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("Auralis-Lifecycle-\(UUID().uuidString).json")
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
-        return try AudioControlStore(
+        return AudioControlStore(
             settingsStore: SettingsStore(settingsURL: url),
             backend: backend,
             permissionClient: LifecycleAudioPermissionClient()

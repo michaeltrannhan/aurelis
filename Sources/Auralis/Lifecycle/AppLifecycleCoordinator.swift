@@ -1,6 +1,17 @@
 import AppKit
 import Foundation
 
+enum AuralisRuntimeEnvironment {
+    static var isRunningTests: Bool {
+        isRunningTests(in: ProcessInfo.processInfo.environment)
+    }
+
+    static func isRunningTests(in environment: [String: String]) -> Bool {
+        environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+    }
+}
+
 @MainActor
 protocol ExternalControlsLifecycle: AnyObject {
     func start(store: AudioControlStore)
@@ -173,6 +184,10 @@ final class AuralisApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Xcode unit tests use Auralis as their host process. Starting the real
+        // lifecycle there would read or rewrite user settings, register global
+        // controls, publish widget IPC, and run Core Audio recovery.
+        guard !AuralisRuntimeEnvironment.isRunningTests else { return }
         InternalDiagnostics.beginSession()
         guard let lifecycle else {
             InternalDiagnostics.error("lifecycle", "launch.failed lifecycle=missing")
@@ -193,6 +208,7 @@ final class AuralisApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !AuralisRuntimeEnvironment.isRunningTests else { return .terminateNow }
         guard let lifecycle else { return .terminateNow }
         guard !terminationReplyPending else { return .terminateLater }
         terminationReplyPending = true

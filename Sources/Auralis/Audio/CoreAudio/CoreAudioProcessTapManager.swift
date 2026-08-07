@@ -205,11 +205,6 @@ final class CoreAudioProcessTapManager: CoreAudioTapManaging, CoreAudioRouteCont
         set { onLifecycleQueue { storedDefaultOutputDeviceUIDs = newValue } }
     }
 
-    var defaultOutputDeviceUID: String? {
-        get { defaultOutputDeviceUIDs.first }
-        set { defaultOutputDeviceUIDs = newValue.map { [$0] } ?? [] }
-    }
-
     init(
         operations: CoreAudioTapOperating = SystemCoreAudioTapOperations(),
         maxStartAttempts: Int = 3,

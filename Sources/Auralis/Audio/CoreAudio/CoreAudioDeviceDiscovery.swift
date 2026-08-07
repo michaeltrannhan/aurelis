@@ -14,18 +14,8 @@ final class CoreAudioDeviceDiscovery {
         var nominalSampleRate: Double? = nil
     }
 
-    func discoverDevices() throws -> [AudioDeviceSnapshot] {
-        let state = try discoverOutputDeviceState()
-        return state.devices
-    }
-
-    func discoverDefaultOutputDeviceUID() throws -> String? {
-        try discoverOutputDeviceState().defaultOutputDeviceUIDs.first
-    }
-
     func discoverOutputDeviceState() throws -> (
         devices: [AudioDeviceSnapshot],
-        defaultOutputDeviceUID: String?,
         defaultOutputDeviceUIDs: [String],
         nominalSampleRatesByUID: [String: Double]
     ) {
@@ -51,7 +41,6 @@ final class CoreAudioDeviceDiscovery {
 
         return (
             devices: Self.sortedSnapshots(records.compactMap { Self.mapDeviceRecord($0, defaultDeviceID: defaultDeviceID) }),
-            defaultOutputDeviceUID: defaultOutputDeviceUIDs.first,
             defaultOutputDeviceUIDs: defaultOutputDeviceUIDs,
             nominalSampleRatesByUID: nominalSampleRatesByUID
         )
@@ -62,7 +51,12 @@ final class CoreAudioDeviceDiscovery {
     static func sortedSnapshots(_ snapshots: [AudioDeviceSnapshot]) -> [AudioDeviceSnapshot] {
         snapshots.sorted { lhs, rhs in
             if lhs.isDefault != rhs.isDefault { return lhs.isDefault && !rhs.isDefault }
-            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            return StableDisplayOrder.precedes(
+                lhsName: lhs.name,
+                lhsID: lhs.id,
+                rhsName: rhs.name,
+                rhsID: rhs.id
+            )
         }
     }
 
@@ -74,10 +68,6 @@ final class CoreAudioDeviceDiscovery {
 
         let name = normalized(record.name) ?? normalized(record.uid) ?? "Device \(record.objectID)"
         return AudioDeviceSnapshot(id: id, name: name, isDefault: record.objectID == defaultDeviceID)
-    }
-
-    static func defaultOutputUID(records: [DeviceRecord], defaultDeviceID: AudioObjectID?) -> String? {
-        defaultOutputUIDs(records: records, defaultDeviceID: defaultDeviceID).first
     }
 
     /// Resolves the system default to routeable physical output UIDs. macOS can

@@ -225,8 +225,18 @@ final class WidgetBridge: ObservableObject {
         let statusMessage = hostState == .running
             ? store.statusMessage
             : "Auralis is closed. Open it to use widget controls."
-        let profiles = store.settings.profiles.map {
-            WidgetSnapshot.ProfileSummary(id: $0.id.uuidString, name: $0.name)
+        let profiles = store.settings.profiles.map { profile in
+            WidgetSnapshot.ProfileSummary(
+                id: profile.id.uuidString,
+                name: profile.name,
+                scope: profile.scope.isGlobal ? .global : .outputDevice,
+                outputDeviceID: profile.scope.outputDeviceID,
+                matchingGlobalPresetID: profile.scope.isGlobal
+                    ? nil
+                    : store.settings.globalProfilesForDisplay.first {
+                        profile.matchesMixerPreset($0)
+                    }?.id.uuidString
+            )
         }
         return WidgetSnapshot(
             generatedAt: now,
@@ -238,7 +248,10 @@ final class WidgetBridge: ObservableObject {
             devices: devices,
             apps: apps,
             profiles: profiles,
-            activeProfileID: store.settings.activeProfileID?.uuidString
+            activeGlobalProfileID: store.settings.activeGlobalProfileID?.uuidString,
+            activeLocalProfileID: store.settings.activeLocalProfileID?.uuidString,
+            activeProfileID: store.settings.activeProfileID?.uuidString,
+            profileHasOverrides: store.settings.profileHasOverrides
         )
     }
 

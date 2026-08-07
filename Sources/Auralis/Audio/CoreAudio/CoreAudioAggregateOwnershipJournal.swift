@@ -1,5 +1,6 @@
 import CoreAudio
 import Foundation
+import AuralisWidgetShared
 
 enum CoreAudioAggregateOwnershipJournalError: Error, Equatable, LocalizedError {
     case invalidAggregateUID(String)

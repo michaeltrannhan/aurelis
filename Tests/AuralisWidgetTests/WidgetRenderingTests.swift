@@ -159,12 +159,22 @@ final class WidgetRenderingTests: XCTestCase {
                 )
             ] : [],
             profiles: hostState == .running ? [
-                .init(id: "11111111-1111-1111-1111-111111111111", name: "Home"),
-                .init(id: "22222222-2222-2222-2222-222222222222", name: "Office")
+                .init(id: "11111111-1111-1111-1111-111111111111", name: "Everywhere"),
+                .init(
+                    id: "22222222-2222-2222-2222-222222222222",
+                    name: "Home Speaker",
+                    scope: .outputDevice,
+                    outputDeviceID: "main"
+                ),
+                .init(id: "33333333-3333-3333-3333-333333333333", name: "Focus")
             ] : [],
-            activeProfileID: hostState == .running
+            activeGlobalProfileID: hostState == .running
                 ? "11111111-1111-1111-1111-111111111111"
-                : nil
+                : nil,
+            activeLocalProfileID: hostState == .running
+                ? "22222222-2222-2222-2222-222222222222"
+                : nil,
+            profileHasOverrides: hostState == .running
         )
         return AuralisEntry(date: now, snapshot: snapshot, family: .systemMedium)
     }

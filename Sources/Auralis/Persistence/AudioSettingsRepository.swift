@@ -110,11 +110,6 @@ actor SettingsPersistenceActor {
         }
     }
 
-    func cancelScheduledRetry() {
-        saveTask?.cancel()
-        saveTask = nil
-    }
-
     func diagnostics() -> SettingsPersistenceDiagnostics {
         SettingsPersistenceDiagnostics(
             hasDirtyState: pendingSave != nil,

@@ -79,8 +79,37 @@ public enum WidgetIntentCommandFactory {
         return validated(.applyProfile(identity: profileID, createdAt: now), now: now)
     }
 
+    public static func assignProfileToCurrentOutput(
+        profileID: String,
+        now: Date = Date()
+    ) -> WidgetCommand? {
+        guard UUID(uuidString: profileID) != nil else { return nil }
+        return validated(
+            .assignProfileToCurrentOutput(identity: profileID, createdAt: now),
+            now: now
+        )
+    }
+
     public static func refresh(now: Date = Date()) -> WidgetCommand {
         .refresh(createdAt: now)
+    }
+
+    public static func setAllAppsMuted(
+        _ muted: Bool,
+        now: Date = Date()
+    ) -> WidgetCommand {
+        .setAllAppsMuted(muted: muted, createdAt: now)
+    }
+
+    public static func setAllAppsVolume(
+        _ volume: Double,
+        now: Date = Date()
+    ) -> WidgetCommand? {
+        validated(.setAllAppsVolume(volume: volume, createdAt: now), now: now)
+    }
+
+    public static func revertProfileChanges(now: Date = Date()) -> WidgetCommand {
+        .revertProfileChanges(createdAt: now)
     }
 
     private static func appCommand(

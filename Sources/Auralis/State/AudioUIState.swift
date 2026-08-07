@@ -54,25 +54,3 @@ struct AudioIssue: Identifiable, Equatable {
     let message: String
     let recovery: AudioRecoveryAction?
 }
-
-enum PermissionKind: String, Equatable {
-    case audioCapture
-    case accessibility
-}
-
-enum PermissionRequirementState: Equatable {
-    case notRequested
-    case denied
-    case restricted
-    case granted
-    case restartRequired
-    case unavailable
-}
-
-struct PermissionRequirement: Identifiable, Equatable {
-    var id: PermissionKind { kind }
-    let kind: PermissionKind
-    let state: PermissionRequirementState
-    let explanation: String
-    let isOptional: Bool
-}

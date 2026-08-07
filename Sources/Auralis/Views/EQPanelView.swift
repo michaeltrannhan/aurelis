@@ -161,6 +161,30 @@ struct EQPanelView: View {
     }
 }
 
+extension EQPanelView {
+    init(
+        store: AudioControlStore,
+        row: DisplayableAppRow,
+        style: Style,
+        onClose: @escaping () -> Void
+    ) {
+        self.init(
+            row: row,
+            style: style,
+            onClose: onClose,
+            onGain: { band, gain in
+                store.setEQGainIntent(gain, band: band, for: row.identity)
+            },
+            onGainEditingChanged: { band, editing in
+                store.setEQEditingIntent(editing, band: band, for: row.identity)
+            },
+            onReset: {
+                store.resetEQIntent(for: row.identity)
+            }
+        )
+    }
+}
+
 private struct VerticalEQBand: View {
     let frequency: String
     let gain: Double

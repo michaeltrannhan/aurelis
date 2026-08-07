@@ -9,8 +9,12 @@ public struct WidgetMixerPresentation: Equatable, Sendable {
     public let defaultDevice: WidgetSnapshot.DeviceSummary?
     public let devices: [WidgetSnapshot.DeviceSummary]
     public let apps: [WidgetSnapshot.AppSummary]
-    public let profiles: [WidgetSnapshot.ProfileSummary]
-    public let activeProfile: WidgetSnapshot.ProfileSummary?
+    public let globalProfiles: [WidgetSnapshot.ProfileSummary]
+    public let localProfiles: [WidgetSnapshot.ProfileSummary]
+    public let activeGlobalProfile: WidgetSnapshot.ProfileSummary?
+    public let activeLocalProfile: WidgetSnapshot.ProfileSummary?
+    public let profileHasOverrides: Bool
+    public let hasActiveApps: Bool
     public let activeCountText: String
 
     public init(
@@ -20,11 +24,19 @@ public struct WidgetMixerPresentation: Equatable, Sendable {
     ) {
         controlsEnabled = snapshot.isHostAvailable(at: date)
         statusText = controlsEnabled ? snapshot.statusMessage : "Open Auralis to use controls"
-        defaultDevice = snapshot.devices.first(where: \.isDefault) ?? snapshot.devices.first
+        let selectedDevice = snapshot.devices.first(where: \.isDefault) ?? snapshot.devices.first
+        defaultDevice = selectedDevice
         devices = snapshot.devices
         apps = Array(snapshot.apps.prefix(max(maximumAppCount, 0)))
-        profiles = snapshot.profiles
-        activeProfile = snapshot.profiles.first { $0.id == snapshot.activeProfileID }
+        globalProfiles = snapshot.profiles.filter { $0.scope == .global }
+        localProfiles = snapshot.profiles.filter {
+            $0.scope == .outputDevice && $0.outputDeviceID == selectedDevice?.id
+        }
+        activeGlobalProfile = globalProfiles.first { $0.id == snapshot.activeGlobalProfileID }
+        activeLocalProfile = localProfiles.first { $0.id == snapshot.activeLocalProfileID }
+        // Version-8 device contexts autosave; legacy override flags are ignored.
+        profileHasOverrides = false
+        hasActiveApps = snapshot.activeAppCount > 0
         activeCountText = "\(snapshot.activeAppCount) active"
     }
 
@@ -44,6 +56,13 @@ public struct WidgetMixerPresentation: Equatable, Sendable {
 
     public static func boostLabel(name: String) -> String {
         "Cycle \(name) boost"
+    }
+
+    public func isPresetActive(_ preset: WidgetSnapshot.ProfileSummary) -> Bool {
+        if let activeLocalProfile {
+            return activeLocalProfile.matchingGlobalPresetID == preset.id
+        }
+        return activeGlobalProfile?.id == preset.id
     }
 
     public static func outputValue(_ device: WidgetSnapshot.DeviceSummary) -> String {

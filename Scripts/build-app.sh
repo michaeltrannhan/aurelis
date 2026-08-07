@@ -24,6 +24,47 @@ require_file() {
     [ -e "$1" ] || fail "required path not found: $1"
 }
 
+signing_identity_records_matching() {
+    selector=$1
+    /usr/bin/security find-identity -v -p codesigning 2>/dev/null |
+        /usr/bin/awk -v selector="$selector" '
+            index($0, selector) {
+                fingerprint = $2
+                line = $0
+                sub(/^[^"]*"/, "", line)
+                sub(/"[^"]*$/, "", line)
+                if (length(fingerprint) == 40 &&
+                    fingerprint !~ /[^A-F0-9]/ &&
+                    length(line) > 0) {
+                    print fingerprint "\t" line
+                }
+            }
+        '
+}
+
+signing_team_for_identity() {
+    fingerprint=$1
+    identity=$2
+    /usr/bin/security find-certificate -a -c "$identity" -Z -p 2>/dev/null |
+        /usr/bin/awk -v fingerprint="$fingerprint" '
+            $1 == "SHA-1" && $2 == "hash:" {
+                selected = ($3 == fingerprint)
+                next
+            }
+            selected && /-----BEGIN CERTIFICATE-----/ {
+                in_certificate = 1
+            }
+            selected && in_certificate {
+                print
+            }
+            selected && /-----END CERTIFICATE-----/ {
+                exit
+            }
+        ' |
+        /usr/bin/openssl x509 -noout -subject -nameopt RFC2253 2>/dev/null |
+        /usr/bin/sed -n 's/.*OU=\([^,]*\).*/\1/p'
+}
+
 run_xcodebuild() {
     if [ "$ALLOW_PROVISIONING_UPDATES" = YES ]; then
         xcodebuild -allowProvisioningUpdates "$@"
@@ -64,12 +105,13 @@ assert_app_intent_parameter_count() {
 assert_app_group() {
     entitlements_path=$1
     description=$2
+    expected_group=${3:-$APP_GROUP_ID}
     group=$(/usr/libexec/PlistBuddy \
         -c 'Print :com.apple.security.application-groups:0' \
         "$entitlements_path" 2>/dev/null) ||
         fail "$description has no application group entitlement"
-    [ "$group" = "$APP_GROUP_ID" ] ||
-        fail "$description app group is '$group'; expected '$APP_GROUP_ID'"
+    [ "$group" = "$expected_group" ] ||
+        fail "$description app group is '$group'; expected '$expected_group'"
 }
 
 assert_entitlement_value() {
@@ -166,7 +208,9 @@ make_app_group_probe_bundle() {
 
     /bin/mkdir -p "$bundle_path/Contents/MacOS"
     /bin/cp "$executable_source" "$bundle_path/Contents/MacOS/$executable_name"
-    /bin/cp "$provisioning_profile" "$bundle_path/Contents/embedded.provisionprofile"
+    if [ -n "$provisioning_profile" ]; then
+        /bin/cp "$provisioning_profile" "$bundle_path/Contents/embedded.provisionprofile"
+    fi
     /usr/bin/plutil -create xml1 "$bundle_path/Contents/Info.plist"
     /usr/bin/plutil -insert CFBundleIdentifier -string "$bundle_identifier" "$bundle_path/Contents/Info.plist"
     /usr/bin/plutil -insert CFBundleExecutable -string "$executable_name" "$bundle_path/Contents/Info.plist"
@@ -226,18 +270,61 @@ TEST_NAME=${TEST_NAME:-AuralisTests}
 WIDGET_TEST_NAME=${WIDGET_TEST_NAME:-AuralisWidgetTests}
 APP_BUNDLE_ID=${APP_BUNDLE_ID:-com.michaeltrannhan.Auralis}
 WIDGET_BUNDLE_ID=${WIDGET_BUNDLE_ID:-com.michaeltrannhan.Auralis.Widget}
-APP_GROUP_ID=${APP_GROUP_ID:-group.com.michaeltrannhan.Auralis}
 APP_URL_NAME=${APP_URL_NAME:-$APP_BUNDLE_ID}
 APP_URL_SCHEME=${APP_URL_SCHEME:-auralis}
-MARKETING_VERSION=${MARKETING_VERSION:-0.1.0}
-CURRENT_PROJECT_VERSION=${CURRENT_PROJECT_VERSION:-2}
+MARKETING_VERSION=${MARKETING_VERSION:-0.0.8}
+CURRENT_PROJECT_VERSION=${CURRENT_PROJECT_VERSION:-8}
 ARCHS=${ARCHS:-$(/usr/bin/uname -m)}
 DESTINATION=${DESTINATION:-platform=macOS,arch=$(/usr/bin/uname -m)}
-DEVELOPMENT_TEAM=${DEVELOPMENT_TEAM:-6T8J96Z3SD}
-EXPECTED_SIGNING_TEAM=${EXPECTED_SIGNING_TEAM:-$DEVELOPMENT_TEAM}
 SIGN_IDENTITY=${SIGN_IDENTITY:-Apple Development}
 CODE_SIGNING_ALLOWED=${CODE_SIGNING_ALLOWED:-YES}
-ALLOW_PROVISIONING_UPDATES=${ALLOW_PROVISIONING_UPDATES:-$CODE_SIGNING_ALLOWED}
+DEVELOPMENT_TEAM=${DEVELOPMENT_TEAM:-}
+if [ "$CODE_SIGNING_ALLOWED" = YES ]; then
+    signing_identity_selector=$SIGN_IDENTITY
+    matching_signing_records=$(signing_identity_records_matching "$signing_identity_selector")
+    [ -n "$matching_signing_records" ] ||
+        fail "no valid '$signing_identity_selector' code-signing identity was found; create/import one or set SIGN_IDENTITY"
+    matching_identity_count=$(printf '%s\n' "$matching_signing_records" |
+        /usr/bin/awk 'NF { count += 1 } END { print count + 0 }')
+    [ "$matching_identity_count" -eq 1 ] ||
+        fail "multiple code-signing identities match '$signing_identity_selector'; set SIGN_IDENTITY to one exact certificate fingerprint"
+    # Xcode 26 maps the generic Apple Development selector to the legacy
+    # "Mac Development" class in Manual mode and also rejects its exact
+    # display name. Supplying the Keychain fingerprint keeps provisioning-free
+    # local signing deterministic.
+    SIGN_IDENTITY=$(printf '%s\n' "$matching_signing_records" | /usr/bin/awk -F '\t' 'NR == 1 { print $1 }')
+    resolved_signing_identity=$(printf '%s\n' "$matching_signing_records" | /usr/bin/cut -f 2-)
+    detected_signing_team=$(signing_team_for_identity "$SIGN_IDENTITY" "$resolved_signing_identity")
+    [ -n "$detected_signing_team" ] ||
+        fail "could not determine the development team for '$resolved_signing_identity'"
+    if [ -z "$DEVELOPMENT_TEAM" ]; then
+        DEVELOPMENT_TEAM=$detected_signing_team
+    else
+        [ "$DEVELOPMENT_TEAM" = "$detected_signing_team" ] ||
+            fail "'$resolved_signing_identity' belongs to team '$detected_signing_team'; expected DEVELOPMENT_TEAM=$DEVELOPMENT_TEAM"
+    fi
+else
+    DEVELOPMENT_TEAM=${DEVELOPMENT_TEAM:-UNSIGNED}
+fi
+EXPECTED_SIGNING_TEAM=${EXPECTED_SIGNING_TEAM:-$DEVELOPMENT_TEAM}
+APP_GROUP_ID=${APP_GROUP_ID:-$EXPECTED_SIGNING_TEAM.com.michaeltrannhan.Auralis}
+case "$APP_GROUP_ID" in
+    "$EXPECTED_SIGNING_TEAM".*)
+        PROVISIONING_REQUIRED=NO
+        CODE_SIGN_STYLE=${CODE_SIGN_STYLE:-Manual}
+        REGISTER_APP_GROUPS=${REGISTER_APP_GROUPS:-NO}
+        ALLOW_PROVISIONING_UPDATES=${ALLOW_PROVISIONING_UPDATES:-NO}
+        ;;
+    group.*)
+        PROVISIONING_REQUIRED=YES
+        CODE_SIGN_STYLE=${CODE_SIGN_STYLE:-Automatic}
+        REGISTER_APP_GROUPS=${REGISTER_APP_GROUPS:-YES}
+        ALLOW_PROVISIONING_UPDATES=${ALLOW_PROVISIONING_UPDATES:-$CODE_SIGNING_ALLOWED}
+        ;;
+    *)
+        fail "unsupported App Group identifier '$APP_GROUP_ID'; use group.* or $EXPECTED_SIGNING_TEAM.*"
+        ;;
+esac
 RUN_TESTS=${RUN_TESTS:-YES}
 REQUIRE_APP_GROUP_SMOKE=${REQUIRE_APP_GROUP_SMOKE:-$CODE_SIGNING_ALLOWED}
 VALIDATE_ONLY=${VALIDATE_ONLY:-NO}
@@ -282,6 +369,16 @@ fi
 case "$ALLOW_PROVISIONING_UPDATES" in
     YES|NO) ;;
     *) fail "ALLOW_PROVISIONING_UPDATES must be YES or NO" ;;
+esac
+
+case "$CODE_SIGN_STYLE" in
+    Automatic|Manual) ;;
+    *) fail "CODE_SIGN_STYLE must be Automatic or Manual" ;;
+esac
+
+case "$REGISTER_APP_GROUPS" in
+    YES|NO) ;;
+    *) fail "REGISTER_APP_GROUPS must be YES or NO" ;;
 esac
 
 case "$RUN_TESTS" in
@@ -473,7 +570,9 @@ if [ "$VALIDATE_ONLY" = NO ]; then
         DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
         CODE_SIGN_IDENTITY="$SIGN_IDENTITY" \
         CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED" \
-        REGISTER_APP_GROUPS=YES \
+        CODE_SIGN_STYLE="$CODE_SIGN_STYLE" \
+        REGISTER_APP_GROUPS="$REGISTER_APP_GROUPS" \
+        AURALIS_APP_GROUP_ID="$APP_GROUP_ID" \
         AURALIS_DEBUG_LOG_PATH="$AURALIS_DEBUG_LOG_PATH" \
         AURALIS_DIAGNOSTICS_MODE="$AURALIS_DIAGNOSTICS_MODE" \
         clean build \
@@ -510,7 +609,9 @@ if [ "$RUN_TESTS" = YES ]; then
         DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
         CODE_SIGN_IDENTITY="$SIGN_IDENTITY" \
         CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED" \
-        REGISTER_APP_GROUPS=YES \
+        CODE_SIGN_STYLE="$CODE_SIGN_STYLE" \
+        REGISTER_APP_GROUPS="$REGISTER_APP_GROUPS" \
+        AURALIS_APP_GROUP_ID="$APP_GROUP_ID" \
         AURALIS_DEBUG_LOG_PATH= \
         AURALIS_DIAGNOSTICS_MODE="$AURALIS_DIAGNOSTICS_MODE" \
         $APP_GROUP_TEST_ARGUMENT \
@@ -579,6 +680,8 @@ assert_plist_value "$APP_INFO" CFBundleVersion "$CURRENT_PROJECT_VERSION" "app b
 assert_plist_value "$WIDGET_INFO" CFBundleVersion "$CURRENT_PROJECT_VERSION" "widget build version"
 assert_plist_value "$APP_INFO" AuralisDebugLogPath "$AURALIS_DEBUG_LOG_PATH" "debug runtime log path"
 assert_plist_value "$APP_INFO" AuralisDiagnosticsMode "$AURALIS_DIAGNOSTICS_MODE" "diagnostics mode"
+assert_plist_value "$APP_INFO" AuralisAppGroupIdentifier "$APP_GROUP_ID" "app group identifier"
+assert_plist_value "$WIDGET_INFO" AuralisAppGroupIdentifier "$APP_GROUP_ID" "widget app group identifier"
 assert_plist_value "$WIDGET_INFO" NSExtension.NSExtensionPointIdentifier \
     com.apple.widgetkit-extension "widget extension point"
 
@@ -586,6 +689,13 @@ for intent_metadata in "$APP_INTENT_METADATA" "$WIDGET_INTENT_METADATA"; do
     assert_app_intent_parameter_count "$intent_metadata" RefreshAppIntent 0
     assert_app_intent_parameter_count "$intent_metadata" SetAppMutedIntent 2
     assert_app_intent_parameter_count "$intent_metadata" SetOutputDeviceMutedIntent 2
+    assert_app_intent_parameter_count "$intent_metadata" SetOutputDeviceVolumeIntent 2
+    assert_app_intent_parameter_count "$intent_metadata" SetDefaultOutputDeviceIntent 1
+    assert_app_intent_parameter_count "$intent_metadata" ApplyAudioProfileIntent 1
+    assert_app_intent_parameter_count "$intent_metadata" AssignAudioPresetToCurrentOutputIntent 1
+    assert_app_intent_parameter_count "$intent_metadata" SetAllAppsMutedIntent 1
+    assert_app_intent_parameter_count "$intent_metadata" SetAllAppsVolumeIntent 1
+    assert_app_intent_parameter_count "$intent_metadata" RevertProfileChangesIntent 0
     assert_app_intent_parameter_count "$intent_metadata" SetBoostAppIntent 2
     assert_app_intent_parameter_count "$intent_metadata" SetAppVolumeIntent 2
     assert_app_intent_parameter_count "$intent_metadata" SetEQBandGainAppIntent 3
@@ -596,8 +706,8 @@ assert_architectures "$WIDGET_EXECUTABLE" "widget executable"
 
 APP_SOURCE_ENTITLEMENTS=$REPOSITORY_ROOT/Resources/Auralis.entitlements
 WIDGET_SOURCE_ENTITLEMENTS=$REPOSITORY_ROOT/Resources/AuralisWidget.entitlements
-assert_app_group "$APP_SOURCE_ENTITLEMENTS" "app source entitlements"
-assert_app_group "$WIDGET_SOURCE_ENTITLEMENTS" "widget source entitlements"
+assert_app_group "$APP_SOURCE_ENTITLEMENTS" "app source entitlements" '$(AURALIS_APP_GROUP_ID)'
+assert_app_group "$WIDGET_SOURCE_ENTITLEMENTS" "widget source entitlements" '$(AURALIS_APP_GROUP_ID)'
 assert_entitlement_value "$WIDGET_SOURCE_ENTITLEMENTS" com.apple.security.app-sandbox true \
     "widget sandbox entitlement"
 
@@ -631,12 +741,17 @@ if [ "$CODE_SIGNING_ALLOWED" = YES ]; then
 
     APP_PROVISIONING_PROFILE=$BUILT_APP/Contents/embedded.provisionprofile
     WIDGET_PROVISIONING_PROFILE=$BUILT_WIDGET/Contents/embedded.provisionprofile
-    require_file "$APP_PROVISIONING_PROFILE"
-    require_file "$WIDGET_PROVISIONING_PROFILE"
-    assert_profile_authorizes_app_group \
-        "$APP_PROVISIONING_PROFILE" "$BUILD_ROOT/app-provisioning-profile.plist" "app"
-    assert_profile_authorizes_app_group \
-        "$WIDGET_PROVISIONING_PROFILE" "$BUILD_ROOT/widget-provisioning-profile.plist" "widget"
+    if [ "$PROVISIONING_REQUIRED" = YES ]; then
+        require_file "$APP_PROVISIONING_PROFILE"
+        require_file "$WIDGET_PROVISIONING_PROFILE"
+        assert_profile_authorizes_app_group \
+            "$APP_PROVISIONING_PROFILE" "$BUILD_ROOT/app-provisioning-profile.plist" "app"
+        assert_profile_authorizes_app_group \
+            "$WIDGET_PROVISIONING_PROFILE" "$BUILD_ROOT/widget-provisioning-profile.plist" "widget"
+    else
+        APP_PROVISIONING_PROFILE=
+        WIDGET_PROVISIONING_PROFILE=
+    fi
 
     if [ "$REQUIRE_APP_GROUP_SMOKE" = YES ]; then
         require_command xcrun

@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 @main
@@ -14,25 +15,27 @@ struct AuralisApp: App {
         #else
         let enforcedBackendMode: BackendMode? = .coreAudioDiscovery
         #endif
-        let settingsStore = SettingsStore(enforcedBackendMode: enforcedBackendMode)
         let controlStore: AudioControlStore
-        // AudioControlStore owns the one recovery-aware load. Preloading here
-        // would consume a quarantine notice before the UI can publish it.
-        if let primaryStore = try? AudioControlStore(settingsStore: settingsStore) {
-            controlStore = primaryStore
+        if AuralisRuntimeEnvironment.isRunningTests {
+            let testSettingsURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent(
+                    "Auralis-XCTest-\(ProcessInfo.processInfo.processIdentifier)-\(UUID().uuidString)",
+                    isDirectory: true
+                )
+                .appendingPathComponent("settings.json")
+            controlStore = AudioControlStore(
+                settingsStore: SettingsStore(
+                    settingsURL: testSettingsURL,
+                    enforcedBackendMode: .mock
+                ),
+                backend: MockAudioBackend()
+            )
         } else {
-            let fallbackStore = SettingsStore(
-                settingsURL: FileManager.default.temporaryDirectory
-                    .appendingPathComponent("auralis-fallback.json"),
-                enforcedBackendMode: enforcedBackendMode
-            )
-            let fallbackBackend = AudioBackendFactory.makeBackend(
-                mode: enforcedBackendMode ?? .mock
-            )
-            controlStore = try! AudioControlStore(
-                settingsStore: fallbackStore,
-                backend: fallbackBackend
-            )
+            let settingsStore = SettingsStore(enforcedBackendMode: enforcedBackendMode)
+            // AudioControlStore owns the one recovery-aware load. Preloading
+            // here would consume a quarantine notice before the UI can publish
+            // it.
+            controlStore = AudioControlStore(settingsStore: settingsStore)
         }
 
         let externalControls = ExternalControlsCoordinator(windowRouter: AppWindowRouter())

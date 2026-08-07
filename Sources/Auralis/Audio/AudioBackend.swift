@@ -89,16 +89,10 @@ struct OutputVolumeState: Equatable, Sendable {
 }
 
 protocol AudioBackendOutputVolumeControlling: AnyObject {
-    /// Reads volume/mute for the system default output device.
-    func readOutputVolume() throws -> OutputVolumeState
     /// Reads volume/mute for an arbitrary output device by UID.
     func readOutputVolume(forUID uid: String) throws -> OutputVolumeState
-    /// Sets the system default output device's volume.
-    func setOutputVolume(_ volume: Double) throws
     /// Sets an arbitrary output device's volume by UID.
     func setOutputVolume(_ volume: Double, forUID uid: String) throws
-    /// Sets the system default output device's mute flag.
-    func setOutputMuted(_ muted: Bool) throws
     /// Sets an arbitrary output device's mute flag by UID.
     func setOutputMuted(_ muted: Bool, forUID uid: String) throws
     /// Makes an available output device the macOS system default.

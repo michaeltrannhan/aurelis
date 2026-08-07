@@ -215,6 +215,153 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertFalse(decoded.hasCompletedOnboarding)
     }
 
+    func testVersionFourFlatProfileMigratesToActiveGlobalProfile() throws {
+        let profileID = "11111111-1111-1111-1111-111111111111"
+        let data = Data(
+            """
+            {
+              "version": 4,
+              "profiles": [{
+                "id": "\(profileID)",
+                "name": "Legacy Home",
+                "appSettings": {},
+                "deviceSettings": {},
+                "preferredOutputDeviceID": "home-speaker"
+              }],
+              "activeProfileID": "\(profileID)"
+            }
+            """.utf8
+        )
+
+        let decoded = try JSONDecoder().decode(PersistedSettings.self, from: data)
+
+        XCTAssertEqual(decoded.profiles.first?.scope, .global)
+        XCTAssertFalse(decoded.profiles.first?.activatesAutomatically ?? true)
+        XCTAssertEqual(decoded.activeGlobalProfileID?.uuidString, profileID)
+        XCTAssertNil(decoded.activeLocalProfileID)
+        XCTAssertEqual(decoded.activeProfileID?.uuidString, profileID)
+    }
+
+    func testVersionSixOutputPresetsMigrateToOneConfigurationWithoutLosingPresetApps() throws {
+        let selectedID = "11111111-1111-1111-1111-111111111111"
+        let alternateID = "22222222-2222-2222-2222-222222222222"
+        let data = Data(
+            """
+            {
+              "version": 6,
+              "profiles": [
+                {
+                  "id": "\(selectedID)",
+                  "name": "Home",
+                  "scope": {"kind": "outputDevice", "deviceID": "home"},
+                  "activatesAutomatically": false,
+                  "appSettings": [
+                    "music", {"displayName": "Music", "volume": 0.4}
+                  ],
+                  "deviceSettings": {
+                    "home": {"displayName": "Home Speaker", "volume": 0.6}
+                  }
+                },
+                {
+                  "id": "\(alternateID)",
+                  "name": "Home Quiet",
+                  "scope": {"kind": "outputDevice", "deviceID": "home"},
+                  "activatesAutomatically": true,
+                  "appSettings": [
+                    "music", {"displayName": "Music", "volume": 0.2}
+                  ],
+                  "deviceSettings": {
+                    "home": {"displayName": "Home Speaker", "volume": 0.3}
+                  }
+                }
+              ],
+              "activeLocalProfileID": "\(selectedID)"
+            }
+            """.utf8
+        )
+
+        let decoded = try JSONDecoder().decode(PersistedSettings.self, from: data)
+        let selected = try XCTUnwrap(
+            decoded.profiles.first { $0.id.uuidString == selectedID }
+        )
+        let preservedPreset = try XCTUnwrap(
+            decoded.profiles.first { $0.id.uuidString == alternateID }
+        )
+
+        XCTAssertEqual(selected.scope, .outputDevice("home"))
+        XCTAssertTrue(selected.activatesAutomatically)
+        XCTAssertTrue(preservedPreset.scope.isGlobal)
+        XCTAssertFalse(preservedPreset.activatesAutomatically)
+        XCTAssertTrue(preservedPreset.deviceSettings.isEmpty)
+        XCTAssertEqual(
+            preservedPreset.appSettings[AudioAppIdentity(rawValue: "music")]?.volume,
+            0.2
+        )
+        XCTAssertEqual(decoded.activeLocalProfileID?.uuidString, selectedID)
+        XCTAssertEqual(
+            decoded.profiles.first { $0.id == decoded.activeGlobalProfileID }?.name,
+            "Global Default"
+        )
+    }
+
+    func testVersionSixMigrationPersistsAStableFlatGlobalFallback() throws {
+        let url = uniqueSettingsURL()
+        let localID = "11111111-1111-1111-1111-111111111111"
+        let data = Data(
+            """
+            {
+              "version": 6,
+              "appSettings": [
+                "music", {
+                  "displayName": "Music",
+                  "volume": 0.25,
+                  "isMuted": true,
+                  "boost": 3,
+                  "eq": {"gains": [0, 0, 4], "range": 12}
+                }
+              ],
+              "profiles": [{
+                "id": "\(localID)",
+                "name": "Home",
+                "scope": {"kind": "outputDevice", "deviceID": "home"},
+                "activatesAutomatically": true,
+                "appSettings": [
+                  "music", {"displayName": "Music", "volume": 0.25}
+                ],
+                "deviceSettings": {
+                  "home": {"displayName": "Home Speaker", "volume": 0.6}
+                }
+              }],
+              "activeLocalProfileID": "\(localID)"
+            }
+            """.utf8
+        )
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try data.write(to: url)
+        let store = SettingsStore(settingsURL: url)
+
+        let firstLoad = try store.load()
+        let firstFallback = try XCTUnwrap(
+            firstLoad.profiles.first { $0.id == firstLoad.activeGlobalProfileID }
+        )
+        let music = AudioAppIdentity(rawValue: "music")
+        XCTAssertEqual(firstFallback.name, "Global Default")
+        XCTAssertEqual(firstFallback.appSettings[music]?.volume ?? -1, 1, accuracy: 0.001)
+        XCTAssertFalse(firstFallback.appSettings[music]?.isMuted ?? true)
+        XCTAssertEqual(firstFallback.appSettings[music]?.boost, .x1)
+        XCTAssertEqual(firstFallback.appSettings[music]?.eq.gains, Array(repeating: 0, count: 10))
+
+        let persistedObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        )
+        XCTAssertEqual(persistedObject["version"] as? Int, PersistedSettings.currentVersion)
+        let secondLoad = try store.load()
+        XCTAssertEqual(secondLoad.activeGlobalProfileID, firstFallback.id)
+    }
+
     func testEnforcedBackendModeNormalizesAndMigratesPersistedMockMode() throws {
         let url = uniqueSettingsURL()
         let unrestrictedStore = SettingsStore(settingsURL: url)
@@ -246,6 +393,41 @@ final class SettingsStoreTests: XCTestCase {
             try SettingsStore(settingsURL: url).load().customization.backendMode,
             .coreAudioDiscovery
         )
+    }
+
+    func testProfileQueriesKeepActiveGlobalFirstAndMatchMixerContents() {
+        let music = AudioAppIdentity(rawValue: "music")
+        let appSettings = [
+            music: AppAudioSettings(displayName: "Music", volume: 0.5)
+        ]
+        let alpha = AudioProfile(
+            name: "Alpha",
+            appSettings: appSettings,
+            deviceSettings: [:],
+            preferredOutputDeviceID: nil
+        )
+        let active = AudioProfile(
+            name: "Zulu",
+            appSettings: appSettings,
+            deviceSettings: [:],
+            preferredOutputDeviceID: nil
+        )
+        let output = AudioProfile(
+            name: "Alpha",
+            scope: .outputDevice("home"),
+            activatesAutomatically: true,
+            appSettings: appSettings,
+            deviceSettings: [:],
+            preferredOutputDeviceID: "home"
+        )
+        let settings = PersistedSettings(
+            profiles: [alpha, output, active],
+            activeGlobalProfileID: active.id
+        )
+
+        XCTAssertEqual(settings.globalProfilesForDisplay.map(\.id), [active.id, alpha.id])
+        XCTAssertTrue(output.matchesMixerPreset(alpha))
+        XCTAssertFalse(output.matchesMixerPreset(active))
     }
 
     func testPersistenceActorDebouncesToLatestSettingsAndFlushes() async throws {

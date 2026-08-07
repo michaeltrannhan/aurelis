@@ -515,36 +515,13 @@ final class CoreAudioTapIOController {
     }
 
     private static func outputDeviceInfo(for uid: String) throws -> OutputDeviceInfo {
-        let objectID = try deviceObjectID(forUID: uid)
+        guard let objectID = try? CoreAudioPropertyReader.deviceObjectID(forUID: uid) else {
+            throw CoreAudioTapStartFailure.deviceUnavailable
+        }
         guard let nominalSampleRate = nominalSampleRate(for: objectID) else {
             throw CoreAudioTapStartFailure.deviceUnavailable
         }
         return OutputDeviceInfo(uid: uid, nominalSampleRate: nominalSampleRate)
-    }
-
-    private static func deviceObjectID(forUID uid: String) throws -> AudioObjectID {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var qualifier = uid as CFString
-        var objectID = AudioObjectID(kAudioObjectUnknown)
-        var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        let status = withUnsafePointer(to: &qualifier) { qualifierPointer in
-            AudioObjectGetPropertyData(
-                AudioObjectID(kAudioObjectSystemObject),
-                &address,
-                UInt32(MemoryLayout<CFString>.size),
-                qualifierPointer,
-                &size,
-                &objectID
-            )
-        }
-        guard status == noErr, objectID != AudioObjectID(kAudioObjectUnknown) else {
-            throw CoreAudioTapStartFailure.deviceUnavailable
-        }
-        return objectID
     }
 }
 

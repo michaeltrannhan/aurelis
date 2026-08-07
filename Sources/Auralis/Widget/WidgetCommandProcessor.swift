@@ -206,6 +206,21 @@ enum WidgetCommandStoreExecutor {
                 throw WidgetCommandExecutionError.unsupportedAction
             }
             try await store.applyProfile(profileID)
+        case (.profile, .assignProfileToCurrentOutput):
+            guard let rawID = command.targetIdentity,
+                  let profileID = UUID(uuidString: rawID),
+                  store.settings.profiles.contains(where: {
+                      $0.id == profileID && $0.scope.isGlobal
+                  }) else {
+                throw WidgetCommandExecutionError.unsupportedAction
+            }
+            try await store.assignPresetToCurrentOutput(profileID)
+        case let (.host, .setMuted(muted)):
+            try await store.setAllActiveAppsMuted(muted)
+        case let (.host, .setVolume(volume)):
+            try await store.setAllActiveAppsVolume(volume)
+        case (.host, .revertProfileChanges):
+            try await store.revertProfileChanges()
         case (.host, .refresh):
             try await store.refresh()
         default:

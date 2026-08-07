@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import XCTest
 @testable import Auralis
@@ -21,7 +22,7 @@ final class ViewRenderingIntegrationTests: XCTestCase {
             apps: apps,
             devices: [AudioDeviceSnapshot(id: "main", name: "Main Output", isDefault: true)]
         )
-        let store = try AudioControlStore(
+        let store = AudioControlStore(
             settingsStore: SettingsStore(settingsURL: settingsURL),
             backend: backend,
             permissionClient: RenderingPermissionClient()
@@ -52,6 +53,88 @@ final class ViewRenderingIntegrationTests: XCTestCase {
             ),
             Double(store.displayRows.count) * PopupContentLayoutModel.compactRowMinimumHeight
         )
+    }
+
+    func testProfileManagementPopoverRendersRichProfileState() async throws {
+        let settingsURL = temporaryFileURL(prefix: "AuralisProfileRendering", filename: "settings.json")
+        let musicID = AudioAppIdentity(rawValue: "com.apple.Music")
+        let safariID = AudioAppIdentity(rawValue: "com.apple.Safari")
+        let appSettings = [
+            musicID: AppAudioSettings(displayName: "Music", volume: 0.72),
+            safariID: AppAudioSettings(displayName: "Safari", volume: 0.48)
+        ]
+        let focus = AudioProfile(
+            name: "Focus",
+            appSettings: appSettings,
+            deviceSettings: [:],
+            preferredOutputDeviceID: nil
+        )
+        let calls = AudioProfile(
+            name: "Calls",
+            appSettings: [
+                musicID: AppAudioSettings(displayName: "Music", volume: 0.2, isMuted: true),
+                safariID: AppAudioSettings(displayName: "Safari", volume: 0.82)
+            ],
+            deviceSettings: [:],
+            preferredOutputDeviceID: nil
+        )
+        let laptopConfiguration = AudioProfile(
+            name: "Focus",
+            scope: .outputDevice("default-output"),
+            activatesAutomatically: true,
+            appSettings: focus.appSettings,
+            deviceSettings: [
+                "default-output": DeviceAudioSettings(
+                    displayName: "MacBook Speakers",
+                    volume: 0.65,
+                    isMuted: false
+                )
+            ],
+            preferredOutputDeviceID: "default-output"
+        )
+        let settings = PersistedSettings(
+            appSettings: appSettings,
+            profiles: [focus, calls, laptopConfiguration],
+            activeGlobalProfileID: focus.id,
+            activeLocalProfileID: laptopConfiguration.id,
+            profileHasOverrides: true,
+            hasCompletedOnboarding: true
+        )
+        try SettingsStore(settingsURL: settingsURL).save(settings)
+
+        let store = AudioControlStore(
+            settingsStore: SettingsStore(settingsURL: settingsURL),
+            backend: MockAudioBackend(),
+            permissionClient: RenderingPermissionClient()
+        )
+        try await store.refresh()
+        let hostingView = NSHostingView(
+            rootView: ProfileManagementPopover(store: store, onClose: {})
+        )
+        hostingView.frame = NSRect(x: 0, y: 0, width: 560, height: 560)
+        let window = NSWindow(
+            contentRect: hostingView.frame,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.layoutIfNeeded()
+        hostingView.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        window.layoutIfNeeded()
+        hostingView.layoutSubtreeIfNeeded()
+
+        let bitmap = try XCTUnwrap(hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds))
+        hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
+
+        XCTAssertEqual(hostingView.bounds.width, 560)
+        XCTAssertEqual(hostingView.bounds.height, 560)
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        XCTAssertGreaterThan(png.count, 20_000)
+        if let outputPath = ProcessInfo.processInfo.environment["AURALIS_PROFILE_RENDER_PATH"] {
+            try png.write(to: URL(fileURLWithPath: outputPath), options: .atomic)
+        }
     }
 }
 

@@ -9,7 +9,7 @@ struct CoreAudioAggregateRecord: Equatable {
 }
 
 protocol CoreAudioAggregateCleanupOperating: AnyObject {
-    func aggregateRecords() -> [CoreAudioAggregateRecord]
+    func aggregateRecords() throws -> [CoreAudioAggregateRecord]
     func destroyAggregateDevice(_ id: AudioObjectID) -> OSStatus
 }
 
@@ -40,7 +40,12 @@ enum CoreAudioOrphanedAggregateCleanup {
         journals: [any CoreAudioAggregateOwnershipJournaling],
         using operations: CoreAudioAggregateCleanupOperating
     ) -> [AudioObjectID] {
-        let discovered = operations.aggregateRecords()
+        // Never discard durable ownership proof when Core Audio inventory is
+        // incomplete. A transient property failure is indistinguishable from
+        // an absent device unless discovery reports failure explicitly.
+        guard let discovered = try? operations.aggregateRecords() else {
+            return []
+        }
         var recovered: [AudioObjectID] = []
 
         for journal in journals {
@@ -53,9 +58,19 @@ enum CoreAudioOrphanedAggregateCleanup {
             for ownership in ownershipRecords where ownership.isValid(
                 aggregateUIDPrefix: journal.aggregateUIDPrefix
             ) {
-                guard let live = discovered.first(where: {
+                let recordsWithMatchingUID = discovered.filter {
                     $0.uid == ownership.aggregateUID
-                        && $0.isAggregate
+                }
+                guard !recordsWithMatchingUID.isEmpty else {
+                    // HAL can remove a private aggregate when its owner exits
+                    // before Auralis gets a chance to clear the journal. Once a
+                    // complete inventory proves the stable UID is gone, the
+                    // ownership record is itself stale and safe to prune.
+                    try? journal.removeAggregate(uid: ownership.aggregateUID)
+                    continue
+                }
+                guard let live = recordsWithMatchingUID.first(where: {
+                    $0.isAggregate
                         && $0.name.hasPrefix(aggregateNamePrefix)
                 }) else {
                     continue
@@ -94,27 +109,25 @@ enum CoreAudioOrphanedAggregateCleanup {
 }
 
 final class SystemAggregateCleanupOperations: CoreAudioAggregateCleanupOperating {
-    func aggregateRecords() -> [CoreAudioAggregateRecord] {
-        guard let devices: [AudioObjectID] = try? CoreAudioPropertyReader.array(
+    func aggregateRecords() throws -> [CoreAudioAggregateRecord] {
+        let devices: [AudioObjectID] = try CoreAudioPropertyReader.array(
             objectID: AudioObjectID(kAudioObjectSystemObject),
             selector: kAudioHardwarePropertyDevices
-        ) else {
-            return []
-        }
+        )
 
-        return devices.map { id in
-            let uid = (try? CoreAudioPropertyReader.string(
+        return try devices.map { id in
+            let uid = try CoreAudioPropertyReader.string(
                 objectID: id,
                 selector: kAudioDevicePropertyDeviceUID
-            )) ?? ""
-            let name = (try? CoreAudioPropertyReader.string(
+            )
+            let name = try CoreAudioPropertyReader.string(
                 objectID: id,
                 selector: kAudioObjectPropertyName
-            )) ?? ""
-            let transport: UInt32 = (try? CoreAudioPropertyReader.scalar(
+            )
+            let transport: UInt32 = try CoreAudioPropertyReader.scalar(
                 objectID: id,
                 selector: kAudioDevicePropertyTransportType
-            )) ?? 0
+            )
             return CoreAudioAggregateRecord(
                 id: id,
                 uid: uid,

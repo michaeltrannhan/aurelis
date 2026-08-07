@@ -104,7 +104,15 @@ actor WidgetIPCFileActor {
 /// Application Support fallback because that would make controls appear to
 /// work while the app and extension write different directories.
 enum WidgetSharedContainer {
-    static let appGroupID = "group.com.michaeltrannhan.Auralis"
+    static let appGroupID: String = {
+        let configured = Bundle.main.object(forInfoDictionaryKey: "AuralisAppGroupIdentifier")
+            as? String
+        let normalized = configured?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let normalized, !normalized.isEmpty {
+            return normalized
+        }
+        return "group.com.michaeltrannhan.Auralis"
+    }()
     static let widgetDirectoryName = "widget-ipc-v1"
 
     static func resolveLayout(fileManager: FileManager = .default) throws -> WidgetSharedLayout {

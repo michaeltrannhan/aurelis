@@ -60,7 +60,7 @@ final class AudioCoordinatorTests: XCTestCase {
         let client = CoordinatorPermissionClient(state: .init(screenCapture: .denied, audioUsageDescription: .present))
         let coordinator = AudioPermissionCoordinator(client: client)
 
-        XCTAssertEqual(coordinator.requirements.first?.state, .denied)
+        XCTAssertEqual(coordinator.state.screenCapture, .denied)
         XCTAssertEqual(coordinator.requestAudioCapture().screenCapture, .denied)
         coordinator.openAudioPrivacySettings()
         XCTAssertEqual(client.openCount, 1)
@@ -77,7 +77,6 @@ final class AudioCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(coordinator.requestAudioCapture().screenCapture, .pendingRestart)
         XCTAssertEqual(coordinator.refresh().screenCapture, .pendingRestart)
-        XCTAssertEqual(coordinator.requirements.first?.state, .restartRequired)
         try await coordinator.relaunchApp()
         XCTAssertEqual(client.relaunchCount, 1)
     }
@@ -163,15 +162,6 @@ private final class ReconnectOutputBackend: AudioBackend, AudioBackendOutputVolu
 
     func apply(_ command: AudioBackendCommand) throws {}
 
-    func readOutputVolume() throws -> OutputVolumeState {
-        guard let uid = lock.withLock({
-            selectedDefault
-                ?? devices.first(where: \.isDefault)?.id
-                ?? devices.first?.id
-        }) else { throw NSError(domain: "ReconnectOutputBackend", code: 404) }
-        return try readOutputVolume(forUID: uid)
-    }
-
     func readOutputVolume(forUID uid: String) throws -> OutputVolumeState {
         lock.withLock {
             OutputVolumeState(
@@ -183,26 +173,8 @@ private final class ReconnectOutputBackend: AudioBackend, AudioBackendOutputVolu
         }
     }
 
-    func setOutputVolume(_ volume: Double) throws {
-        guard let uid = lock.withLock({
-            selectedDefault
-                ?? devices.first(where: \.isDefault)?.id
-                ?? devices.first?.id
-        }) else { throw NSError(domain: "ReconnectOutputBackend", code: 404) }
-        try setOutputVolume(volume, forUID: uid)
-    }
-
     func setOutputVolume(_ volume: Double, forUID uid: String) throws {
         lock.withLock { volumes[uid] = volume }
-    }
-
-    func setOutputMuted(_ muted: Bool) throws {
-        guard let uid = lock.withLock({
-            selectedDefault
-                ?? devices.first(where: \.isDefault)?.id
-                ?? devices.first?.id
-        }) else { throw NSError(domain: "ReconnectOutputBackend", code: 404) }
-        try setOutputMuted(muted, forUID: uid)
     }
 
     func setOutputMuted(_ muted: Bool, forUID uid: String) throws {

@@ -13,7 +13,7 @@ final class ExternalControlsCoordinatorTests: XCTestCase {
             media: media,
             hotkeys: hotkeys
         )
-        let store = try makeStore()
+        let store = makeStore()
         await store.waitUntilReady()
 
         coordinator.start(store: store)
@@ -40,7 +40,7 @@ final class ExternalControlsCoordinatorTests: XCTestCase {
             media: media,
             hotkeys: hotkeys
         )
-        let store = try makeStore()
+        let store = makeStore()
         await store.waitUntilReady()
 
         coordinator.start(store: store)
@@ -73,7 +73,7 @@ final class ExternalControlsCoordinatorTests: XCTestCase {
             media: media,
             hotkeys: hotkeys
         )
-        let store = try makeStore()
+        let store = makeStore()
         await store.waitUntilReady()
 
         coordinator.start(store: store)
@@ -104,7 +104,7 @@ final class ExternalControlsCoordinatorTests: XCTestCase {
             media: media,
             hotkeys: StubHotkeyRegistrar()
         )
-        let store = try makeStore()
+        let store = makeStore()
         await store.waitUntilReady()
         coordinator.start(store: store)
 
@@ -126,7 +126,7 @@ final class ExternalControlsCoordinatorTests: XCTestCase {
             hotkeys: hotkeys,
             router: router
         )
-        let store = try makeStore()
+        let store = makeStore()
         await store.waitUntilReady()
         coordinator.start(store: store)
 
@@ -151,7 +151,7 @@ final class ExternalControlsCoordinatorTests: XCTestCase {
             media: StubMediaKeyMonitor(),
             hotkeys: StubHotkeyRegistrar()
         )
-        let store = try makeStore()
+        let store = makeStore()
         await store.waitUntilReady()
         coordinator.start(store: store)
 
@@ -187,11 +187,11 @@ final class ExternalControlsCoordinatorTests: XCTestCase {
         )
     }
 
-    private func makeStore() throws -> AudioControlStore {
+    private func makeStore() -> AudioControlStore {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("Auralis-ExternalControls-\(UUID().uuidString).json")
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
-        return try AudioControlStore(
+        return AudioControlStore(
             settingsStore: SettingsStore(settingsURL: url),
             backend: MockAudioBackend(),
             permissionClient: ExternalControlsAudioPermissionClient()

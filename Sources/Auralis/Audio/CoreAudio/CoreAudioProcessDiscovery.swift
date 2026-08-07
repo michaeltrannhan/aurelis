@@ -12,17 +12,6 @@ final class CoreAudioProcessDiscovery {
         var isRunning: Bool
     }
 
-    func discoverProcesses() throws -> [AudioAppSnapshot] {
-        let processObjects: [AudioObjectID] = try CoreAudioPropertyReader.array(
-            objectID: AudioObjectID(kAudioObjectSystemObject),
-            selector: kAudioHardwarePropertyProcessObjectList
-        )
-        let currentPID = ProcessInfo.processInfo.processIdentifier
-
-        let records = processObjects.compactMap { makeProcessRecord(processObjectID: $0) }
-        return Self.mapProcessRecords(records, currentProcessID: currentPID)
-    }
-
     func discoverTapTargets() throws -> [CoreAudioTapTarget] {
         let processObjects: [AudioObjectID] = try CoreAudioPropertyReader.array(
             objectID: AudioObjectID(kAudioObjectSystemObject),
@@ -31,13 +20,6 @@ final class CoreAudioProcessDiscovery {
         let currentPID = ProcessInfo.processInfo.processIdentifier
         let records = processObjects.compactMap { makeProcessRecord(processObjectID: $0) }
         return Self.mapTapTargets(records: records, currentProcessID: currentPID)
-    }
-
-    static func mapProcessRecords(_ records: [ProcessRecord], currentProcessID: pid_t) -> [AudioAppSnapshot] {
-        let snapshots = records.compactMap { record in
-            mapProcessRecord(parentAdjustedRecord(for: record, in: records), currentProcessID: currentProcessID)
-        }
-        return coalescedSnapshots(snapshots)
     }
 
     static func mapTapTargets(records: [ProcessRecord], currentProcessID: pid_t) -> [CoreAudioTapTarget] {
@@ -65,8 +47,13 @@ final class CoreAudioProcessDiscovery {
             }
         }
 
-        return targetsByIdentity.values.sorted {
-            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+        return targetsByIdentity.values.sorted { lhs, rhs in
+            StableDisplayOrder.precedes(
+                lhsName: lhs.displayName,
+                lhsID: lhs.identity.rawValue,
+                rhsName: rhs.displayName,
+                rhsID: rhs.identity.rawValue
+            )
         }
     }
 
@@ -89,31 +76,6 @@ final class CoreAudioProcessDiscovery {
             isActive: true,
             level: 0
         )
-    }
-
-    static func coalescedSnapshots(_ snapshots: [AudioAppSnapshot]) -> [AudioAppSnapshot] {
-        var snapshotsByIdentity: [AudioAppIdentity: AudioAppSnapshot] = [:]
-
-        for snapshot in snapshots {
-            guard var existing = snapshotsByIdentity[snapshot.identity] else {
-                snapshotsByIdentity[snapshot.identity] = snapshot
-                continue
-            }
-
-            if shouldPreferDisplayName(snapshot.displayName, over: existing.displayName) {
-                existing.displayName = snapshot.displayName
-            }
-            if existing.bundleIdentifier == nil {
-                existing.bundleIdentifier = snapshot.bundleIdentifier
-            }
-            existing.isActive = existing.isActive || snapshot.isActive
-            existing.level = max(existing.level, snapshot.level)
-            snapshotsByIdentity[snapshot.identity] = existing
-        }
-
-        return snapshotsByIdentity.values.sorted {
-            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
-        }
     }
 
     private func makeProcessRecord(processObjectID: AudioObjectID) -> ProcessRecord? {
@@ -200,7 +162,11 @@ final class CoreAudioProcessDiscovery {
                 return !parentLookupKeys(for: candidate).isDisjoint(with: childKeys)
             }
             .sorted { lhs, rhs in
-                parentRecordScore(lhs) > parentRecordScore(rhs)
+                let lhsScore = parentRecordScore(lhs)
+                let rhsScore = parentRecordScore(rhs)
+                if lhsScore != rhsScore { return lhsScore > rhsScore }
+                if lhs.processID != rhs.processID { return lhs.processID < rhs.processID }
+                return lhs.processObjectID < rhs.processObjectID
             }
             .first
     }

@@ -1,4 +1,18 @@
 import Foundation
+import AuralisWidgetShared
+
+enum StableDisplayOrder {
+    static func precedes(
+        lhsName: String,
+        lhsID: String,
+        rhsName: String,
+        rhsID: String
+    ) -> Bool {
+        let nameOrder = lhsName.localizedCaseInsensitiveCompare(rhsName)
+        if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+        return lhsID < rhsID
+    }
+}
 
 struct AudioAppIdentity: Hashable, Codable, Identifiable, RawRepresentable, Sendable {
     var rawValue: String
@@ -352,9 +366,69 @@ struct DeviceAudioSettings: Codable, Equatable, Sendable {
     }
 }
 
+enum AudioProfileScope: Codable, Equatable, Hashable, Sendable {
+    case global
+    case outputDevice(String)
+
+    var outputDeviceID: String? {
+        guard case let .outputDevice(deviceID) = self else { return nil }
+        return deviceID
+    }
+
+    var isGlobal: Bool {
+        if case .global = self { return true }
+        return false
+    }
+
+    var normalized: AudioProfileScope {
+        switch self {
+        case .global:
+            return .global
+        case let .outputDevice(deviceID):
+            let trimmed = deviceID.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? .global : .outputDevice(trimmed)
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case deviceID
+    }
+
+    private enum Kind: String, Codable {
+        case global
+        case outputDevice
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .kind) {
+        case .global:
+            self = .global
+        case .outputDevice:
+            let deviceID = try container.decode(String.self, forKey: .deviceID)
+            let trimmed = deviceID.trimmingCharacters(in: .whitespacesAndNewlines)
+            self = trimmed.isEmpty ? .global : .outputDevice(trimmed)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .global:
+            try container.encode(Kind.global, forKey: .kind)
+        case let .outputDevice(deviceID):
+            try container.encode(Kind.outputDevice, forKey: .kind)
+            try container.encode(deviceID, forKey: .deviceID)
+        }
+    }
+}
+
 struct AudioProfile: Codable, Equatable, Identifiable, Sendable {
     var id: UUID
     var name: String
+    var scope: AudioProfileScope
+    var activatesAutomatically: Bool
     var appSettings: [AudioAppIdentity: AppAudioSettings]
     var deviceSettings: [String: DeviceAudioSettings]
     var preferredOutputDeviceID: String?
@@ -364,6 +438,8 @@ struct AudioProfile: Codable, Equatable, Identifiable, Sendable {
     init(
         id: UUID = UUID(),
         name: String,
+        scope: AudioProfileScope = .global,
+        activatesAutomatically: Bool = false,
         appSettings: [AudioAppIdentity: AppAudioSettings],
         deviceSettings: [String: DeviceAudioSettings],
         preferredOutputDeviceID: String?,
@@ -372,6 +448,8 @@ struct AudioProfile: Codable, Equatable, Identifiable, Sendable {
     ) {
         self.id = id
         self.name = Self.normalizedName(name)
+        self.scope = scope.normalized
+        self.activatesAutomatically = !self.scope.isGlobal && activatesAutomatically
         self.appSettings = Dictionary(
             uniqueKeysWithValues: appSettings
                 .filter { $0.key.isPersistable }
@@ -383,7 +461,8 @@ struct AudioProfile: Codable, Equatable, Identifiable, Sendable {
                 return normalizedID.map { ($0, value.normalized) }
             }
         )
-        self.preferredOutputDeviceID = Self.normalizedDeviceID(preferredOutputDeviceID)
+        self.preferredOutputDeviceID = self.scope.outputDeviceID
+            ?? Self.normalizedDeviceID(preferredOutputDeviceID)
         self.createdAt = Self.finiteDate(createdAt)
         self.updatedAt = Self.finiteDate(updatedAt)
     }
@@ -391,6 +470,8 @@ struct AudioProfile: Codable, Equatable, Identifiable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id
         case name
+        case scope
+        case activatesAutomatically
         case appSettings
         case deviceSettings
         case preferredOutputDeviceID
@@ -404,6 +485,8 @@ struct AudioProfile: Codable, Equatable, Identifiable, Sendable {
         self.init(
             id: container.tolerant(UUID.self, forKey: .id) ?? UUID(),
             name: container.tolerant(String.self, forKey: .name) ?? "Profile",
+            scope: container.tolerant(AudioProfileScope.self, forKey: .scope) ?? .global,
+            activatesAutomatically: container.tolerant(Bool.self, forKey: .activatesAutomatically) ?? false,
             appSettings: container.tolerant([AudioAppIdentity: AppAudioSettings].self, forKey: .appSettings) ?? [:],
             deviceSettings: container.tolerant([String: DeviceAudioSettings].self, forKey: .deviceSettings) ?? [:],
             preferredOutputDeviceID: container.tolerant(String.self, forKey: .preferredOutputDeviceID),
@@ -416,12 +499,34 @@ struct AudioProfile: Codable, Equatable, Identifiable, Sendable {
         AudioProfile(
             id: id,
             name: name,
+            scope: scope,
+            activatesAutomatically: activatesAutomatically,
             appSettings: appSettings,
             deviceSettings: deviceSettings,
             preferredOutputDeviceID: preferredOutputDeviceID,
             createdAt: createdAt,
             updatedAt: updatedAt
         )
+    }
+
+    func matchesMixerPreset(_ preset: AudioProfile) -> Bool {
+        name == preset.name && appSettings == preset.appSettings
+    }
+
+    static func flatAppSettings(
+        from appSettings: [AudioAppIdentity: AppAudioSettings],
+        customization: AppCustomization
+    ) -> [AudioAppIdentity: AppAudioSettings] {
+        Dictionary(uniqueKeysWithValues: appSettings.map { identity, settings in
+            (
+                identity,
+                AppAudioSettings(
+                    displayName: settings.displayName,
+                    volume: customization.defaultNewAppVolume,
+                    eq: EQCurve(range: customization.eqGainRange)
+                )
+            )
+        })
     }
 
     private static func normalizedName(_ name: String) -> String {

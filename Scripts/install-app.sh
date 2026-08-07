@@ -8,9 +8,15 @@ set -eu
 # Usage:
 #   Scripts/install-app.sh [--system|--user] [--skip-build] [--no-launch]
 #
+# The builder infers DEVELOPMENT_TEAM when exactly one matching signing
+# identity is installed. Its default team-prefixed App Group needs no
+# provisioning profile on macOS. Registered group.* identifiers remain
+# available through the environment overrides below.
+#
 # Environment overrides mirror the other entry points:
-#   DEVELOPMENT_TEAM, SIGN_IDENTITY, ALLOW_PROVISIONING_UPDATES,
-#   CODE_SIGNING_ALLOWED, APP_PRODUCT_NAME, APP_BUNDLE_ID, WIDGET_BUNDLE_ID
+#   DEVELOPMENT_TEAM, SIGN_IDENTITY, APP_GROUP_ID, CODE_SIGN_STYLE,
+#   REGISTER_APP_GROUPS, ALLOW_PROVISIONING_UPDATES, CODE_SIGNING_ALLOWED,
+#   APP_PRODUCT_NAME, APP_BUNDLE_ID, WIDGET_BUNDLE_ID
 
 fail() {
     printf 'error: %s\n' "$*" >&2

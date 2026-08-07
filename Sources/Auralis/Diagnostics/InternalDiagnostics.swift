@@ -132,11 +132,7 @@ enum InternalDiagnostics {
     ))
 
     static var persistentLogURL: URL? {
-        let environment = ProcessInfo.processInfo.environment
-        guard environment["XCTestConfigurationFilePath"] == nil,
-              environment["XCTestBundlePath"] == nil else {
-            return nil
-        }
+        guard !AuralisRuntimeEnvironment.isRunningTests else { return nil }
 
         #if DEBUG
         guard let path = Bundle.main.object(forInfoDictionaryKey: "AuralisDebugLogPath") as? String,

@@ -1,4 +1,5 @@
 import Foundation
+import AuralisWidgetShared
 
 enum SettingsStoreError: Error, Equatable, LocalizedError {
     case futureVersion(found: Int, supported: Int)
@@ -23,6 +24,10 @@ struct SettingsRecoveryNotice: Equatable, Sendable {
 struct SettingsLoadResult: Equatable, Sendable {
     let settings: PersistedSettings
     let recoveryNotice: SettingsRecoveryNotice?
+}
+
+private struct SettingsFileHeader: Decodable {
+    let version: Int?
 }
 
 private struct TolerantAppSettings: Decodable {
@@ -86,7 +91,7 @@ private struct TolerantDeviceSettings: Decodable {
 }
 
 struct PersistedSettings: Codable, Equatable, Sendable {
-    static let currentVersion = 4
+    static let currentVersion = 8
 
     var version: Int
     var customization: AppCustomization
@@ -94,20 +99,27 @@ struct PersistedSettings: Codable, Equatable, Sendable {
     var deviceSettings: [String: DeviceAudioSettings]
     var preferredOutputDeviceID: String?
     var profiles: [AudioProfile]
+    var activeGlobalProfileID: UUID?
+    var activeLocalProfileID: UUID?
+    /// Version-4 compatibility mirror. New code should use the scoped IDs.
     var activeProfileID: UUID?
+    var profileHasOverrides: Bool
     var pinnedAppIDs: Set<AudioAppIdentity>
     var ignoredAppIDs: Set<AudioAppIdentity>
     var appDisplayOrder: [AudioAppIdentity]
     var hasCompletedOnboarding: Bool
 
     init(
-        version: Int = currentVersion,
         customization: AppCustomization = AppCustomization(),
         appSettings: [AudioAppIdentity: AppAudioSettings] = [:],
         deviceSettings: [String: DeviceAudioSettings] = [:],
         preferredOutputDeviceID: String? = nil,
         profiles: [AudioProfile] = [],
+        activeGlobalProfileID: UUID? = nil,
+        activeLocalProfileID: UUID? = nil,
         activeProfileID: UUID? = nil,
+        profileHasOverrides: Bool = false,
+        migrateLegacyFallback: Bool = false,
         pinnedAppIDs: Set<AudioAppIdentity> = [],
         ignoredAppIDs: Set<AudioAppIdentity> = [],
         appDisplayOrder: [AudioAppIdentity] = [],
@@ -129,16 +141,81 @@ struct PersistedSettings: Codable, Equatable, Sendable {
         let preferred = preferredOutputDeviceID?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.preferredOutputDeviceID = preferred?.isEmpty == false ? preferred : nil
         var seenProfileIDs = Set<UUID>()
-        self.profiles = profiles
+        let normalizedProfiles = profiles
             .map(\.normalized)
             .filter { seenProfileIDs.insert($0.id).inserted }
-        self.activeProfileID = self.profiles.contains(where: { $0.id == activeProfileID })
-            ? activeProfileID
-            : nil
+        let legacyProfile = normalizedProfiles.first { $0.id == activeProfileID }
+        let localCandidate = activeLocalProfileID
+            ?? (legacyProfile?.scope.isGlobal == false ? activeProfileID : nil)
+        self.profiles = Self.simplifiedProfiles(
+            normalizedProfiles,
+            preferredLocalProfileID: localCandidate
+        )
+        var globalCandidate = normalizedProfiles.contains {
+            $0.id == activeGlobalProfileID && $0.scope.isGlobal
+        } ? activeGlobalProfileID : nil
+        if globalCandidate == nil, legacyProfile?.scope.isGlobal == true {
+            globalCandidate = activeProfileID
+        }
+        if migrateLegacyFallback,
+           globalCandidate == nil,
+           self.profiles.contains(where: { !$0.scope.isGlobal }) {
+            let fallback = AudioProfile(
+                name: "Global Default",
+                scope: .global,
+                appSettings: AudioProfile.flatAppSettings(
+                    from: self.appSettings,
+                    customization: self.customization
+                ),
+                deviceSettings: [:],
+                preferredOutputDeviceID: nil
+            )
+            self.profiles.append(fallback)
+            globalCandidate = fallback.id
+        }
+        self.activeGlobalProfileID = self.profiles.contains {
+            $0.id == globalCandidate && $0.scope.isGlobal
+        } ? globalCandidate : nil
+        self.activeLocalProfileID = self.profiles.contains {
+            $0.id == localCandidate && !$0.scope.isGlobal
+        } ? localCandidate : nil
+        self.activeProfileID = self.activeLocalProfileID ?? self.activeGlobalProfileID
+        self.profileHasOverrides = profileHasOverrides && self.activeProfileID != nil
         self.pinnedAppIDs = Set(pinnedAppIDs.filter(\.isPersistable))
         self.ignoredAppIDs = Set(ignoredAppIDs.filter(\.isPersistable))
         self.appDisplayOrder = Self.deduplicated(appDisplayOrder.filter(\.isPersistable))
         self.hasCompletedOnboarding = hasCompletedOnboarding
+    }
+
+    var globalProfilesForDisplay: [AudioProfile] {
+        profiles
+            .filter(\.scope.isGlobal)
+            .sorted { lhs, rhs in
+                let lhsIsActive = lhs.id == activeGlobalProfileID
+                let rhsIsActive = rhs.id == activeGlobalProfileID
+                if lhsIsActive != rhsIsActive { return lhsIsActive }
+                return StableDisplayOrder.precedes(
+                    lhsName: lhs.name,
+                    lhsID: lhs.id.uuidString,
+                    rhsName: rhs.name,
+                    rhsID: rhs.id.uuidString
+                )
+            }
+    }
+
+    /// Version 8 treats output-scoped records as automatically saved device
+    /// contexts. Global records are detached, copyable preset templates.
+    var deviceContextsForDisplay: [AudioProfile] {
+        profiles
+            .filter { !$0.scope.isGlobal }
+            .sorted {
+                StableDisplayOrder.precedes(
+                    lhsName: $0.name,
+                    lhsID: $0.scope.outputDeviceID ?? $0.id.uuidString,
+                    rhsName: $1.name,
+                    rhsID: $1.scope.outputDeviceID ?? $1.id.uuidString
+                )
+            }
     }
 
     enum CodingKeys: String, CodingKey {
@@ -148,7 +225,10 @@ struct PersistedSettings: Codable, Equatable, Sendable {
         case deviceSettings
         case preferredOutputDeviceID
         case profiles
+        case activeGlobalProfileID
+        case activeLocalProfileID
         case activeProfileID
+        case profileHasOverrides
         case pinnedAppIDs
         case ignoredAppIDs
         case appDisplayOrder
@@ -173,7 +253,11 @@ struct PersistedSettings: Codable, Equatable, Sendable {
             deviceSettings: values.tolerant(TolerantDeviceSettings.self, forKey: .deviceSettings)?.values ?? [:],
             preferredOutputDeviceID: values.tolerant(String.self, forKey: .preferredOutputDeviceID),
             profiles: values.tolerant(TolerantArray<AudioProfile>.self, forKey: .profiles)?.values ?? [],
+            activeGlobalProfileID: values.tolerant(UUID.self, forKey: .activeGlobalProfileID),
+            activeLocalProfileID: values.tolerant(UUID.self, forKey: .activeLocalProfileID),
             activeProfileID: values.tolerant(UUID.self, forKey: .activeProfileID),
+            profileHasOverrides: values.tolerant(Bool.self, forKey: .profileHasOverrides) ?? false,
+            migrateLegacyFallback: decodedVersion < 8,
             pinnedAppIDs: Set(values.tolerant(TolerantArray<AudioAppIdentity>.self, forKey: .pinnedAppIDs)?.values ?? []),
             ignoredAppIDs: Set(values.tolerant(TolerantArray<AudioAppIdentity>.self, forKey: .ignoredAppIDs)?.values ?? []),
             appDisplayOrder: values.tolerant(TolerantArray<AudioAppIdentity>.self, forKey: .appDisplayOrder)?.values ?? [],
@@ -184,6 +268,42 @@ struct PersistedSettings: Codable, Equatable, Sendable {
     private static func deduplicated(_ identities: [AudioAppIdentity]) -> [AudioAppIdentity] {
         var seen: Set<AudioAppIdentity> = []
         return identities.filter { seen.insert($0).inserted }
+    }
+
+    /// Version 7 exposes one dedicated configuration per output. If an older
+    /// settings file contains alternate output presets, keep their app
+    /// snapshots as Global presets instead of deleting user data.
+    private static func simplifiedProfiles(
+        _ profiles: [AudioProfile],
+        preferredLocalProfileID: UUID?
+    ) -> [AudioProfile] {
+        let grouped = Dictionary(
+            grouping: profiles.filter { !$0.scope.isGlobal },
+            by: { $0.scope.outputDeviceID ?? "" }
+        )
+        var selectedByOutput: [String: UUID] = [:]
+        for (outputID, candidates) in grouped where !outputID.isEmpty {
+            let selected = candidates.first { $0.id == preferredLocalProfileID }
+                ?? candidates.filter(\.activatesAutomatically).max { $0.updatedAt < $1.updatedAt }
+                ?? candidates.max { $0.updatedAt < $1.updatedAt }
+            selectedByOutput[outputID] = selected?.id
+        }
+
+        return profiles.map { profile in
+            guard let outputID = profile.scope.outputDeviceID else { return profile }
+            if selectedByOutput[outputID] == profile.id {
+                var configuration = profile
+                configuration.activatesAutomatically = true
+                return configuration.normalized
+            }
+
+            var globalPreset = profile
+            globalPreset.scope = .global
+            globalPreset.activatesAutomatically = false
+            globalPreset.deviceSettings = [:]
+            globalPreset.preferredOutputDeviceID = nil
+            return globalPreset.normalized
+        }
     }
 }
 
@@ -226,6 +346,9 @@ struct SettingsStore: Sendable {
         from sourceURL: URL
     ) throws -> SettingsLoadResult {
         let data = try Data(contentsOf: sourceURL)
+        let storedVersion = (
+            try? JSONDecoder().decode(SettingsFileHeader.self, from: data).version
+        ) ?? 1
         let decoded: PersistedSettings
         do {
             decoded = try JSONDecoder().decode(PersistedSettings.self, from: data)
@@ -244,7 +367,7 @@ struct SettingsStore: Sendable {
         }
 
         let normalized = enforcingBackendMode(in: decoded)
-        if normalized != decoded {
+        if storedVersion < PersistedSettings.currentVersion || normalized != decoded {
             // Runtime safety does not depend on this best-effort repair:
             // `load` already returns the normalized value and `save` also
             // enforces it. A later successful save will repair the file.
@@ -266,7 +389,10 @@ struct SettingsStore: Sendable {
             deviceSettings: settings.deviceSettings,
             preferredOutputDeviceID: settings.preferredOutputDeviceID,
             profiles: settings.profiles,
+            activeGlobalProfileID: settings.activeGlobalProfileID,
+            activeLocalProfileID: settings.activeLocalProfileID,
             activeProfileID: settings.activeProfileID,
+            profileHasOverrides: settings.profileHasOverrides,
             pinnedAppIDs: settings.pinnedAppIDs,
             ignoredAppIDs: settings.ignoredAppIDs,
             appDisplayOrder: settings.appDisplayOrder,

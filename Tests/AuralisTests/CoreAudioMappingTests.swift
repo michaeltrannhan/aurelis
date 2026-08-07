@@ -88,7 +88,12 @@ final class CoreAudioMappingTests: XCTestCase {
             AudioDeviceSnapshot(id: "third-party-virtual-output", name: "Example Virtual Cable", isDefault: false)
         )
         XCTAssertNil(CoreAudioDeviceDiscovery.mapDeviceRecord(autoAggregate, defaultDeviceID: nil))
-        XCTAssertNil(CoreAudioDeviceDiscovery.defaultOutputUID(records: [userAggregate], defaultDeviceID: 11))
+        XCTAssertTrue(
+            CoreAudioDeviceDiscovery.defaultOutputUIDs(
+                records: [userAggregate],
+                defaultDeviceID: 11
+            ).isEmpty
+        )
     }
 
     func testProcessMappingUsesBundleIdentifierAsStableIdentity() {
@@ -143,30 +148,6 @@ final class CoreAudioMappingTests: XCTestCase {
         XCTAssertNil(CoreAudioProcessDiscovery.mapProcessRecord(daemon, currentProcessID: 9999))
     }
 
-    func testProcessSnapshotsAreCoalescedByIdentity() {
-        let identity = AudioAppIdentity(rawValue: "com.example.Browser")
-        let helper = AudioAppSnapshot(
-            identity: identity,
-            displayName: "Browser Helper",
-            bundleIdentifier: identity.rawValue,
-            isActive: true,
-            level: 0.2
-        )
-        let app = AudioAppSnapshot(
-            identity: identity,
-            displayName: "Browser",
-            bundleIdentifier: identity.rawValue,
-            isActive: true,
-            level: 0.4
-        )
-
-        let snapshots = CoreAudioProcessDiscovery.coalescedSnapshots([helper, app])
-
-        XCTAssertEqual(snapshots.count, 1)
-        XCTAssertEqual(snapshots[0].displayName, "Browser")
-        XCTAssertEqual(snapshots[0].level, 0.4)
-    }
-
     func testRunningHelperProcessMapsToParentAppRecord() {
         let parent = CoreAudioProcessDiscovery.ProcessRecord(
             processObjectID: 200,
@@ -185,12 +166,15 @@ final class CoreAudioMappingTests: XCTestCase {
             isRunning: true
         )
 
-        let snapshots = CoreAudioProcessDiscovery.mapProcessRecords([helper, parent], currentProcessID: 9999)
+        let targets = CoreAudioProcessDiscovery.mapTapTargets(
+            records: [helper, parent],
+            currentProcessID: 9999
+        )
 
-        XCTAssertEqual(snapshots.count, 1)
-        XCTAssertEqual(snapshots[0].identity.rawValue, "company.thebrowser.Browser")
-        XCTAssertEqual(snapshots[0].displayName, "Arc")
-        XCTAssertEqual(snapshots[0].bundleIdentifier, "company.thebrowser.Browser")
+        XCTAssertEqual(targets.count, 1)
+        XCTAssertEqual(targets[0].identity.rawValue, "company.thebrowser.Browser")
+        XCTAssertEqual(targets[0].displayName, "Arc")
+        XCTAssertEqual(targets[0].processObjectIDs, [201])
     }
 
     func testProcessRecordsCoalesceIntoTapTargets() {
@@ -223,37 +207,19 @@ final class CoreAudioMappingTests: XCTestCase {
     }
 
     func testDeviceSnapshotsSortDefaultFirstThenName() {
+        let airPods = AudioDeviceSnapshot(id: "airpods", name: "Headphones", isDefault: false)
         let headphones = AudioDeviceSnapshot(id: "headphones", name: "Headphones", isDefault: false)
         let speakers = AudioDeviceSnapshot(id: "speakers", name: "MacBook Speakers", isDefault: true)
         let display = AudioDeviceSnapshot(id: "display", name: "Studio Display", isDefault: false)
 
-        let sorted = CoreAudioDeviceDiscovery.sortedSnapshots([headphones, speakers, display])
+        let sorted = CoreAudioDeviceDiscovery.sortedSnapshots([
+            headphones,
+            speakers,
+            display,
+            airPods
+        ])
 
-        XCTAssertEqual(sorted.map(\.id), ["speakers", "headphones", "display"])
-    }
-
-    func testCoalescingPrefersNonHelperName() {
-        let identity = AudioAppIdentity(rawValue: "com.example.Browser")
-        let helper = AudioAppSnapshot(
-            identity: identity,
-            displayName: "Browser Helper",
-            bundleIdentifier: identity.rawValue
-        )
-        let renderer = AudioAppSnapshot(
-            identity: identity,
-            displayName: "Browser Renderer",
-            bundleIdentifier: identity.rawValue
-        )
-        let app = AudioAppSnapshot(
-            identity: identity,
-            displayName: "Browser",
-            bundleIdentifier: identity.rawValue
-        )
-
-        let snapshots = CoreAudioProcessDiscovery.coalescedSnapshots([helper, renderer, app])
-
-        XCTAssertEqual(snapshots.count, 1)
-        XCTAssertEqual(snapshots[0].displayName, "Browser")
+        XCTAssertEqual(sorted.map(\.id), ["speakers", "airpods", "headphones", "display"])
     }
 
     func testDefaultOutputUIDComesFromDefaultDeviceRecord() {
@@ -265,7 +231,13 @@ final class CoreAudioMappingTests: XCTestCase {
             isHidden: false
         )
 
-        XCTAssertEqual(CoreAudioDeviceDiscovery.defaultOutputUID(records: [record], defaultDeviceID: 42), "built-in-output")
+        XCTAssertEqual(
+            CoreAudioDeviceDiscovery.defaultOutputUIDs(
+                records: [record],
+                defaultDeviceID: 42
+            ).first,
+            "built-in-output"
+        )
     }
 
     func testAggregateDefaultExpandsToOrderedRouteablePhysicalOutputs() {
@@ -324,10 +296,10 @@ final class CoreAudioMappingTests: XCTestCase {
             ["usb", "hdmi"]
         )
         XCTAssertEqual(
-            CoreAudioDeviceDiscovery.defaultOutputUID(
+            CoreAudioDeviceDiscovery.defaultOutputUIDs(
                 records: [systemDefault, usb, hdmi],
                 defaultDeviceID: 10
-            ),
+            ).first,
             "usb"
         )
     }

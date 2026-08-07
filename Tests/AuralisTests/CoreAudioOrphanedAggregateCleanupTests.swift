@@ -49,6 +49,40 @@ final class CoreAudioOrphanedAggregateCleanupTests: XCTestCase {
         XCTAssertTrue(try journal.records().isEmpty)
     }
 
+    func testCleanupPrunesJournalRecordWhenAggregateNoLongerExists() throws {
+        let journal = CoreAudioAggregateOwnershipJournal(journalURL: uniqueJournalURL())
+        let uid = aggregateUID()
+        try journal.recordAggregate(uid: uid, deviceID: 100)
+        let operations = FakeAggregateCleanupOperations(records: [])
+
+        XCTAssertTrue(
+            CoreAudioOrphanedAggregateCleanup.destroyOrphans(
+                journal: journal,
+                using: operations
+            ).isEmpty
+        )
+        XCTAssertTrue(operations.destroyed.isEmpty)
+        XCTAssertTrue(try journal.records().isEmpty)
+    }
+
+    func testDiscoveryFailurePreservesJournalForNextLaunchRetry() throws {
+        let journal = CoreAudioAggregateOwnershipJournal(journalURL: uniqueJournalURL())
+        let uid = aggregateUID()
+        try journal.recordAggregate(uid: uid, deviceID: 100)
+        let operations = FakeAggregateCleanupOperations(
+            records: [],
+            discoveryFails: true
+        )
+
+        XCTAssertTrue(
+            CoreAudioOrphanedAggregateCleanup.destroyOrphans(
+                journal: journal,
+                using: operations
+            ).isEmpty
+        )
+        XCTAssertEqual(try journal.records().map(\.aggregateUID), [uid])
+    }
+
     private func aggregateUID() -> String {
         "\(CoreAudioOrphanedAggregateCleanup.aggregateUIDPrefix)\(UUID().uuidString)"
     }
@@ -59,16 +93,29 @@ final class CoreAudioOrphanedAggregateCleanupTests: XCTestCase {
 }
 
 private final class FakeAggregateCleanupOperations: CoreAudioAggregateCleanupOperating {
-    private let records: [CoreAudioAggregateRecord]
-    private let destroyStatus: OSStatus
-    private(set) var destroyed: [AudioObjectID] = []
-
-    init(records: [CoreAudioAggregateRecord], destroyStatus: OSStatus = noErr) {
-        self.records = records
-        self.destroyStatus = destroyStatus
+    private enum DiscoveryError: Error {
+        case failed
     }
 
-    func aggregateRecords() -> [CoreAudioAggregateRecord] { records }
+    private let records: [CoreAudioAggregateRecord]
+    private let destroyStatus: OSStatus
+    private let discoveryFails: Bool
+    private(set) var destroyed: [AudioObjectID] = []
+
+    init(
+        records: [CoreAudioAggregateRecord],
+        destroyStatus: OSStatus = noErr,
+        discoveryFails: Bool = false
+    ) {
+        self.records = records
+        self.destroyStatus = destroyStatus
+        self.discoveryFails = discoveryFails
+    }
+
+    func aggregateRecords() throws -> [CoreAudioAggregateRecord] {
+        if discoveryFails { throw DiscoveryError.failed }
+        return records
+    }
 
     func destroyAggregateDevice(_ id: AudioObjectID) -> OSStatus {
         destroyed.append(id)

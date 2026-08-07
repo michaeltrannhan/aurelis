@@ -7,7 +7,6 @@ final class CoreAudioDiscoveryBackend: AudioBackend {
     private let eventSource: CoreAudioDiscoveryEventSource
     private let outputVolumeController: CoreAudioOutputVolumeController
     private var tapTargetsByIdentity: [AudioAppIdentity: CoreAudioTapTarget] = [:]
-    private(set) var pendingCommands: [AudioBackendCommand] = []
 
     init(
         processDiscovery: CoreAudioProcessDiscovery = CoreAudioProcessDiscovery(),
@@ -151,24 +150,12 @@ extension CoreAudioDiscoveryBackend: AudioBackendTapSynchronizing {
 }
 
 extension CoreAudioDiscoveryBackend: AudioBackendOutputVolumeControlling {
-    func readOutputVolume() throws -> OutputVolumeState {
-        try outputVolumeController.readOutputVolume()
-    }
-
     func readOutputVolume(forUID uid: String) throws -> OutputVolumeState {
         try outputVolumeController.readOutputVolume(forUID: uid)
     }
 
-    func setOutputVolume(_ volume: Double) throws {
-        try outputVolumeController.setOutputVolume(volume)
-    }
-
     func setOutputVolume(_ volume: Double, forUID uid: String) throws {
         try outputVolumeController.setOutputVolume(volume, forUID: uid)
-    }
-
-    func setOutputMuted(_ muted: Bool) throws {
-        try outputVolumeController.setOutputMuted(muted)
     }
 
     func setOutputMuted(_ muted: Bool, forUID uid: String) throws {

@@ -1,87 +1,107 @@
 import Foundation
 
-struct WidgetTolerantDouble: Decodable {
-    let value: Double
+/// A scalar JSON number that also accepts numeric strings. Non-finite values
+/// are decoded so the owning model can apply its own deterministic fallback.
+public struct TolerantDouble: Decodable {
+    public let value: Double
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if let number = try? container.decode(Double.self) {
             value = number
-        } else if let string = try? container.decode(String.self), let number = Double(string) {
+            return
+        }
+        if let string = try? container.decode(String.self), let number = Double(string) {
             value = number
-        } else {
-            throw DecodingError.typeMismatch(
-                Double.self,
-                DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Expected a number")
+            return
+        }
+        throw DecodingError.typeMismatch(
+            Double.self,
+            DecodingError.Context(
+                codingPath: decoder.codingPath,
+                debugDescription: "Expected a number or numeric string"
             )
-        }
+        )
     }
 }
 
-struct WidgetTolerantDoubleArray: Decodable {
-    let values: [Double]
+/// Preserves array positions while replacing malformed numeric entries with
+/// zero. This matters for EQ data, where skipping one value would shift every
+/// subsequent frequency band.
+public struct TolerantDoubleArray: Decodable {
+    public let values: [Double]
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         var container = try decoder.unkeyedContainer()
-        var result: [Double] = []
+        var values: [Double] = []
         while !container.isAtEnd {
-            let index = container.currentIndex
-            if let value = try? container.decode(WidgetTolerantDouble.self).value {
-                result.append(value)
+            let startingIndex = container.currentIndex
+            if let value = try? container.decode(TolerantDouble.self).value {
+                values.append(value)
             } else {
-                if container.currentIndex == index {
-                    _ = try? container.decode(WidgetDiscardedJSONValue.self)
+                if container.currentIndex == startingIndex {
+                    _ = try? container.decode(DiscardedJSONValue.self)
                 }
-                result.append(0)
+                values.append(0)
             }
         }
-        values = result
+        self.values = values
     }
 }
 
-struct WidgetTolerantArray<Element: Decodable>: Decodable {
-    let values: [Element]
+/// Lossy collection decoding used for persisted identity lists and widget
+/// snapshots. A malformed element cannot make otherwise recoverable data
+/// unreadable.
+public struct TolerantArray<Element: Decodable>: Decodable {
+    public let values: [Element]
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         var container = try decoder.unkeyedContainer()
-        var result: [Element] = []
+        var values: [Element] = []
         while !container.isAtEnd {
-            let index = container.currentIndex
+            let startingIndex = container.currentIndex
             if let value = try? container.decode(Element.self) {
-                result.append(value)
-            } else if container.currentIndex == index {
-                _ = try? container.decode(WidgetDiscardedJSONValue.self)
+                values.append(value)
+            } else if container.currentIndex == startingIndex {
+                _ = try? container.decode(DiscardedJSONValue.self)
             }
         }
-        values = result
+        self.values = values
     }
 }
 
-private struct WidgetDynamicCodingKey: CodingKey {
-    let stringValue: String
-    let intValue: Int?
+public struct DynamicCodingKey: CodingKey {
+    public let stringValue: String
+    public let intValue: Int?
 
-    init?(stringValue: String) {
+    public init?(stringValue: String) {
         self.stringValue = stringValue
         self.intValue = nil
     }
 
-    init?(intValue: Int) {
+    public init?(intValue: Int) {
         self.stringValue = String(intValue)
         self.intValue = intValue
     }
 }
 
-struct WidgetDiscardedJSONValue: Decodable {
-    init(from decoder: Decoder) throws {
+/// Recursively consumes one unknown JSON value after a typed decode fails.
+public struct DiscardedJSONValue: Decodable {
+    public init(from decoder: Decoder) throws {
         if var array = try? decoder.unkeyedContainer() {
-            while !array.isAtEnd { _ = try? array.decode(WidgetDiscardedJSONValue.self) }
+            while !array.isAtEnd {
+                _ = try? array.decode(DiscardedJSONValue.self)
+            }
             return
         }
-        if let object = try? decoder.container(keyedBy: WidgetDynamicCodingKey.self) {
-            for key in object.allKeys { _ = try? object.decode(WidgetDiscardedJSONValue.self, forKey: key) }
+
+        if let object = try? decoder.container(keyedBy: DynamicCodingKey.self) {
+            for key in object.allKeys {
+                _ = try? object.decode(DiscardedJSONValue.self, forKey: key)
+            }
             return
         }
+
         let value = try decoder.singleValueContainer()
         if value.decodeNil() { return }
         if (try? value.decode(Bool.self)) != nil { return }
@@ -91,13 +111,13 @@ struct WidgetDiscardedJSONValue: Decodable {
     }
 }
 
-extension KeyedDecodingContainer {
-    func widgetTolerant<T: Decodable>(_ type: T.Type, forKey key: Key) -> T? {
+public extension KeyedDecodingContainer {
+    func tolerant<T: Decodable>(_ type: T.Type, forKey key: Key) -> T? {
         try? decodeIfPresent(type, forKey: key)
     }
 
-    func widgetTolerantDouble(forKey key: Key) -> Double? {
-        widgetTolerant(WidgetTolerantDouble.self, forKey: key)?.value
+    func tolerantDouble(forKey key: Key) -> Double? {
+        tolerant(TolerantDouble.self, forKey: key)?.value
     }
 }
 

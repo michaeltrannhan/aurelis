@@ -1,4 +1,5 @@
 import Foundation
+import AuralisWidgetShared
 
 enum AppAppearance: String, CaseIterable, Codable, Identifiable, Sendable {
     case system
@@ -262,10 +263,6 @@ struct AppCustomization: Codable, Equatable, Sendable {
             hotkeysEnabled: values.tolerant(Bool.self, forKey: .hotkeysEnabled) ?? true,
             menuBarIconStyle: values.tolerant(MenuBarIconStyle.self, forKey: .menuBarIconStyle) ?? .speaker
         )
-    }
-
-    mutating func setDefaultNewAppVolume(_ volume: Double) {
-        defaultNewAppVolume = Self.clampedVolume(volume, fallback: defaultNewAppVolume)
     }
 
     var normalized: AppCustomization {

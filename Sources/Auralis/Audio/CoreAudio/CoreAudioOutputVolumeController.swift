@@ -15,38 +15,23 @@ final class CoreAudioOutputVolumeController: @unchecked Sendable {
     private var observedDeviceID: AudioObjectID = AudioObjectID(kAudioObjectUnknown)
     private var onChange: (@Sendable () -> Void)?
 
-    func readOutputVolume() throws -> OutputVolumeState {
-        let deviceID = try defaultOutputDeviceID()
-        return try readOutputVolume(forDeviceID: deviceID)
-    }
-
     func readOutputVolume(forUID uid: String) throws -> OutputVolumeState {
-        let deviceID = try deviceObjectID(forUID: uid)
+        let deviceID = try CoreAudioPropertyReader.deviceObjectID(forUID: uid)
         return try readOutputVolume(forDeviceID: deviceID)
-    }
-
-    func setOutputVolume(_ volume: Double) throws {
-        let deviceID = try defaultOutputDeviceID()
-        try setVolumeScalar(volume, for: deviceID)
     }
 
     func setOutputVolume(_ volume: Double, forUID uid: String) throws {
-        let deviceID = try deviceObjectID(forUID: uid)
+        let deviceID = try CoreAudioPropertyReader.deviceObjectID(forUID: uid)
         try setVolumeScalar(volume, for: deviceID)
     }
 
-    func setOutputMuted(_ muted: Bool) throws {
-        let deviceID = try defaultOutputDeviceID()
-        try setMute(muted, for: deviceID)
-    }
-
     func setOutputMuted(_ muted: Bool, forUID uid: String) throws {
-        let deviceID = try deviceObjectID(forUID: uid)
+        let deviceID = try CoreAudioPropertyReader.deviceObjectID(forUID: uid)
         try setMute(muted, for: deviceID)
     }
 
     func setDefaultOutputDevice(forUID uid: String) throws {
-        let deviceID = try deviceObjectID(forUID: uid)
+        let deviceID = try CoreAudioPropertyReader.deviceObjectID(forUID: uid)
         var address = Self.defaultOutputDeviceAddress()
         var value = deviceID
         let status = AudioObjectSetPropertyData(
@@ -136,35 +121,6 @@ final class CoreAudioOutputVolumeController: @unchecked Sendable {
             )
         }
         return deviceID
-    }
-
-    private func deviceObjectID(forUID uid: String) throws -> AudioObjectID {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var qualifier = uid as CFString
-        var objectID = AudioObjectID(kAudioObjectUnknown)
-        var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        let status = withUnsafePointer(to: &qualifier) { qualifierPointer in
-            AudioObjectGetPropertyData(
-                AudioObjectID(kAudioObjectSystemObject),
-                &address,
-                UInt32(MemoryLayout<CFString>.size),
-                qualifierPointer,
-                &size,
-                &objectID
-            )
-        }
-        guard status == noErr, objectID != AudioObjectID(kAudioObjectUnknown) else {
-            throw CoreAudioDiscoveryError.propertyReadFailed(
-                objectID: AudioObjectID(kAudioObjectSystemObject),
-                selector: kAudioHardwarePropertyTranslateUIDToDevice,
-                status: status
-            )
-        }
-        return objectID
     }
 
     // MARK: - Volume / mute / name reads

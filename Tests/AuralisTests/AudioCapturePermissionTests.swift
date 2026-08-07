@@ -125,7 +125,6 @@ final class AudioCapturePermissionTests: XCTestCase {
 
         XCTAssertEqual(coordinator.requestAudioCapture().screenCapture, .denied)
         XCTAssertEqual(coordinator.refresh().screenCapture, .denied)
-        XCTAssertEqual(coordinator.requirements.first?.state, .denied)
     }
 }
 

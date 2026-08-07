@@ -18,7 +18,7 @@ struct AuralisMixerWidgetView: View {
         WidgetMixerPresentation(
             snapshot: entry.snapshot,
             date: entry.date,
-            maximumAppCount: entry.family == .systemLarge ? 3 : 2
+            maximumAppCount: 2
         )
     }
 
@@ -51,7 +51,7 @@ struct AuralisMixerWidgetView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     Text("Auralis")
                         .font(.subheadline.weight(.semibold))
-                    Text(presentation.activeProfile?.name ?? "Master Output")
+                    Text(compactConfigurationSummary)
                         .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -163,9 +163,10 @@ struct AuralisMixerWidgetView: View {
                 Text(device.name)
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
-                Text(presentation.activeProfile?.name ?? "Master output")
+                Text(compactConfigurationSummary)
                     .font(.system(size: 9))
                     .foregroundStyle(.tertiary)
+                    .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -199,8 +200,7 @@ struct AuralisMixerWidgetView: View {
                 WidgetAppRow(
                     app: app,
                     volumeStep: entry.snapshot.volumeStep,
-                    controlsEnabled: controlsEnabled,
-                    showEQButton: false
+                    controlsEnabled: controlsEnabled
                 )
             }
             if apps.isEmpty {
@@ -223,33 +223,91 @@ struct AuralisMixerWidgetView: View {
     // MARK: - systemLarge
 
     private var largeBody: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            mediumHeader
+        VStack(alignment: .leading, spacing: 7) {
+            largeHeader
+            largeOutputDashboard
             largeProfiles
-            largeOutputs
+            largeQuickActions
             largeApps
             Spacer(minLength: 0)
         }
         .padding(6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var largeHeader: some View {
+        HStack(spacing: 8) {
+            AuralisWidgetMark()
+                .frame(width: 28, height: 28)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Auralis Control Center")
+                    .font(.subheadline.weight(.semibold))
+                Text(activeProfileSummary)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            Text(presentation.activeCountText)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 7)
+                .frame(height: 22)
+                .background(.quaternary, in: Capsule())
+            Button(intent: RefreshAppIntent()) {
+                Image(systemName: "arrow.clockwise")
+                    .frame(width: 22, height: 22)
+            }
+            .disabled(!controlsEnabled)
+            .help("Refresh audio devices and apps")
+        }
+    }
+
+    private var activeProfileSummary: String {
+        guard let device = presentation.defaultDevice else { return statusText }
+        return "Device context · \(device.name) · autosaved"
+    }
+
+    private var compactConfigurationSummary: String {
+        presentation.defaultDevice.map { "Autosaved · \($0.name)" }
+            ?? "Device context"
+    }
+
+    private var quickProfiles: [WidgetSnapshot.ProfileSummary] {
+        presentation.globalProfiles
+            .prefix(3)
+            .map { $0 }
     }
 
     @ViewBuilder
     private var largeProfiles: some View {
         VStack(alignment: .leading, spacing: 4) {
-            sectionLabel("PROFILES", systemImage: "square.stack.3d.up.fill")
+            HStack {
+                sectionLabel("OUTPUT PRESET", systemImage: "square.stack.3d.up.fill")
+                Spacer()
+                if let local = presentation.localProfiles.first {
+                    Label("Autosaved · \(local.name)", systemImage: "checkmark.icloud.fill")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .lineLimit(1)
+                }
+            }
             HStack(spacing: 5) {
-                if presentation.profiles.isEmpty {
+                if quickProfiles.isEmpty {
                     Link(destination: URL(string: "auralis://open")!) {
-                        Label("Create profiles in Auralis", systemImage: "plus")
+                        Label("Create presets in Auralis", systemImage: "plus")
                             .font(.caption2.weight(.semibold))
                     }
                 } else {
-                    ForEach(Array(presentation.profiles.prefix(3))) { profile in
-                        Button(intent: ApplyAudioProfileIntent(profileID: profile.id)) {
+                    ForEach(quickProfiles) { profile in
+                        let isActive = presentation.isPresetActive(profile)
+                        Button(
+                            intent: AssignAudioPresetToCurrentOutputIntent(profileID: profile.id)
+                        ) {
                             HStack(spacing: 3) {
-                                Image(systemName: profile.id == entry.snapshot.activeProfileID
+                                Image(systemName: isActive
                                     ? "checkmark.circle.fill"
-                                    : "circle")
+                                    : "square.stack.3d.up")
                                 Text(profile.name)
                                     .lineLimit(1)
                             }
@@ -257,7 +315,7 @@ struct AuralisMixerWidgetView: View {
                             .padding(.horizontal, 7)
                             .frame(height: 24)
                             .background(
-                                profile.id == entry.snapshot.activeProfileID
+                                isActive
                                     ? Color.accentColor.opacity(0.16)
                                     : Color.secondary.opacity(0.09),
                                 in: Capsule()
@@ -265,6 +323,7 @@ struct AuralisMixerWidgetView: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(!controlsEnabled)
+                        .help("Use \(profile.name) for the current output")
                     }
                 }
                 Spacer(minLength: 0)
@@ -272,27 +331,41 @@ struct AuralisMixerWidgetView: View {
         }
     }
 
-    private var largeOutputs: some View {
+    private var largeOutputDashboard: some View {
         VStack(alignment: .leading, spacing: 4) {
-            sectionLabel("OUTPUTS", systemImage: "hifispeaker.2.fill")
+            sectionLabel("MASTER OUTPUT", systemImage: "hifispeaker.2.fill")
             if let device = presentation.defaultDevice {
-                HStack(spacing: 7) {
-                    Image(systemName: "hifispeaker.fill")
-                        .foregroundStyle(Color.accentColor)
-                    Text(device.name)
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(1)
+                HStack(spacing: 9) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 9)
+                            .fill(Color.accentColor.opacity(0.14))
+                        Image(systemName: device.isMuted ? "speaker.slash.fill" : "hifispeaker.fill")
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundStyle(device.isMuted ? Color.red : Color.accentColor)
+                    }
+                    .frame(width: 38, height: 38)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(device.name)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                        Text(device.isMuted ? "Output muted" : "System output")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                    }
                     Spacer(minLength: 0)
-                    Text("\(Int((device.volume * 100).rounded()))%")
-                        .font(.caption.monospacedDigit().weight(.semibold))
+                    Text("\(Int((device.volume * 100).rounded()))")
+                        .font(.system(size: 22, weight: .semibold, design: .rounded).monospacedDigit())
+                    Text("%")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
                     WidgetOutputControls(
                         device: device,
                         volumeStep: entry.snapshot.volumeStep,
                         controlsEnabled: controlsEnabled
                     )
                 }
-                .padding(.horizontal, 8).padding(.vertical, 5)
-                .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal, 8).padding(.vertical, 6)
+                .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
 
                 HStack(spacing: 5) {
                     ForEach(Array(presentation.devices.prefix(3))) { candidate in
@@ -331,16 +404,60 @@ struct AuralisMixerWidgetView: View {
         }
     }
 
+    private var largeQuickActions: some View {
+        HStack(spacing: 5) {
+            Button(intent: SetAllAppsMutedIntent(muted: true)) {
+                largeActionLabel("Mute all", systemImage: "speaker.slash.fill")
+            }
+            .disabled(!controlsEnabled || !presentation.hasActiveApps)
+            .buttonStyle(.plain)
+
+            Button(intent: SetAllAppsMutedIntent(muted: false)) {
+                largeActionLabel("Unmute", systemImage: "speaker.wave.2.fill")
+            }
+            .disabled(!controlsEnabled || !presentation.hasActiveApps)
+            .buttonStyle(.plain)
+
+            Button(intent: SetAllAppsVolumeIntent(volume: 0.5)) {
+                largeActionLabel("All 50%", systemImage: "dial.medium")
+            }
+            .disabled(!controlsEnabled || !presentation.hasActiveApps)
+            .buttonStyle(.plain)
+
+            Link(destination: URL(string: "auralis://open")!) {
+                largeActionLabel("Open", systemImage: "arrow.up.right")
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func largeActionLabel(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.system(size: 9, weight: .semibold))
+            .lineLimit(1)
+            .frame(maxWidth: .infinity)
+            .frame(height: 25)
+            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+    }
+
     private var largeApps: some View {
         VStack(alignment: .leading, spacing: 4) {
-            sectionLabel("APPLICATIONS", systemImage: "waveform")
+            HStack {
+                sectionLabel("LIVE APPLICATIONS", systemImage: "waveform")
+                Spacer()
+                Text("mute · volume · boost")
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(.tertiary)
+            }
             ForEach(presentation.apps) { app in
                 WidgetAppRow(
                     app: app,
                     volumeStep: entry.snapshot.volumeStep,
-                    controlsEnabled: controlsEnabled,
-                    showEQButton: false
+                    controlsEnabled: controlsEnabled
                 )
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.secondary.opacity(0.055), in: RoundedRectangle(cornerRadius: 7))
             }
             if presentation.apps.isEmpty {
                 Text("No active audio apps")
@@ -406,7 +523,6 @@ struct WidgetAppRow: View {
     let app: WidgetSnapshot.AppSummary
     let volumeStep: Double
     let controlsEnabled: Bool
-    let showEQButton: Bool
 
     var body: some View {
         HStack(spacing: 8) {
@@ -490,16 +606,6 @@ struct WidgetAppRow: View {
             .disabled(!controlsEnabled)
             .help("Cycle boost")
             .accessibilityLabel(WidgetMixerPresentation.boostLabel(name: app.displayName))
-
-            if showEQButton {
-                Link(destination: URL(string: "auralis://open")!) {
-                    Image(systemName: "slider.vertical.3")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.secondary)
-                        .frame(width: 22, height: 22)
-                }
-                .help("Open EQ in app")
-            }
         }
         .padding(.horizontal, 8).padding(.vertical, 5)
         .background(

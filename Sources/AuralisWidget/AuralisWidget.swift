@@ -77,11 +77,17 @@ struct AuralisProvider: TimelineProvider {
             ],
             apps: apps,
             profiles: [
-                WidgetSnapshot.ProfileSummary(id: "11111111-1111-1111-1111-111111111111", name: "Home"),
+                WidgetSnapshot.ProfileSummary(
+                    id: "11111111-1111-1111-1111-111111111111",
+                    name: "Home Speaker",
+                    scope: .outputDevice,
+                    outputDeviceID: "default"
+                ),
                 WidgetSnapshot.ProfileSummary(id: "22222222-2222-2222-2222-222222222222", name: "Office"),
                 WidgetSnapshot.ProfileSummary(id: "33333333-3333-3333-3333-333333333333", name: "Focus")
             ],
-            activeProfileID: "11111111-1111-1111-1111-111111111111"
+            activeGlobalProfileID: "22222222-2222-2222-2222-222222222222",
+            activeLocalProfileID: "11111111-1111-1111-1111-111111111111"
         )
     }()
 }

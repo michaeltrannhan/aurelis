@@ -37,7 +37,7 @@ struct MainWindowView: View {
                 .padding(.horizontal, 10).padding(.vertical, 6)
                 .background(.quaternary, in: Capsule())
             ProfileMenuButton(store: store)
-                .frame(maxWidth: 150)
+                .frame(width: 205)
             Button { store.refreshIntent() } label: { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(.plain).help("Refresh audio apps")
             Button {
@@ -110,20 +110,10 @@ struct MainWindowView: View {
             )
             if selectedAppID == row.identity {
                 EQPanelView(
+                    store: store,
                     row: row,
                     style: .desktop,
-                    onClose: { closeEQ(row) },
-                    onGain: { band, gain in
-                        store.setEQGainIntent(gain, band: band, for: row.identity)
-                    },
-                    onGainEditingChanged: { band, editing in
-                        if editing {
-                            store.beginEQEditing(band: band, for: row.identity)
-                        } else {
-                            store.endEQEditing(band: band, for: row.identity)
-                        }
-                    },
-                    onReset: { store.resetEQIntent(for: row.identity) }
+                    onClose: { closeEQ(row) }
                 )
                 .padding(.horizontal, 12).padding(.bottom, 10)
                 .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))

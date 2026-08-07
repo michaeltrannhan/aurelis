@@ -18,7 +18,7 @@ final class AudioBackendFactoryTests: XCTestCase {
         settings.customization.backendMode = .mock
         try settingsStore.save(settings)
         let backend = AudioBackendFactory.makeBackend(mode: try settingsStore.load().customization.backendMode)
-        let store = try AudioControlStore(settingsStore: settingsStore, backend: backend)
+        let store = AudioControlStore(settingsStore: settingsStore, backend: backend)
 
         try await store.refresh()
 

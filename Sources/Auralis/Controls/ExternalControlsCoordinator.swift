@@ -92,15 +92,6 @@ final class ExternalControlsCoordinator: ObservableObject {
         }
     }
 
-    var accessibilityRequirement: PermissionRequirement {
-        PermissionRequirement(
-            kind: .accessibility,
-            state: accessibilityTrusted ? .granted : .notRequested,
-            explanation: "Optional; required only for intercepting hardware media keys.",
-            isOptional: true
-        )
-    }
-
     private func configureMediaKeys() {
         guard let store else { return }
         mediaKeyMonitor.onEvent = { [weak self] event in self?.handleMediaKey(event) }

@@ -139,6 +139,35 @@ enum CoreAudioPropertyReader {
         return AudioObjectHasProperty(objectID, &address)
     }
 
+    static func deviceObjectID(forUID uid: String) throws -> AudioObjectID {
+        var address = propertyAddress(
+            selector: kAudioHardwarePropertyTranslateUIDToDevice,
+            scope: kAudioObjectPropertyScopeGlobal,
+            element: kAudioObjectPropertyElementMain
+        )
+        var qualifier = uid as CFString
+        var objectID = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        let status = withUnsafePointer(to: &qualifier) { qualifierPointer in
+            AudioObjectGetPropertyData(
+                AudioObjectID(kAudioObjectSystemObject),
+                &address,
+                UInt32(MemoryLayout<CFString>.size),
+                qualifierPointer,
+                &size,
+                &objectID
+            )
+        }
+        guard status == noErr, objectID != AudioObjectID(kAudioObjectUnknown) else {
+            throw CoreAudioDiscoveryError.propertyReadFailed(
+                objectID: AudioObjectID(kAudioObjectSystemObject),
+                selector: kAudioHardwarePropertyTranslateUIDToDevice,
+                status: status
+            )
+        }
+        return objectID
+    }
+
     private static func propertyAddress(
         selector: AudioObjectPropertySelector,
         scope: AudioObjectPropertyScope,

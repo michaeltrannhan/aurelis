@@ -20,6 +20,8 @@
     <string>$(AURALIS_DEBUG_LOG_PATH)</string>
     <key>AuralisDiagnosticsMode</key>
     <string>$(AURALIS_DIAGNOSTICS_MODE)</string>
+    <key>AuralisAppGroupIdentifier</key>
+    <string>$(AURALIS_APP_GROUP_ID)</string>
     <key>LSMinimumSystemVersion</key>
     <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
     <key>NSAudioCaptureUsageDescription</key>

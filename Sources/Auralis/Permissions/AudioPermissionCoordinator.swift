@@ -37,21 +37,4 @@ final class AudioPermissionCoordinator {
     func openAudioPrivacySettings() { client.openPrivacySettings() }
 
     func relaunchApp() async throws { try await client.relaunchApp() }
-
-    var requirements: [PermissionRequirement] {
-        let requirementState: PermissionRequirementState
-        switch state.screenCapture {
-        case .notDetermined: requirementState = .notRequested
-        case .denied: requirementState = .denied
-        case .pendingRestart: requirementState = .restartRequired
-        case .granted:
-            requirementState = state.audioUsageDescription == .present ? .granted : .unavailable
-        }
-        return [PermissionRequirement(
-            kind: .audioCapture,
-            state: requirementState,
-            explanation: "Required to process and control audio from other applications.",
-            isOptional: false
-        )]
-    }
 }

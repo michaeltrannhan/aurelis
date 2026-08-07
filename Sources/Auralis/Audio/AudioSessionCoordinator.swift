@@ -1,7 +1,6 @@
 import Foundation
 
 struct AudioOutputSnapshot: Equatable, Sendable {
-    let defaultOutput: OutputVolumeState
     let devices: [String: OutputVolumeState]
 }
 
@@ -104,8 +103,6 @@ actor AudioEngineActor {
         self.backendFactory = backendFactory
     }
 
-    func currentMode() -> BackendMode { mode }
-
     func selectInitialMode(_ initialMode: BackendMode) {
         guard pendingSwitch == nil,
               restoredBackendIdentities.isEmpty,
@@ -172,6 +169,12 @@ actor AudioEngineActor {
         )
     }
 
+    /// Lightweight topology probe used to confirm that CoreAudio has settled
+    /// after a hot-plug burst before the store commits a device-context switch.
+    func fetchTopologySnapshot() throws -> AudioBackendSnapshot {
+        try ensureBackend().fetchSnapshot()
+    }
+
     func apply(_ command: AudioBackendCommand) throws {
         try ensureBackend().apply(command)
     }
@@ -198,16 +201,8 @@ actor AudioEngineActor {
         try (ensureBackend() as? AudioBackendTapSynchronizing)?.tearDownTap(for: identity)
     }
 
-    func setOutputVolume(_ volume: Double) throws {
-        try (ensureBackend() as? AudioBackendOutputVolumeControlling)?.setOutputVolume(volume)
-    }
-
     func setOutputVolume(_ volume: Double, forUID uid: String) throws {
         try (ensureBackend() as? AudioBackendOutputVolumeControlling)?.setOutputVolume(volume, forUID: uid)
-    }
-
-    func setOutputMuted(_ muted: Bool) throws {
-        try (ensureBackend() as? AudioBackendOutputVolumeControlling)?.setOutputMuted(muted)
     }
 
     func setOutputMuted(_ muted: Bool, forUID uid: String) throws {
@@ -415,15 +410,14 @@ actor AudioEngineActor {
         devices: [AudioDeviceSnapshot]
     ) -> AudioOutputSnapshot {
         guard let output = backend as? AudioBackendOutputVolumeControlling else {
-            return AudioOutputSnapshot(defaultOutput: OutputVolumeState(), devices: [:])
+            return AudioOutputSnapshot(devices: [:])
         }
-        let defaultState = (try? output.readOutputVolume()) ?? OutputVolumeState()
         var deviceStates: [String: OutputVolumeState] = [:]
         for device in devices {
             deviceStates[device.id] = (try? output.readOutputVolume(forUID: device.id))
                 ?? OutputVolumeState(deviceName: device.name)
         }
-        return AudioOutputSnapshot(defaultOutput: defaultState, devices: deviceStates)
+        return AudioOutputSnapshot(devices: deviceStates)
     }
 
     private func restoreOutputSettings(

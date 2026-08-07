@@ -249,7 +249,6 @@ final class CoreAudioTapLifecycleTests: XCTestCase {
         try backend.apply(.setEQ(music, curve))
 
         XCTAssertEqual(manager.eqUpdates, [music: curve])
-        XCTAssertTrue(backend.pendingCommands.isEmpty)
     }
 
     func testRouteChangeRebuildsControllerWithSelectedDevice() throws {

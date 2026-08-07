@@ -173,20 +173,10 @@ struct MenuBarRootView: View {
 
             if expandedAppID == row.identity {
                 EQPanelView(
+                    store: store,
                     row: row,
                     style: .compact,
-                    onClose: { closeEQ(for: row.identity) },
-                    onGain: { band, gain in
-                        store.setEQGainIntent(gain, band: band, for: row.identity)
-                    },
-                    onGainEditingChanged: { band, editing in
-                        if editing {
-                            store.beginEQEditing(band: band, for: row.identity)
-                        } else {
-                            store.endEQEditing(band: band, for: row.identity)
-                        }
-                    },
-                    onReset: { store.resetEQIntent(for: row.identity) }
+                    onClose: { closeEQ(for: row.identity) }
                 )
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }

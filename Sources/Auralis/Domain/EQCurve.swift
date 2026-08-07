@@ -1,4 +1,5 @@
 import Foundation
+import AuralisWidgetShared
 
 enum EQGainRange: Double, CaseIterable, Codable, Identifiable, Sendable {
     case db6 = 6

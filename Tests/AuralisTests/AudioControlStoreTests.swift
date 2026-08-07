@@ -10,7 +10,7 @@ final class AudioControlStoreTests: XCTestCase {
         let original = Data("{ truncated".utf8)
         try original.write(to: url)
 
-        let store = try AudioControlStore(
+        let store = AudioControlStore(
             settingsStore: SettingsStore(settingsURL: url),
             backend: MockAudioBackend()
         )
@@ -33,7 +33,7 @@ final class AudioControlStoreTests: XCTestCase {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let original = Data("{\"version\":999,\"unknownFutureField\":true}".utf8)
         try original.write(to: url)
-        let store = try AudioControlStore(
+        let store = AudioControlStore(
             settingsStore: SettingsStore(settingsURL: url),
             backend: MockAudioBackend()
         )
@@ -56,7 +56,7 @@ final class AudioControlStoreTests: XCTestCase {
             AudioAppSnapshot(identity: music, displayName: "Music", isActive: false, level: 0.2),
             AudioAppSnapshot(identity: music, displayName: "Duplicate", isActive: true, level: 0.8)
         ])
-        let store = try makeStore(backend: backend)
+        let store = makeStore(backend: backend)
         await store.waitUntilReady()
         store.settings.appDisplayOrder = [music, music]
 
@@ -75,7 +75,7 @@ final class AudioControlStoreTests: XCTestCase {
         let backend = MockAudioBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music", bundleIdentifier: music.rawValue, level: 0.6)
         ])
-        let store = try AudioControlStore(settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()), backend: backend)
+        let store = AudioControlStore(settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()), backend: backend)
 
         try await store.refresh()
 
@@ -90,7 +90,7 @@ final class AudioControlStoreTests: XCTestCase {
         let backend = LevelProvidingBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music")
         ])
-        let store = try AudioControlStore(
+        let store = AudioControlStore(
             settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()),
             backend: backend,
             permissionClient: grantedClient()
@@ -116,7 +116,7 @@ final class AudioControlStoreTests: XCTestCase {
         let backend = MockAudioBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music", bundleIdentifier: music.rawValue)
         ])
-        let store = try AudioControlStore(settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()), backend: backend)
+        let store = AudioControlStore(settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()), backend: backend)
         try await store.refresh()
 
         try await store.ignore(music)
@@ -131,7 +131,7 @@ final class AudioControlStoreTests: XCTestCase {
         let backend = MockAudioBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music", bundleIdentifier: music.rawValue, isActive: false)
         ])
-        let store = try makeStore(backend: backend)
+        let store = makeStore(backend: backend)
         await store.waitUntilReady()
         store.settings.customization.showInactiveApps = false
         try await store.refresh()
@@ -150,7 +150,7 @@ final class AudioControlStoreTests: XCTestCase {
         let backend = MockAudioBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music", bundleIdentifier: music.rawValue)
         ])
-        let store = try makeStore(backend: backend)
+        let store = makeStore(backend: backend)
         try await store.refresh()
 
         try await store.setVolume(0.25, for: music)
@@ -188,7 +188,7 @@ final class AudioControlStoreTests: XCTestCase {
         settings.customization.backendMode = .mock
         try settingsStore.save(settings)
         let requestedModes = LockedValue<[BackendMode]>([])
-        let store = try AudioControlStore(
+        let store = AudioControlStore(
             settingsStore: settingsStore,
             backend: initialBackend,
             backendFactory: { mode in
@@ -211,7 +211,7 @@ final class AudioControlStoreTests: XCTestCase {
         let backend = TapSynchronizingMockBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music")
         ])
-        let store = try AudioControlStore(
+        let store = AudioControlStore(
             settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()),
             backend: backend,
             permissionClient: grantedClient()
@@ -231,7 +231,7 @@ final class AudioControlStoreTests: XCTestCase {
             AudioAppSnapshot(identity: music, displayName: "Music")
         ])
         backend.syncError = NSError(domain: "AuralisTests", code: 17)
-        let store = try AudioControlStore(
+        let store = AudioControlStore(
             settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()),
             backend: backend,
             permissionClient: grantedClient()
@@ -255,7 +255,7 @@ final class AudioControlStoreTests: XCTestCase {
                 AudioAppSnapshot(identity: safari, displayName: "Safari")
             ])
         ])
-        let store = try AudioControlStore(
+        let store = AudioControlStore(
             settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()),
             backend: backend
         )
@@ -282,20 +282,27 @@ final class AudioControlStoreTests: XCTestCase {
 
     func testBackendObservationDebouncesEventBursts() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let builtIn = AudioDeviceSnapshot(
+            id: "built-in",
+            name: "MacBook Speakers",
+            isDefault: true
+        )
         let backend = EventingBackend(
             repeatingSnapshot: AudioBackendSnapshot(apps: [
                 AudioAppSnapshot(identity: music, displayName: "Music")
-            ])
+            ], devices: [builtIn])
         )
-        let store = try AudioControlStore(
+        let store = AudioControlStore(
             settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()),
             backend: backend
         )
         try await store.refresh()
         let baselineFetches = backend.fetchCount
-        let refreshed = expectation(description: "debounced topology refresh")
-        backend.onFetch = { count in
-            if count == baselineFetches + 1 {
+        let refreshed = expectation(description: "stable topology reconciled")
+        let cancellable = store.$contextSwitchState.sink { state in
+            if case let .applied(deviceID, deviceName) = state,
+               deviceID == builtIn.id,
+               deviceName == builtIn.name {
                 refreshed.fulfill()
             }
         }
@@ -303,13 +310,13 @@ final class AudioControlStoreTests: XCTestCase {
         await store.startBackendObservation(debounceNanoseconds: 40_000_000)
         for _ in 0..<10 { backend.emitUpdate() }
         await fulfillment(of: [refreshed], timeout: 1)
-        backend.onFetch = nil
         await store.stopBackendObservation()
 
-        // Newest-only buffering plus debounce collapses the whole burst into
-        // exactly one bounded refresh.
-        XCTAssertEqual(backend.fetchCount - baselineFetches, 1)
+        // One coalesced event performs two matching probes and one committed
+        // refresh; no stale reconciliation survives the burst.
+        XCTAssertEqual(backend.fetchCount - baselineFetches, 3)
         XCTAssertEqual(store.topologyRefreshCount, 1)
+        withExtendedLifetime(cancellable) {}
     }
 
     func testPermissionRefreshUpdatesPublishedStateAndStatus() async throws {
@@ -317,7 +324,7 @@ final class AudioControlStoreTests: XCTestCase {
             screenCapture: .denied,
             audioUsageDescription: .present
         ))
-        let store = try makeStore(backend: MockAudioBackend(), permissionClient: client)
+        let store = makeStore(backend: MockAudioBackend(), permissionClient: client)
         await store.waitUntilReady()
 
         store.refreshPermissionState()
@@ -335,7 +342,7 @@ final class AudioControlStoreTests: XCTestCase {
             screenCapture: .denied,
             audioUsageDescription: .present
         ))
-        let store = try AudioControlStore(
+        let store = AudioControlStore(
             settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()),
             backend: backend,
             permissionClient: client
@@ -353,7 +360,7 @@ final class AudioControlStoreTests: XCTestCase {
         let backend = MockAudioBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music", bundleIdentifier: music.rawValue)
         ])
-        let store = try makeStore(backend: backend)
+        let store = makeStore(backend: backend)
         try await store.refresh()
 
         try await store.setRoute(.selectedDevice("built-in-output"), for: music)
@@ -383,7 +390,7 @@ final class AudioControlStoreTests: XCTestCase {
         let backend = RestoreOrderingBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music")
         ])
-        let store = try AudioControlStore(
+        let store = AudioControlStore(
             settingsStore: settingsStore,
             backend: backend,
             permissionClient: grantedClient()
@@ -428,7 +435,7 @@ final class AudioControlStoreTests: XCTestCase {
         let replacementBackend = LockedValue(RestoreOrderingBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music")
         ]))
-        let store = try AudioControlStore(
+        let store = AudioControlStore(
             settingsStore: settingsStore,
             backend: firstBackend,
             backendFactory: { _ in replacementBackend.value },
@@ -458,7 +465,7 @@ final class AudioControlStoreTests: XCTestCase {
         let backend = MockAudioBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music", bundleIdentifier: music.rawValue)
         ])
-        let store = try makeStore(backend: backend)
+        let store = makeStore(backend: backend)
         try await store.refresh()
         try await store.setVolume(0.4, for: music)
 
@@ -476,7 +483,7 @@ final class AudioControlStoreTests: XCTestCase {
             AudioAppSnapshot(identity: music, displayName: "Music"),
             AudioAppSnapshot(identity: safari, displayName: "Safari")
         ])
-        let store = try makeStore(backend: backend)
+        let store = makeStore(backend: backend)
         try await store.refresh()
         try await store.moveApp(safari, before: music)
 
@@ -492,7 +499,7 @@ final class AudioControlStoreTests: XCTestCase {
             apps: [AudioAppSnapshot(identity: music, displayName: "Music", bundleIdentifier: music.rawValue)],
             devices: [AudioDeviceSnapshot(id: "built-in-output", name: "MacBook Speakers", isDefault: true)]
         )
-        let store = try makeStore(backend: backend)
+        let store = makeStore(backend: backend)
         try await store.refresh()
         try await store.setRoute(.selectedDevice("usb"), for: music)
         try await store.refresh()
@@ -503,7 +510,7 @@ final class AudioControlStoreTests: XCTestCase {
     func testFailedVolumeIntentRollsBackAndPublishesIssue() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let backend = FailingApplyBackend(apps: [AudioAppSnapshot(identity: music, displayName: "Music")])
-        let store = try AudioControlStore(
+        let store = AudioControlStore(
             settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()),
             backend: backend,
             permissionClient: grantedClient()
@@ -521,7 +528,7 @@ final class AudioControlStoreTests: XCTestCase {
     func testRefreshFailurePreservesLastSuccessfulRows() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let backend = FailsAfterFirstFetchBackend(apps: [AudioAppSnapshot(identity: music, displayName: "Music")])
-        let store = try AudioControlStore(settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()), backend: backend)
+        let store = AudioControlStore(settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()), backend: backend)
         try await store.refresh()
 
         store.refreshIntent()
@@ -534,8 +541,11 @@ final class AudioControlStoreTests: XCTestCase {
 
     func testVolumeGestureCoalescesChangesAndFlushesFinalValue() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
-        let backend = MockAudioBackend(apps: [AudioAppSnapshot(identity: music, displayName: "Music")])
-        let store = try makeStore(backend: backend)
+        let backend = MockAudioBackend(
+            apps: [AudioAppSnapshot(identity: music, displayName: "Music")],
+            devices: []
+        )
+        let store = makeStore(backend: backend)
         try await store.refresh()
 
         store.beginVolumeEditing(for: music)
@@ -549,8 +559,11 @@ final class AudioControlStoreTests: XCTestCase {
 
     func testEQGestureFlushAndAtomicResetEachSendOneCurve() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
-        let backend = MockAudioBackend(apps: [AudioAppSnapshot(identity: music, displayName: "Music")])
-        let store = try makeStore(backend: backend)
+        let backend = MockAudioBackend(
+            apps: [AudioAppSnapshot(identity: music, displayName: "Music")],
+            devices: []
+        )
+        let store = makeStore(backend: backend)
         try await store.refresh()
 
         store.beginEQEditing(band: 0, for: music)
@@ -580,8 +593,11 @@ final class AudioControlStoreTests: XCTestCase {
         let settingsURL = uniqueSettingsURL()
         let settingsStore = SettingsStore(settingsURL: settingsURL)
         try settingsStore.save(PersistedSettings(appSettings: [music: baseline]))
-        let backend = MockAudioBackend(apps: [AudioAppSnapshot(identity: music, displayName: "Music")])
-        let store = try AudioControlStore(settingsStore: settingsStore, backend: backend, permissionClient: grantedClient())
+        let backend = MockAudioBackend(
+            apps: [AudioAppSnapshot(identity: music, displayName: "Music")],
+            devices: []
+        )
+        let store = AudioControlStore(settingsStore: settingsStore, backend: backend, permissionClient: grantedClient())
         try await store.refresh()
         try blockPersistence(at: settingsURL)
         defer { try? FileManager.default.removeItem(at: settingsURL.deletingLastPathComponent()) }
@@ -632,8 +648,11 @@ final class AudioControlStoreTests: XCTestCase {
         let settingsURL = uniqueSettingsURL()
         let settingsStore = SettingsStore(settingsURL: settingsURL)
         try settingsStore.save(PersistedSettings(appSettings: [music: baseline]))
-        let backend = MockAudioBackend(apps: [AudioAppSnapshot(identity: music, displayName: "Music")])
-        let store = try AudioControlStore(settingsStore: settingsStore, backend: backend, permissionClient: grantedClient())
+        let backend = MockAudioBackend(
+            apps: [AudioAppSnapshot(identity: music, displayName: "Music")],
+            devices: []
+        )
+        let store = AudioControlStore(settingsStore: settingsStore, backend: backend, permissionClient: grantedClient())
         try await store.refresh()
         try blockPersistence(at: settingsURL)
         defer { try? FileManager.default.removeItem(at: settingsURL.deletingLastPathComponent()) }
@@ -668,7 +687,7 @@ final class AudioControlStoreTests: XCTestCase {
         let backend = TapSynchronizingMockBackend(apps: [])
         backend.tearDownAllError = NSError(domain: "Teardown", code: 23)
         let requestedModes = LockedValue<[BackendMode]>([])
-        let store = try AudioControlStore(
+        let store = AudioControlStore(
             settingsStore: settingsStore,
             backend: backend,
             backendFactory: { mode in
@@ -690,57 +709,9 @@ final class AudioControlStoreTests: XCTestCase {
         permissionClient: any AudioCapturePermissionClient = FakePermissionClient(
             state: AudioCapturePermissionState(screenCapture: .granted, audioUsageDescription: .present)
         )
-    ) throws -> AudioControlStore {
+    ) -> AudioControlStore {
         let store = SettingsStore(settingsURL: uniqueSettingsURL())
-        return try AudioControlStore(settingsStore: store, backend: backend, permissionClient: permissionClient)
-    }
-
-    func testRefreshReadsOutputVolumeFromBackend() async throws {
-        let backend = MockAudioBackend()
-        backend.outputVolume = 0.4
-        backend.outputMuted = true
-        let store = try makeStore(backend: backend)
-
-        try await store.refresh()
-
-        XCTAssertEqual(store.outputVolumeState.volume, 0.4, accuracy: 0.001)
-        XCTAssertTrue(store.outputVolumeState.isMuted)
-        XCTAssertEqual(store.outputVolumeState.deviceName, "MacBook Speakers")
-    }
-
-    func testSetOutputVolumeIntentAppliesAndClamps() async throws {
-        let backend = MockAudioBackend()
-        let store = try makeStore(backend: backend)
-        try await store.refresh()
-
-        store.setOutputVolumeIntent(0.55)
-        await store.waitForPendingOperations()
-        XCTAssertEqual(backend.outputVolume, 0.55, accuracy: 0.001)
-        XCTAssertEqual(store.outputVolumeState.volume, 0.55, accuracy: 0.001)
-
-        store.setOutputVolumeIntent(1.4)
-        await store.waitForPendingOperations()
-        XCTAssertEqual(backend.outputVolume, 1, accuracy: 0.001)
-        store.setOutputVolumeIntent(-0.2)
-        await store.waitForPendingOperations()
-        XCTAssertEqual(backend.outputVolume, 0, accuracy: 0.001)
-    }
-
-    func testToggleOutputMuteIntentFlipsMute() async throws {
-        let backend = MockAudioBackend()
-        let store = try makeStore(backend: backend)
-        try await store.refresh()
-        XCTAssertFalse(store.outputVolumeState.isMuted)
-
-        store.toggleOutputMuteIntent()
-        await store.waitForPendingOperations()
-        XCTAssertTrue(backend.outputMuted)
-        XCTAssertTrue(store.outputVolumeState.isMuted)
-
-        store.toggleOutputMuteIntent()
-        await store.waitForPendingOperations()
-        XCTAssertFalse(backend.outputMuted)
-        XCTAssertFalse(store.outputVolumeState.isMuted)
+        return AudioControlStore(settingsStore: store, backend: backend, permissionClient: permissionClient)
     }
 
     func testRefreshReadsDeviceVolumeStatesForAllDevices() async throws {
@@ -749,7 +720,7 @@ final class AudioControlStoreTests: XCTestCase {
         let backend = MockAudioBackend(devices: [usb, hdmi])
         backend.perDeviceVolume = ["usb": 0.4, "hdmi": 0.8]
         backend.perDeviceMuted = ["usb": false, "hdmi": true]
-        let store = try makeStore(backend: backend)
+        let store = makeStore(backend: backend)
 
         try await store.refresh()
 
@@ -763,7 +734,7 @@ final class AudioControlStoreTests: XCTestCase {
     func testSetDeviceVolumeIntentAppliesPerDeviceAndClamps() async throws {
         let usb = AudioDeviceSnapshot(id: "usb", name: "USB DAC")
         let backend = MockAudioBackend(devices: [usb])
-        let store = try makeStore(backend: backend)
+        let store = makeStore(backend: backend)
         try await store.refresh()
 
         store.setDeviceVolumeIntent(0.55, for: "usb")
@@ -784,7 +755,7 @@ final class AudioControlStoreTests: XCTestCase {
     func testToggleDeviceMuteIntentFlipsPerDeviceMute() async throws {
         let usb = AudioDeviceSnapshot(id: "usb", name: "USB DAC")
         let backend = MockAudioBackend(devices: [usb])
-        let store = try makeStore(backend: backend)
+        let store = makeStore(backend: backend)
         try await store.refresh()
         XCTAssertFalse(store.deviceVolumeStates["usb"]?.isMuted ?? true)
 
@@ -800,7 +771,7 @@ final class AudioControlStoreTests: XCTestCase {
         XCTAssertFalse(try store.settingsStore.load().deviceSettings["usb"]?.isMuted ?? true)
     }
 
-    func testProfilesCaptureApplyAndPersistAppDeviceAndPreferredOutputSettings() async throws {
+    func testAutomaticDeviceContextsPersistAppDeviceAndPreferredOutputSettings() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let builtIn = AudioDeviceSnapshot(id: "built-in", name: "MacBook Speakers", isDefault: true)
         let home = AudioDeviceSnapshot(id: "home-speaker", name: "Home Speaker")
@@ -808,33 +779,413 @@ final class AudioControlStoreTests: XCTestCase {
             apps: [AudioAppSnapshot(identity: music, displayName: "Music")],
             devices: [builtIn, home]
         )
-        let store = try makeStore(backend: backend)
+        let store = makeStore(backend: backend)
         try await store.refresh()
         try await store.setVolume(0.35, for: music)
         try await store.setDeviceVolume(0.62, for: home.id)
         try await store.setDeviceMuted(true, for: home.id)
         try await store.setDefaultOutputDevice(home.id)
+        XCTAssertEqual(store.settings.appSettings[music]?.volume ?? -1, 1, accuracy: 0.001)
+        try await store.setVolume(0.55, for: music)
+        let homeContextID = try XCTUnwrap(store.currentDeviceContext?.id)
 
-        let profileID = try await store.createProfile(named: "Home")
-        XCTAssertEqual(store.activeProfile?.name, "Home")
+        try await store.setDefaultOutputDevice(builtIn.id)
+        XCTAssertEqual(store.settings.appSettings[music]?.volume ?? -1, 0.35, accuracy: 0.001)
+        XCTAssertEqual(
+            store.settings.activeLocalProfileID,
+            store.outputConfiguration(for: builtIn.id)?.id
+        )
+
+        try await store.setDefaultOutputDevice(home.id)
+
+        XCTAssertEqual(store.settings.appSettings[music]?.volume ?? -1, 0.55, accuracy: 0.001)
+        XCTAssertEqual(store.deviceVolumeStates[home.id]?.volume ?? -1, 0.62, accuracy: 0.001)
+        XCTAssertTrue(store.deviceVolumeStates[home.id]?.isMuted ?? false)
+        XCTAssertEqual(store.devices.first(where: \.isDefault)?.id, home.id)
+        XCTAssertEqual(store.settings.activeProfileID, homeContextID)
+        XCTAssertEqual(store.settings.activeLocalProfileID, homeContextID)
+        let saved = try store.settingsStore.load()
+        let savedProfile = saved.profiles.first { $0.id == homeContextID }
+        XCTAssertEqual(savedProfile?.preferredOutputDeviceID, home.id)
+        XCTAssertEqual(savedProfile?.appSettings[music]?.volume ?? -1, 0.55, accuracy: 0.001)
+        XCTAssertEqual(saved.activeProfileID, homeContextID)
+    }
+
+    func testPresetCopiesIntoIndependentAutomaticDeviceContext() async throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let builtIn = AudioDeviceSnapshot(id: "built-in", name: "MacBook Speakers", isDefault: true)
+        let home = AudioDeviceSnapshot(id: "home-speaker", name: "Home Speaker")
+        let backend = MockAudioBackend(
+            apps: [AudioAppSnapshot(identity: music, displayName: "Music")],
+            devices: [builtIn, home]
+        )
+        let store = makeStore(backend: backend)
+        try await store.refresh()
+
+        try await store.setVolume(0.4, for: music)
+        let globalID = try await store.createProfile(
+            named: "Everywhere",
+            scope: .global
+        )
+
+        try await store.setDefaultOutputDevice(home.id)
+        XCTAssertEqual(store.settings.appSettings[music]?.volume ?? -1, 1, accuracy: 0.001)
+        try await store.applyProfile(globalID)
+        XCTAssertEqual(store.settings.appSettings[music]?.volume ?? -1, 0.4, accuracy: 0.001)
+        try await store.setVolume(0.25, for: music)
+        try await store.setDeviceVolume(0.64, for: home.id)
+        try await store.setDeviceMuted(true, for: home.id)
+        let homeContextID = try XCTUnwrap(store.outputConfiguration(for: home.id)?.id)
+
+        try await store.setDefaultOutputDevice(builtIn.id)
+        XCTAssertEqual(store.settings.appSettings[music]?.volume ?? -1, 0.4, accuracy: 0.001)
+        XCTAssertNil(store.settings.activeGlobalProfileID)
+        XCTAssertEqual(
+            store.settings.activeLocalProfileID,
+            store.outputConfiguration(for: builtIn.id)?.id
+        )
+
+        try await store.setDefaultOutputDevice(home.id)
+        XCTAssertEqual(store.settings.appSettings[music]?.volume ?? -1, 0.25, accuracy: 0.001)
+        XCTAssertEqual(store.deviceVolumeStates[home.id]?.volume ?? -1, 0.64, accuracy: 0.001)
+        XCTAssertTrue(store.deviceVolumeStates[home.id]?.isMuted ?? false)
+        XCTAssertNil(store.settings.activeGlobalProfileID)
+        XCTAssertEqual(store.settings.activeLocalProfileID, homeContextID)
+        XCTAssertEqual(store.settings.activeProfileID, homeContextID)
+    }
+
+    func testSavingOutputConfigurationUpdatesItsAutomaticContextInPlace() async throws {
+        let home = AudioDeviceSnapshot(id: "home-speaker", name: "Home Speaker", isDefault: true)
+        let backend = MockAudioBackend(devices: [home])
+        let store = makeStore(backend: backend)
+        try await store.refresh()
+
+        let firstID = try await store.createProfile(
+            named: "Home",
+            scope: .outputDevice(home.id)
+        )
+        let secondID = try await store.createProfile(
+            named: "Home Quiet",
+            scope: .outputDevice(home.id)
+        )
+
+        XCTAssertEqual(firstID, secondID)
+        let second = try XCTUnwrap(store.settings.profiles.first { $0.id == secondID })
+        XCTAssertEqual(second.scope, .outputDevice(home.id))
+        XCTAssertTrue(second.activatesAutomatically)
+        XCTAssertEqual(
+            store.settings.profiles.filter { $0.scope.outputDeviceID == home.id }.count,
+            1
+        )
+    }
+
+    func testRemovingConnectedOutputContextResetsItToNeutral() async throws {
+        let music = AudioAppIdentity(rawValue: "music")
+        let builtIn = AudioDeviceSnapshot(id: "built-in", name: "MacBook Speakers", isDefault: true)
+        let home = AudioDeviceSnapshot(id: "home", name: "Home Speaker")
+        let backend = MockAudioBackend(
+            apps: [AudioAppSnapshot(identity: music, displayName: "Music")],
+            devices: [builtIn, home]
+        )
+        let store = makeStore(backend: backend)
+        try await store.refresh()
+        try await store.setVolume(0.4, for: music)
+        let presetID = try await store.createProfile(named: "Global", scope: .global)
+
+        try await store.setDefaultOutputDevice(home.id)
+        try await store.setVolume(0.25, for: music)
+        let configurationID = try await store.saveOutputConfiguration(
+            for: home.id,
+            deviceName: home.name
+        )
+        XCTAssertEqual(store.outputConfiguration(for: home.id)?.id, configurationID)
+
+        try await store.setVolume(0.3, for: music)
+        let updatedID = try await store.saveOutputConfiguration(
+            for: home.id,
+            deviceName: home.name
+        )
+        XCTAssertEqual(updatedID, configurationID)
+        XCTAssertEqual(
+            store.settings.profiles.filter { $0.scope.outputDeviceID == home.id }.count,
+            1
+        )
+
+        try await store.setVolume(0.9, for: music)
+        try await store.removeOutputConfiguration(for: home.id)
+
+        let neutralContext = try XCTUnwrap(store.outputConfiguration(for: home.id))
+        XCTAssertNotEqual(neutralContext.id, configurationID)
+        XCTAssertNil(store.settings.activeGlobalProfileID)
+        XCTAssertEqual(store.settings.activeLocalProfileID, neutralContext.id)
+        XCTAssertEqual(store.settings.appSettings[music]?.volume ?? -1, 1, accuracy: 0.001)
+        XCTAssertNotNil(store.settings.profiles.first { $0.id == presetID })
+    }
+
+    func testEveryDiscoveredOutputStartsWithIndependentNeutralContext() async throws {
+        let music = AudioAppIdentity(rawValue: "music")
+        let home = AudioDeviceSnapshot(id: "home", name: "Home Speaker", isDefault: true)
+        let office = AudioDeviceSnapshot(id: "office", name: "Office Display")
+        let backend = MockAudioBackend(
+            apps: [AudioAppSnapshot(identity: music, displayName: "Music", isActive: true)],
+            devices: [home, office]
+        )
+        let store = makeStore(backend: backend)
+        try await store.refresh()
+        try await store.setVolume(0.25, for: music)
+        try await store.setMuted(true, for: music)
+        try await store.setBoost(.x3, for: music)
+        try await store.setEQGain(4, band: 2, for: music)
+
+        let configuration = try XCTUnwrap(store.outputConfiguration(for: home.id))
+        let officeContext = try XCTUnwrap(store.outputConfiguration(for: office.id))
+
+        XCTAssertEqual(configuration.appSettings[music]?.volume ?? -1, 0.25, accuracy: 0.001)
+        XCTAssertTrue(configuration.appSettings[music]?.isMuted ?? false)
+        XCTAssertEqual(configuration.appSettings[music]?.boost, .x3)
+        XCTAssertEqual(configuration.appSettings[music]?.eq.gains[2], 4)
+        XCTAssertEqual(officeContext.appSettings[music]?.volume ?? -1, 1, accuracy: 0.001)
+        XCTAssertFalse(officeContext.appSettings[music]?.isMuted ?? true)
+        XCTAssertEqual(officeContext.appSettings[music]?.boost, .x1)
+        XCTAssertEqual(officeContext.appSettings[music]?.eq.gains, Array(repeating: 0, count: 10))
+        XCTAssertEqual(officeContext.appSettings[music]?.route, .followDefault)
+
+        try await store.setDefaultOutputDevice(office.id)
+
+        XCTAssertEqual(store.activeLocalProfile?.id, officeContext.id)
+        XCTAssertNil(store.activeGlobalProfile)
+        XCTAssertEqual(store.settings.appSettings[music]?.volume ?? -1, 1, accuracy: 0.001)
+        XCTAssertFalse(store.settings.appSettings[music]?.isMuted ?? true)
+        XCTAssertEqual(store.settings.appSettings[music]?.boost, .x1)
+        XCTAssertEqual(store.settings.appSettings[music]?.eq.gains, Array(repeating: 0, count: 10))
+    }
+
+    func testAssigningPresetsToOutputsRestoresTheirPerAppEQWhenSwitching() async throws {
+        let music = AudioAppIdentity(rawValue: "music")
+        let macBook = AudioDeviceSnapshot(
+            id: "macbook",
+            name: "MacBook Pro Speakers",
+            isDefault: true
+        )
+        let ultraFine = AudioDeviceSnapshot(id: "lg-ultrafine", name: "LG UltraFine")
+        let backend = MockAudioBackend(
+            apps: [AudioAppSnapshot(identity: music, displayName: "Music", isActive: true)],
+            devices: [macBook, ultraFine]
+        )
+        let store = makeStore(backend: backend)
+        try await store.refresh()
+
+        let home1ID = try await store.createProfile(named: "home1", scope: .global)
+        try await store.setDefaultOutputDevice(ultraFine.id)
+        try await store.setEQGain(5, band: 0, for: music)
+        try await store.setEQGain(-3, band: 6, for: music)
+        let blackstarID = try await store.createProfile(named: "Blackstar", scope: .global)
+
+        try await store.setEQGain(0, band: 0, for: music)
+        try await store.setEQGain(0, band: 6, for: music)
+        let ultraFineConfigurationID = try await store.assignPreset(
+            blackstarID,
+            toOutput: ultraFine.id,
+            deviceName: ultraFine.name
+        )
+        let macBookConfigurationID = try await store.assignPreset(
+            home1ID,
+            toOutput: macBook.id,
+            deviceName: macBook.name
+        )
+
+        XCTAssertNotEqual(ultraFineConfigurationID, macBookConfigurationID)
+        XCTAssertEqual(store.outputConfiguration(for: ultraFine.id)?.name, "Blackstar")
+        XCTAssertEqual(store.outputConfiguration(for: macBook.id)?.name, "home1")
+        XCTAssertEqual(store.settings.appSettings[music]?.eq.gains[0], 5)
+        XCTAssertEqual(store.settings.appSettings[music]?.eq.gains[6], -3)
+
+        try await store.setDefaultOutputDevice(macBook.id)
+
+        XCTAssertEqual(store.settings.activeLocalProfileID, macBookConfigurationID)
+        XCTAssertEqual(
+            store.settings.appSettings[music]?.eq.gains,
+            Array(repeating: 0, count: 10)
+        )
+
+        try await store.setDefaultOutputDevice(ultraFine.id)
+
+        XCTAssertEqual(store.settings.activeLocalProfileID, ultraFineConfigurationID)
+        XCTAssertEqual(store.settings.appSettings[music]?.eq.gains[0], 5)
+        XCTAssertEqual(store.settings.appSettings[music]?.eq.gains[6], -3)
+    }
+
+    func testReconnectedDefaultOutputAutoAppliesItsLocalProfileDuringRefresh() async throws {
+        let music = AudioAppIdentity(rawValue: "music")
+        let builtIn = AudioDeviceSnapshot(id: "built-in", name: "MacBook Speakers", isDefault: true)
+        let home = AudioDeviceSnapshot(id: "home", name: "Home Speaker")
+        let backend = MockAudioBackend(
+            apps: [AudioAppSnapshot(identity: music, displayName: "Music", isActive: true)],
+            devices: [builtIn, home]
+        )
+        let store = makeStore(backend: backend)
+        try await store.refresh()
+        try await store.setDefaultOutputDevice(home.id)
+        try await store.setVolume(0.3, for: music)
+        let localID = try await store.createProfile(
+            named: "Home",
+            scope: .outputDevice(home.id)
+        )
+        try await store.setDefaultOutputDevice(builtIn.id)
+        try await store.setVolume(0.9, for: music)
+
+        backend.snapshot.devices = [builtIn]
+        try await store.refresh()
+        backend.snapshot.devices = [
+            AudioDeviceSnapshot(id: builtIn.id, name: builtIn.name),
+            AudioDeviceSnapshot(id: home.id, name: home.name, isDefault: true)
+        ]
+        try await store.refresh()
+
+        XCTAssertEqual(store.settings.activeLocalProfileID, localID)
+        XCTAssertEqual(store.settings.appSettings[music]?.volume ?? -1, 0.3, accuracy: 0.001)
+        XCTAssertEqual(store.devices.first(where: \.isDefault)?.id, home.id)
+    }
+
+    func testFailedAutomaticProfileApplicationRetriesOnUnchangedOutput() async throws {
+        let music = AudioAppIdentity(rawValue: "music")
+        let builtIn = AudioDeviceSnapshot(id: "built-in", name: "MacBook Speakers", isDefault: true)
+        let home = AudioDeviceSnapshot(id: "home", name: "Home Speaker")
+        let backend = MockAudioBackend(
+            apps: [AudioAppSnapshot(identity: music, displayName: "Music", isActive: true)],
+            devices: [builtIn, home]
+        )
+        let store = makeStore(backend: backend)
+        try await store.refresh()
+        try await store.setDefaultOutputDevice(home.id)
+        try await store.setVolume(0.3, for: music)
+        let localID = try await store.createProfile(
+            named: "Home",
+            scope: .outputDevice(home.id)
+        )
+        try await store.setDefaultOutputDevice(builtIn.id)
+
+        backend.applyError = NSError(domain: "ProfileRetryTest", code: 1)
+        await assertThrows {
+            try await store.setDefaultOutputDevice(home.id)
+        }
+        XCTAssertNil(store.settings.activeLocalProfileID)
+
+        backend.applyError = nil
+        try await store.refresh()
+
+        XCTAssertEqual(store.settings.activeLocalProfileID, localID)
+        XCTAssertEqual(store.settings.appSettings[music]?.volume ?? -1, 0.3, accuracy: 0.001)
+    }
+
+    func testAutomaticContextEditsStaySavedAndNeverBecomeOverrides() async throws {
+        let music = AudioAppIdentity(rawValue: "music")
+        let builtIn = AudioDeviceSnapshot(id: "built-in", name: "MacBook Speakers", isDefault: true)
+        let home = AudioDeviceSnapshot(id: "home", name: "Home Speaker")
+        let backend = MockAudioBackend(
+            apps: [AudioAppSnapshot(identity: music, displayName: "Music", isActive: true)],
+            devices: [builtIn, home]
+        )
+        let store = makeStore(backend: backend)
+        try await store.refresh()
+        try await store.setVolume(0.5, for: music)
+        let presetID = try await store.createProfile(named: "Everywhere", scope: .global)
+        try await store.setDefaultOutputDevice(home.id)
+        try await store.setVolume(0.3, for: music)
+        try await store.setDeviceVolume(0.65, for: home.id)
+        try await store.setDeviceMuted(true, for: home.id)
+        let contextID = try XCTUnwrap(store.currentDeviceContext?.id)
 
         try await store.setVolume(0.9, for: music)
         try await store.setDeviceVolume(0.2, for: home.id)
         try await store.setDeviceMuted(false, for: home.id)
-        try await store.setDefaultOutputDevice(builtIn.id)
-        XCTAssertNil(store.settings.activeProfileID)
+        XCTAssertFalse(store.settings.profileHasOverrides)
+        XCTAssertFalse(try store.settingsStore.load().profileHasOverrides)
+        XCTAssertNil(store.settings.activeGlobalProfileID)
+        XCTAssertEqual(store.settings.activeLocalProfileID, contextID)
 
-        try await store.applyProfile(profileID)
+        try await store.revertProfileChanges()
 
-        XCTAssertEqual(store.settings.appSettings[music]?.volume ?? -1, 0.35, accuracy: 0.001)
-        XCTAssertEqual(store.deviceVolumeStates[home.id]?.volume ?? -1, 0.62, accuracy: 0.001)
-        XCTAssertTrue(store.deviceVolumeStates[home.id]?.isMuted ?? false)
-        XCTAssertEqual(store.devices.first(where: \.isDefault)?.id, home.id)
-        XCTAssertEqual(store.settings.activeProfileID, profileID)
-        let saved = try store.settingsStore.load()
-        XCTAssertEqual(saved.profiles.first?.name, "Home")
-        XCTAssertEqual(saved.profiles.first?.preferredOutputDeviceID, home.id)
-        XCTAssertEqual(saved.activeProfileID, profileID)
+        XCTAssertFalse(store.settings.profileHasOverrides)
+        XCTAssertFalse(try store.settingsStore.load().profileHasOverrides)
+        XCTAssertEqual(store.settings.appSettings[music]?.volume ?? -1, 0.9, accuracy: 0.001)
+        XCTAssertEqual(store.deviceVolumeStates[home.id]?.volume ?? -1, 0.2, accuracy: 0.001)
+        XCTAssertFalse(store.deviceVolumeStates[home.id]?.isMuted ?? true)
+        XCTAssertEqual(store.settings.activeLocalProfileID, contextID)
+        XCTAssertEqual(store.settings.profiles.first { $0.id == presetID }?.appSettings[music]?.volume, 0.5)
+    }
+
+    func testDeviceChangesUpdateOnlyTheirMatchingAutomaticContext() async throws {
+        let builtIn = AudioDeviceSnapshot(
+            id: "built-in",
+            name: "MacBook Speakers",
+            isDefault: true
+        )
+        let display = AudioDeviceSnapshot(id: "display", name: "Studio Display")
+        let store = makeStore(backend: MockAudioBackend(devices: [builtIn, display]))
+        try await store.refresh()
+        try await store.setDeviceVolume(0.6, for: builtIn.id)
+        XCTAssertFalse(store.settings.profileHasOverrides)
+        XCTAssertEqual(
+            store.outputConfiguration(for: builtIn.id)?.deviceSettings[builtIn.id]?.volume,
+            0.6
+        )
+        try await store.setDeviceVolume(0.4, for: display.id)
+        XCTAssertFalse(store.settings.profileHasOverrides)
+        XCTAssertEqual(
+            store.outputConfiguration(for: display.id)?.deviceSettings[display.id]?.volume,
+            0.4
+        )
+
+        try await store.setDeviceMuted(true, for: builtIn.id)
+        XCTAssertFalse(store.settings.profileHasOverrides)
+        XCTAssertTrue(
+            store.outputConfiguration(for: builtIn.id)?.deviceSettings[builtIn.id]?.isMuted
+                ?? false
+        )
+    }
+
+    func testDeletingPresetLeavesAutomaticDeviceContextIntact() async throws {
+        let output = AudioDeviceSnapshot(id: "home", name: "Home Speaker", isDefault: true)
+        let store = makeStore(backend: MockAudioBackend(devices: [output]))
+        try await store.refresh()
+
+        let globalID = try await store.createProfile(named: "Everywhere")
+        let localID = try XCTUnwrap(store.currentDeviceContext?.id)
+
+        try await store.deleteProfile(globalID)
+
+        XCTAssertNil(store.settings.activeGlobalProfileID)
+        XCTAssertEqual(store.settings.activeLocalProfileID, localID)
+        XCTAssertTrue(store.settings.profiles.filter(\.scope.isGlobal).isEmpty)
+
+        let persisted = try store.settingsStore.load()
+        XCTAssertNil(persisted.activeGlobalProfileID)
+        XCTAssertEqual(persisted.activeLocalProfileID, localID)
+        XCTAssertEqual(persisted.profiles, store.settings.profiles)
+    }
+
+    func testBulkAppControlsUpdateEveryActiveAppAndLeaveInactiveAppsAlone() async throws {
+        let music = AudioAppIdentity(rawValue: "music")
+        let browser = AudioAppIdentity(rawValue: "browser")
+        let editor = AudioAppIdentity(rawValue: "editor")
+        let backend = MockAudioBackend(apps: [
+            AudioAppSnapshot(identity: music, displayName: "Music", isActive: true),
+            AudioAppSnapshot(identity: browser, displayName: "Browser", isActive: true),
+            AudioAppSnapshot(identity: editor, displayName: "Editor", isActive: false)
+        ])
+        let store = makeStore(backend: backend)
+        try await store.refresh()
+
+        try await store.setAllActiveAppsMuted(true)
+        try await store.setAllActiveAppsVolume(0.5)
+
+        XCTAssertTrue(store.settings.appSettings[music]?.isMuted ?? false)
+        XCTAssertTrue(store.settings.appSettings[browser]?.isMuted ?? false)
+        XCTAssertFalse(store.settings.appSettings[editor]?.isMuted ?? true)
+        XCTAssertEqual(store.settings.appSettings[music]?.volume ?? -1, 0.5, accuracy: 0.001)
+        XCTAssertEqual(store.settings.appSettings[browser]?.volume ?? -1, 0.5, accuracy: 0.001)
+        XCTAssertEqual(store.settings.appSettings[editor]?.volume ?? -1, 1, accuracy: 0.001)
     }
 
     private func grantedClient() -> FakePermissionClient {
@@ -935,6 +1286,7 @@ private struct FakePermissionClient: AudioCapturePermissionClient {
 private final class EventingBackend: AudioBackend, AudioBackendUpdatePublishing {
     private var snapshots: [AudioBackendSnapshot]
     private let repeatingSnapshot: AudioBackendSnapshot?
+    private var lastSnapshot = AudioBackendSnapshot()
     private(set) var fetchCount = 0
     var onFetch: ((Int) -> Void)?
     private var continuation: AsyncStream<Void>.Continuation?
@@ -963,13 +1315,15 @@ private final class EventingBackend: AudioBackend, AudioBackendUpdatePublishing 
         fetchCount += 1
         onFetch?(fetchCount)
         if let repeatingSnapshot { return repeatingSnapshot }
-        return snapshots.isEmpty ? AudioBackendSnapshot() : snapshots.removeFirst()
+        if !snapshots.isEmpty { lastSnapshot = snapshots.removeFirst() }
+        return lastSnapshot
     }
 
     func apply(_ command: AudioBackendCommand) throws {}
 }
 
-private final class TapSynchronizingMockBackend: AudioBackend, AudioBackendTapSynchronizing {    var snapshot: AudioBackendSnapshot
+private final class TapSynchronizingMockBackend: AudioBackend, AudioBackendTapSynchronizing {
+    var snapshot: AudioBackendSnapshot
     var syncError: Error?
     var tearDownAllError: Error?
     private(set) var synchronizedActiveIDs: Set<AudioAppIdentity> = []

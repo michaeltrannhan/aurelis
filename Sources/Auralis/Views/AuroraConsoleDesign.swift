@@ -3,7 +3,12 @@ import SwiftUI
 /// Semantic console tokens. These intentionally name the role a colour plays
 /// rather than baking a visual choice into each individual view.
 enum AuroraConsoleDesign {
-    static let workbench = Color(red: 0.957, green: 0.969, blue: 0.984)
+    /// Accent tokens remain stable across appearances. Structural surfaces must
+    /// come from AppKit so a forced light/dark appearance never produces white
+    /// text on a light canvas (or the inverse).
+    static let workbench = Color(nsColor: .windowBackgroundColor)
+    static let panel = Color(nsColor: .controlBackgroundColor)
+    static let recessedPanel = Color(nsColor: .underPageBackgroundColor)
     static let nightDeck = Color(red: 0.027, green: 0.078, blue: 0.149)
     static let graphite = Color(red: 0.090, green: 0.125, blue: 0.200)
     static let signalCyan = Color(red: 0.133, green: 0.827, blue: 0.933)
@@ -23,6 +28,7 @@ enum AuroraConsoleDesign {
 /// by design; success is communicated by tint, which keeps Reduce Motion
 /// useful and avoids decorative animation during active mixing.
 struct AuroraSignalPath: View {
+    @Environment(\.colorScheme) private var colorScheme
     let outputName: String
     let volume: Double
     let isMuted: Bool
@@ -44,10 +50,10 @@ struct AuroraSignalPath: View {
             pathNode(outputName, symbol: "hifispeaker.fill", expands: true)
         }
         .padding(12)
-        .background(AuroraConsoleDesign.nightDeck, in: RoundedRectangle(cornerRadius: 14))
+        .background(pathSurface, in: RoundedRectangle(cornerRadius: 14))
         .overlay {
             RoundedRectangle(cornerRadius: 14)
-                .stroke(AuroraConsoleDesign.signalCyan.opacity(0.32), lineWidth: 1)
+                .stroke(AuroraConsoleDesign.signalCyan.opacity(colorScheme == .dark ? 0.48 : 0.70), lineWidth: 1)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Signal path")
@@ -61,15 +67,26 @@ struct AuroraSignalPath: View {
             .accessibilityHidden(true)
     }
 
+    private var pathSurface: Color {
+        colorScheme == .dark
+            ? AuroraConsoleDesign.graphite.opacity(0.88)
+            : AuroraConsoleDesign.panel
+    }
+
     private func pathNode(_ title: String, symbol: String, expands: Bool = false) -> some View {
         HStack(spacing: 4) {
             Image(systemName: symbol).font(.system(size: 10, weight: .bold))
             Text(title).lineLimit(1)
         }
         .font(AuroraConsoleDesign.data(10, weight: .semibold))
-        .foregroundStyle(.white.opacity(0.94))
+        .foregroundStyle(.primary)
         .padding(.horizontal, 7)
         .frame(maxWidth: expands ? .infinity : nil, minHeight: 28)
-        .background(AuroraConsoleDesign.graphite, in: Capsule())
+        .background(
+            colorScheme == .dark
+                ? AuroraConsoleDesign.nightDeck.opacity(0.9)
+                : AuroraConsoleDesign.recessedPanel,
+            in: Capsule()
+        )
     }
 }

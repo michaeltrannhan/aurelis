@@ -187,8 +187,13 @@ struct MainWindowView: View {
                         }
                         .padding(12)
                         .frame(width: 220, alignment: .leading)
-                        .background(device.isDefault ? AuroraConsoleDesign.nightDeck : Color.white.opacity(0.65), in: RoundedRectangle(cornerRadius: 12))
-                        .foregroundStyle(device.isDefault ? .white : .primary)
+                        .background(
+                            device.isDefault
+                                ? Color.accentColor.opacity(0.16)
+                                : AuroraConsoleDesign.panel,
+                            in: RoundedRectangle(cornerRadius: 12)
+                        )
+                        .foregroundStyle(.primary)
                     }
                     .buttonStyle(.plain)
                     .disabled(device.isDefault)

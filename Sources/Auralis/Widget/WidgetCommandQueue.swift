@@ -31,9 +31,19 @@ enum WidgetCommandQueue {
             return false
         }
 
+        // A v6 command receives its sequence while holding an advisory POSIX
+        // lock shared by the extension and host. The file is the monotonic
+        // source of truth across separate widget processes.
+        let publishedCommand: WidgetCommand
+        if command.schemaVersion == WidgetCommand.currentSchemaVersion, command.sequence == 0 {
+            publishedCommand = command.assigning(sequence: try nextSequence(layout: layout))
+        } else {
+            publishedCommand = command
+        }
+
         let data: Data
         do {
-            data = try WidgetWireCodec.makeEncoder().encode(command)
+            data = try WidgetWireCodec.makeEncoder().encode(publishedCommand)
         } catch {
             throw WidgetIPCError.cannotEncode("command", error)
         }
@@ -196,6 +206,44 @@ enum WidgetCommandQueue {
         }
     }
 
+    static func resolvedCommand(for claim: WidgetCommandClaim, layout: WidgetSharedLayout) -> WidgetCommand? {
+        guard let data = try? Data(contentsOf: layout.resolutionURL(for: claim.commandID)) else { return nil }
+        guard let resolution = try? WidgetWireCodec.makeDecoder().decode(WidgetCommandResolution.self, from: data),
+              resolution.commandID == claim.commandID else { return nil }
+        return resolution.command
+    }
+
+    static func persistResolution(
+        _ command: WidgetCommand,
+        for claim: WidgetCommandClaim,
+        layout: WidgetSharedLayout
+    ) throws {
+        guard command.id == claim.commandID, !command.requiresAbsoluteResolution else {
+            throw WidgetIPCError.invalidCommandFile(claim.fileURL.lastPathComponent)
+        }
+        let destination = layout.resolutionURL(for: claim.commandID)
+        if FileManager.default.fileExists(atPath: destination.path) { return }
+        let resolution = WidgetCommandResolution(commandID: claim.commandID, command: command)
+        let data: Data
+        do {
+            data = try WidgetWireCodec.makeEncoder().encode(resolution)
+        } catch {
+            throw WidgetIPCError.cannotEncode("command resolution", error)
+        }
+        let stagingURL = layout.stagingURL.appendingPathComponent(
+            "resolution-\(claim.commandID.uuidString.lowercased())-\(UUID().uuidString.lowercased()).tmp"
+        )
+        do {
+            try data.write(to: stagingURL)
+            if try !atomicRenameExclusive(from: stagingURL, to: destination) {
+                try? FileManager.default.removeItem(at: stagingURL)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: stagingURL)
+            throw WidgetIPCError.cannotWrite(destination, error)
+        }
+    }
+
     private static func jsonFiles(in directory: URL) throws -> [URL] {
         do {
             return try FileManager.default.contentsOfDirectory(
@@ -217,6 +265,32 @@ enum WidgetCommandQueue {
         try? FileManager.default.moveItem(at: url, to: quarantineURL)
     }
 
+    private static func nextSequence(layout: WidgetSharedLayout) throws -> UInt64 {
+        let descriptor = Darwin.open(layout.sequenceURL.path, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR)
+        guard descriptor >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer { Darwin.close(descriptor) }
+        guard flock(descriptor, LOCK_EX) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer { _ = flock(descriptor, LOCK_UN) }
+
+        let existingData = try Data(contentsOf: layout.sequenceURL)
+        let existing = UInt64(String(decoding: existingData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        guard existing < UInt64.max else { throw WidgetIPCError.cannotWrite(layout.sequenceURL, POSIXError(.EOVERFLOW)) }
+        let next = existing + 1
+        guard ftruncate(descriptor, 0) == 0, lseek(descriptor, 0, SEEK_SET) >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        let bytes = Array("\(next)\n".utf8)
+        let written = bytes.withUnsafeBytes { Darwin.write(descriptor, $0.baseAddress, $0.count) }
+        guard written == bytes.count, fsync(descriptor) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        return next
+    }
+
     /// Darwin's exclusive rename gives publication and claiming one atomic
     /// winner without exposing partially-written files or replacing work.
     private static func atomicRenameExclusive(from source: URL, to destination: URL) throws -> Bool {
@@ -230,4 +304,9 @@ enum WidgetCommandQueue {
         let code = POSIXErrorCode(rawValue: errno) ?? .EIO
         throw POSIXError(code)
     }
+}
+
+private struct WidgetCommandResolution: Codable, Equatable, Sendable {
+    let commandID: UUID
+    let command: WidgetCommand
 }

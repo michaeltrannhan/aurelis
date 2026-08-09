@@ -36,6 +36,8 @@ struct WidgetSharedLayout: Equatable, Sendable {
     var pendingURL: URL { rootURL.appendingPathComponent("pending", isDirectory: true) }
     var claimedURL: URL { rootURL.appendingPathComponent("claimed", isDirectory: true) }
     var resultsURL: URL { rootURL.appendingPathComponent("results", isDirectory: true) }
+    var resolutionsURL: URL { rootURL.appendingPathComponent("resolutions", isDirectory: true) }
+    var sequenceURL: URL { rootURL.appendingPathComponent("command-sequence") }
 
     func pendingCommandURL(for id: UUID) -> URL {
         pendingURL.appendingPathComponent(Self.fileName(for: id))
@@ -47,6 +49,10 @@ struct WidgetSharedLayout: Equatable, Sendable {
 
     func resultURL(for id: UUID) -> URL {
         resultsURL.appendingPathComponent(Self.fileName(for: id))
+    }
+
+    func resolutionURL(for id: UUID) -> URL {
+        resolutionsURL.appendingPathComponent(Self.fileName(for: id))
     }
 
     static func fileName(for id: UUID) -> String {
@@ -130,7 +136,7 @@ enum WidgetSharedContainer {
 
     static func prepare(_ layout: WidgetSharedLayout, fileManager: FileManager = .default) throws {
         do {
-            for url in [layout.rootURL, layout.stagingURL, layout.pendingURL, layout.claimedURL, layout.resultsURL] {
+            for url in [layout.rootURL, layout.stagingURL, layout.pendingURL, layout.claimedURL, layout.resultsURL, layout.resolutionsURL] {
                 try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
             }
         } catch {

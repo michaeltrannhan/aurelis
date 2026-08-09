@@ -553,7 +553,7 @@ struct WidgetAppRow: View {
             WidgetLevelMeter(level: app.level, isMuted: app.isMuted)
                 .frame(width: 8, height: 22)
 
-            Button(intent: SetAppMutedIntent(appID: app.id, muted: !app.isMuted)) {
+            Button(intent: ToggleAppMutedIntent(appID: app.id)) {
                 Image(systemName: app.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                     .font(.system(size: 12))
                     .foregroundStyle(app.isMuted ? Color.red : Color.secondary)
@@ -565,7 +565,7 @@ struct WidgetAppRow: View {
                 WidgetMixerPresentation.muteLabel(name: app.displayName, isMuted: app.isMuted)
             )
 
-            Button(intent: SetAppVolumeIntent(appID: app.id, volume: steppedVolume(-1))) {
+            Button(intent: AdjustAppVolumeIntent(appID: app.id, delta: -volumeStep)) {
                 Image(systemName: "minus")
                     .font(.system(size: 10, weight: .bold))
                     .frame(width: 18, height: 22)
@@ -581,7 +581,7 @@ struct WidgetAppRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 32, alignment: .trailing)
 
-            Button(intent: SetAppVolumeIntent(appID: app.id, volume: steppedVolume(1))) {
+            Button(intent: AdjustAppVolumeIntent(appID: app.id, delta: volumeStep)) {
                 Image(systemName: "plus")
                     .font(.system(size: 10, weight: .bold))
                     .frame(width: 18, height: 22)

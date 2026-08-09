@@ -305,12 +305,14 @@ public enum WidgetCommandTargetType: String, Codable, Equatable, Sendable {
     case host
 }
 
-/// Absolute actions make duplicate delivery and replay after a host crash
-/// harmless. Relative UI gestures are converted to these values in the widget
-/// from the snapshot that rendered the control.
+/// Relative actions are resolved by the host to one durable absolute command
+/// before execution. This means crash recovery can replay the absolute value
+/// without applying a second relative step.
 public enum WidgetCommandAction: Codable, Equatable, Sendable {
     case setMuted(Bool)
     case setVolume(Double)
+    case toggleMuted
+    case adjustVolume(Double)
     case setBoost(Double)
     case setEQBandGain(band: Int, gain: Double)
     case selectOutput
@@ -324,7 +326,7 @@ public enum WidgetCommandAction: Codable, Equatable, Sendable {
     }
 
     private enum Kind: String, Codable {
-        case setMuted, setVolume, setBoost, setEQBandGain, selectOutput, applyProfile
+        case setMuted, setVolume, toggleMuted, adjustVolume, setBoost, setEQBandGain, selectOutput, applyProfile
         case assignProfileToCurrentOutput, revertProfileChanges, refresh
     }
 
@@ -336,6 +338,10 @@ public enum WidgetCommandAction: Codable, Equatable, Sendable {
             self = .setMuted(try container.decode(Bool.self, forKey: .value))
         case .setVolume:
             self = .setVolume(try container.decode(Double.self, forKey: .value))
+        case .toggleMuted:
+            self = .toggleMuted
+        case .adjustVolume:
+            self = .adjustVolume(try container.decode(Double.self, forKey: .value))
         case .setBoost:
             self = .setBoost(try container.decode(Double.self, forKey: .value))
         case .setEQBandGain:
@@ -364,6 +370,11 @@ public enum WidgetCommandAction: Codable, Equatable, Sendable {
             try container.encode(value, forKey: .value)
         case let .setVolume(value):
             try container.encode(Kind.setVolume, forKey: .type)
+            try container.encode(value, forKey: .value)
+        case .toggleMuted:
+            try container.encode(Kind.toggleMuted, forKey: .type)
+        case let .adjustVolume(value):
+            try container.encode(Kind.adjustVolume, forKey: .type)
             try container.encode(value, forKey: .value)
         case let .setBoost(value):
             try container.encode(Kind.setBoost, forKey: .type)
@@ -410,12 +421,16 @@ public enum WidgetCommandValidationError: String, Error, Codable, Equatable, Loc
 
 /// Versioned per-file command envelope used by the widget command directory.
 public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
-    public static let currentSchemaVersion = 5
+    public static let currentSchemaVersion = 6
+    public static let minimumSupportedSchemaVersion = 5
     public static let defaultLifetime: TimeInterval = 30
     public static let maximumLifetime: TimeInterval = 120
 
     public let schemaVersion: Int
     public let id: UUID
+    /// POSIX-lock allocated at queue publication. v5 commands decode as zero
+    /// and remain supported for one compatibility release.
+    public let sequence: UInt64
     public let createdAt: Date
     public let expiresAt: Date
     public let targetType: WidgetCommandTargetType
@@ -425,6 +440,7 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
     public init(
         schemaVersion: Int = WidgetCommand.currentSchemaVersion,
         id: UUID = UUID(),
+        sequence: UInt64 = 0,
         createdAt: Date = Date(),
         expiresAt: Date? = nil,
         targetType: WidgetCommandTargetType,
@@ -433,11 +449,63 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
     ) {
         self.schemaVersion = schemaVersion
         self.id = id
+        self.sequence = sequence
         self.createdAt = createdAt
         self.expiresAt = expiresAt ?? createdAt.addingTimeInterval(Self.defaultLifetime)
         self.targetType = targetType
         self.targetIdentity = targetIdentity
         self.action = action
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, id, sequence, createdAt, expiresAt, targetType, targetIdentity, action
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            schemaVersion: try container.decode(Int.self, forKey: .schemaVersion),
+            id: try container.decode(UUID.self, forKey: .id),
+            sequence: try container.decodeIfPresent(UInt64.self, forKey: .sequence) ?? 0,
+            createdAt: try container.decode(Date.self, forKey: .createdAt),
+            expiresAt: try container.decode(Date.self, forKey: .expiresAt),
+            targetType: try container.decode(WidgetCommandTargetType.self, forKey: .targetType),
+            targetIdentity: try container.decodeIfPresent(String.self, forKey: .targetIdentity),
+            action: try container.decode(WidgetCommandAction.self, forKey: .action)
+        )
+    }
+
+    public func replacing(action: WidgetCommandAction) -> WidgetCommand {
+        WidgetCommand(
+            schemaVersion: schemaVersion,
+            id: id,
+            sequence: sequence,
+            createdAt: createdAt,
+            expiresAt: expiresAt,
+            targetType: targetType,
+            targetIdentity: targetIdentity,
+            action: action
+        )
+    }
+
+    public func assigning(sequence: UInt64) -> WidgetCommand {
+        WidgetCommand(
+            schemaVersion: schemaVersion,
+            id: id,
+            sequence: sequence,
+            createdAt: createdAt,
+            expiresAt: expiresAt,
+            targetType: targetType,
+            targetIdentity: targetIdentity,
+            action: action
+        )
+    }
+
+    public var requiresAbsoluteResolution: Bool {
+        switch action {
+        case .toggleMuted, .adjustVolume: true
+        default: false
+        }
     }
 
     public static func app(
@@ -620,7 +688,7 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
     }
 
     public func validate(now: Date = Date()) throws {
-        guard schemaVersion == Self.currentSchemaVersion else {
+        guard (Self.minimumSupportedSchemaVersion...Self.currentSchemaVersion).contains(schemaVersion) else {
             throw WidgetCommandValidationError.unsupportedSchema
         }
         let created = createdAt.timeIntervalSinceReferenceDate
@@ -649,11 +717,16 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
             guard value.isFinite, (0...1).contains(value) else {
                 throw WidgetCommandValidationError.invalidValue
             }
-        case (.app, .setMuted):
+        case (.app, .setMuted), (.app, .toggleMuted):
             try Self.requireIdentity(identity)
         case let (.app, .setVolume(value)):
             try Self.requireIdentity(identity)
             guard value.isFinite, (0...1).contains(value) else {
+                throw WidgetCommandValidationError.invalidValue
+            }
+        case let (.app, .adjustVolume(value)):
+            try Self.requireIdentity(identity)
+            guard schemaVersion == Self.currentSchemaVersion, value.isFinite, (-1...1).contains(value), value != 0 else {
                 throw WidgetCommandValidationError.invalidValue
             }
         case let (.app, .setBoost(value)):
@@ -668,11 +741,16 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
                   (-24...24).contains(gain) else {
                 throw WidgetCommandValidationError.invalidValue
             }
-        case (.outputDevice, .setMuted):
+        case (.outputDevice, .setMuted), (.outputDevice, .toggleMuted):
             try Self.requireIdentity(identity)
         case let (.outputDevice, .setVolume(value)):
             try Self.requireIdentity(identity)
             guard value.isFinite, (0...1).contains(value) else {
+                throw WidgetCommandValidationError.invalidValue
+            }
+        case let (.outputDevice, .adjustVolume(value)):
+            try Self.requireIdentity(identity)
+            guard schemaVersion == Self.currentSchemaVersion, value.isFinite, (-1...1).contains(value), value != 0 else {
                 throw WidgetCommandValidationError.invalidValue
             }
         case (.outputDevice, .selectOutput):

@@ -282,6 +282,49 @@ struct SetAppVolumeIntent: AppIntent {
     }
 }
 
+struct ToggleAppMutedIntent: AppIntent {
+    static let title: LocalizedStringResource = "Toggle App Mute"
+    static let description = IntentDescription("Toggle an app's mute state from the widget.")
+    static var isDiscoverable: Bool { false }
+
+    @Parameter(title: "Application Identifier")
+    var appID: String
+
+    init() { self.appID = "" }
+    init(appID: String) { self.appID = appID }
+
+    func perform() async throws -> some IntentResult {
+        guard let command = WidgetIntentCommandFactory.toggleAppMuted(appID: appID) else {
+            return .result()
+        }
+        try WidgetIntentCommandSender.enqueue(command)
+        return .result()
+    }
+}
+
+struct AdjustAppVolumeIntent: AppIntent {
+    static let title: LocalizedStringResource = "Adjust App Volume"
+    static let description = IntentDescription("Adjust an app's volume from the widget.")
+    static var isDiscoverable: Bool { false }
+
+    @Parameter(title: "Application Identifier")
+    var appID: String
+
+    @Parameter(title: "Volume Delta")
+    var delta: Double
+
+    init() { self.appID = ""; self.delta = 0 }
+    init(appID: String, delta: Double) { self.appID = appID; self.delta = delta }
+
+    func perform() async throws -> some IntentResult {
+        guard let command = WidgetIntentCommandFactory.adjustAppVolume(appID: appID, by: delta) else {
+            return .result()
+        }
+        try WidgetIntentCommandSender.enqueue(command)
+        return .result()
+    }
+}
+
 struct SetEQBandGainAppIntent: AppIntent {
     static let title: LocalizedStringResource = "Set EQ Band Gain"
     static let description = IntentDescription("Set one 10-band EQ gain from the widget.")

@@ -63,6 +63,117 @@ final class WidgetCommandQueueTests: XCTestCase {
         XCTAssertEqual(outcome.processed, expectedIDs)
         XCTAssertTrue(WidgetCommandQueue.pendingCommandIDs(layout: layout).isEmpty)
         XCTAssertTrue(expectedIDs.allSatisfy { WidgetCommandQueue.result(for: $0, layout: layout)?.status == .applied })
+
+    }
+
+    @MainActor
+    func testV6CommandsExecuteBySequenceRatherThanTimestampOrIdentifier() async throws {
+        let layout = try makeLayout()
+        let now = Date()
+        let first = WidgetCommand(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            sequence: 2,
+            createdAt: now.addingTimeInterval(-10),
+            targetType: .app,
+            targetIdentity: "music",
+            action: .setVolume(0.2)
+        )
+        let second = WidgetCommand(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            sequence: 1,
+            createdAt: now,
+            targetType: .app,
+            targetIdentity: "music",
+            action: .setVolume(0.1)
+        )
+        try WidgetCommandQueue.enqueue(first, layout: layout)
+        try WidgetCommandQueue.enqueue(second, layout: layout)
+        var executed: [UInt64] = []
+        let processor = WidgetCommandProcessor(
+            layout: layout,
+            execute: { executed.append($0.sequence) },
+            publishSnapshot: { now }
+        )
+
+        _ = await processor.drain()
+
+        XCTAssertEqual(executed, [1, 2])
+    }
+
+    func testConcurrentV6PublicationsReceiveUniqueMonotonicSequences() async throws {
+        let layout = try makeLayout()
+        let commands = (0..<100).map { index in
+            WidgetCommand.app(identity: "app-\(index)", action: .setVolume(0.5))
+        }
+        let published = try await withThrowingTaskGroup(of: Bool.self, returning: [Bool].self) { group in
+            for command in commands {
+                group.addTask {
+                    try WidgetCommandQueue.enqueue(command, layout: layout)
+                }
+            }
+            var results: [Bool] = []
+            for try await result in group { results.append(result) }
+            return results
+        }
+        XCTAssertTrue(published.allSatisfy { $0 })
+
+        let sequences = try WidgetCommandQueue.claimAvailable(layout: layout)
+            .map { try WidgetCommandQueue.readCommand($0).sequence }
+            .sorted()
+        XCTAssertEqual(sequences, Array(1...100).map(UInt64.init))
+    }
+
+    @MainActor
+    func testRelativeVolumeResolutionIsDurableAndCrashReplayDoesNotCompound() async throws {
+        let layout = try makeLayout()
+        let command = WidgetCommand(
+            sequence: 9,
+            targetType: .app,
+            targetIdentity: "music",
+            action: .adjustVolume(0.1)
+        )
+        try WidgetCommandQueue.enqueue(command, layout: layout)
+        var currentVolume = 0.5
+        var resolveCount = 0
+        let crashingProcessor = WidgetCommandProcessor(
+            layout: layout,
+            execute: { resolved in
+                guard case let .setVolume(value) = resolved.action else {
+                    return XCTFail("Relative action reached execution")
+                }
+                currentVolume = value
+            },
+            resolve: { unresolved in
+                resolveCount += 1
+                return unresolved.replacing(action: .setVolume(currentVolume + 0.1))
+            },
+            publishSnapshot: { throw WidgetIPCError.cannotWrite(layout.snapshotURL, CocoaError(.fileWriteUnknown)) }
+        )
+
+        _ = await crashingProcessor.drain()
+        XCTAssertEqual(currentVolume, 0.6, accuracy: 0.000_001)
+        XCTAssertEqual(resolveCount, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: layout.resolutionURL(for: command.id).path))
+
+        let recoveredProcessor = WidgetCommandProcessor(
+            layout: layout,
+            execute: { resolved in
+                guard case let .setVolume(value) = resolved.action else {
+                    return XCTFail("Relative action reached recovery execution")
+                }
+                currentVolume = value
+            },
+            resolve: { _ in
+                resolveCount += 1
+                return command.replacing(action: .setVolume(0))
+            },
+            publishSnapshot: { Date() }
+        )
+
+        _ = await recoveredProcessor.drain()
+        XCTAssertEqual(currentVolume, 0.6, accuracy: 0.000_001)
+        XCTAssertEqual(resolveCount, 1)
+        XCTAssertEqual(WidgetCommandQueue.result(for: command.id, layout: layout)?.status, .applied)
     }
 
     @MainActor
@@ -325,7 +436,8 @@ final class WidgetCommandQueueTests: XCTestCase {
 
         XCTAssertEqual(store.issues.last?.id, "widget-ipc-configuration")
         XCTAssertEqual(store.issues.last?.severity, .error)
-        XCTAssertTrue(store.issues.last?.message.contains("App Group missing.group is unavailable") == true)
+        XCTAssertEqual(store.issues.last?.message, "Couldn’t complete that change. Try again.")
+        XCTAssertFalse(store.issues.last?.message.contains("missing.group") == true)
     }
 
     @MainActor

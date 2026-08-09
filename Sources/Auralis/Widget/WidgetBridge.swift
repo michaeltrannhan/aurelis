@@ -73,6 +73,10 @@ final class WidgetBridge: ObservableObject {
                 guard let store else { throw WidgetBridgeError.storeUnavailable }
                 try await WidgetCommandStoreExecutor.apply(command, to: store)
             },
+            resolve: { [weak store] command in
+                guard let store else { throw WidgetBridgeError.storeUnavailable }
+                return try WidgetCommandStoreExecutor.resolve(command, in: store)
+            },
             publishSnapshot: { [weak self] in
                 guard let self else { throw WidgetBridgeError.storeUnavailable }
                 return try await self.writeSnapshotNow(hostState: .running)

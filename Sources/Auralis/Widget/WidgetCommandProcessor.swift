@@ -29,12 +29,14 @@ struct WidgetCommandDrainReport: Equatable, Sendable {
 /// replayed on the next drain; all actions are absolute, so replay is safe.
 actor WidgetCommandProcessor {
     typealias Execute = @MainActor @Sendable (WidgetCommand) async throws -> Void
+    typealias Resolve = @MainActor @Sendable (WidgetCommand) async throws -> WidgetCommand
     typealias PublishSnapshot = @MainActor @Sendable () async throws -> Date
     typealias ResultPublished = @MainActor @Sendable (WidgetCommandResult) -> Void
 
     private let layout: WidgetSharedLayout
     private let now: @Sendable () -> Date
     private let execute: Execute
+    private let resolve: Resolve
     private let publishSnapshot: PublishSnapshot
     private let resultPublished: ResultPublished
 
@@ -42,12 +44,14 @@ actor WidgetCommandProcessor {
         layout: WidgetSharedLayout,
         now: @escaping @Sendable () -> Date = Date.init,
         execute: @escaping Execute,
+        resolve: @escaping Resolve = { $0 },
         publishSnapshot: @escaping PublishSnapshot,
         resultPublished: @escaping ResultPublished = { _ in }
     ) {
         self.layout = layout
         self.now = now
         self.execute = execute
+        self.resolve = resolve
         self.publishSnapshot = publishSnapshot
         self.resultPublished = resultPublished
     }
@@ -88,6 +92,15 @@ actor WidgetCommandProcessor {
         }
 
         ready.sort { lhs, rhs in
+            let leftSequence = lhs.command.sequence
+            let rightSequence = rhs.command.sequence
+            if leftSequence != 0, rightSequence != 0, leftSequence != rightSequence {
+                return leftSequence < rightSequence
+            }
+            if leftSequence != 0, rightSequence == 0 { return true }
+            if leftSequence == 0, rightSequence != 0 { return false }
+            // v5 has no sequence; preserve legacy deterministic ordering for
+            // its one-release compatibility window.
             if lhs.command.createdAt != rhs.command.createdAt {
                 return lhs.command.createdAt < rhs.command.createdAt
             }
@@ -96,7 +109,8 @@ actor WidgetCommandProcessor {
 
         for item in ready {
             do {
-                try await execute(item.command)
+                let executionCommand = try await resolvedCommand(for: item)
+                try await execute(executionCommand)
             } catch {
                 let snapshotDate = try? await publishSnapshot()
                 do {
@@ -141,6 +155,24 @@ actor WidgetCommandProcessor {
         return report
     }
 
+    private func resolvedCommand(
+        for item: (claim: WidgetCommandClaim, command: WidgetCommand)
+    ) async throws -> WidgetCommand {
+        guard item.command.requiresAbsoluteResolution else { return item.command }
+        if let persisted = WidgetCommandQueue.resolvedCommand(for: item.claim, layout: layout) {
+            return persisted
+        }
+        let resolved = try await resolve(item.command)
+        guard resolved.id == item.command.id,
+              resolved.sequence == item.command.sequence,
+              resolved.schemaVersion == item.command.schemaVersion,
+              !resolved.requiresAbsoluteResolution else {
+            throw WidgetCommandExecutionError.unsupportedAction
+        }
+        try WidgetCommandQueue.persistResolution(resolved, for: item.claim, layout: layout)
+        return WidgetCommandQueue.resolvedCommand(for: item.claim, layout: layout) ?? resolved
+    }
+
     private func publishTerminalResult(
         for claim: WidgetCommandClaim,
         status: WidgetCommandResultStatus,
@@ -164,6 +196,37 @@ actor WidgetCommandProcessor {
 
 @MainActor
 enum WidgetCommandStoreExecutor {
+    static func resolve(_ command: WidgetCommand, in store: AudioControlStore) throws -> WidgetCommand {
+        switch (command.targetType, command.action) {
+        case (.app, .toggleMuted):
+            let identity = try appIdentity(for: command, store: store)
+            guard let row = store.displayRows.first(where: { $0.identity == identity }) else {
+                throw WidgetCommandExecutionError.appNotFound(identity.rawValue)
+            }
+            return command.replacing(action: .setMuted(!row.settings.isMuted))
+        case let (.app, .adjustVolume(delta)):
+            let identity = try appIdentity(for: command, store: store)
+            guard let row = store.displayRows.first(where: { $0.identity == identity }) else {
+                throw WidgetCommandExecutionError.appNotFound(identity.rawValue)
+            }
+            return command.replacing(action: .setVolume(min(max(row.settings.volume + delta, 0), 1)))
+        case (.outputDevice, .toggleMuted):
+            guard let identity = command.targetIdentity,
+                  let state = store.deviceVolumeStates[identity] else {
+                throw WidgetCommandExecutionError.outputDeviceNotFound(command.targetIdentity ?? "")
+            }
+            return command.replacing(action: .setMuted(!state.isMuted))
+        case let (.outputDevice, .adjustVolume(delta)):
+            guard let identity = command.targetIdentity,
+                  let state = store.deviceVolumeStates[identity] else {
+                throw WidgetCommandExecutionError.outputDeviceNotFound(command.targetIdentity ?? "")
+            }
+            return command.replacing(action: .setVolume(min(max(state.volume + delta, 0), 1)))
+        default:
+            return command
+        }
+    }
+
     static func apply(_ command: WidgetCommand, to store: AudioControlStore) async throws {
         switch (command.targetType, command.action) {
         case let (.app, .setMuted(muted)):

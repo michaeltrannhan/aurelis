@@ -20,6 +20,18 @@ public enum WidgetIntentCommandFactory {
         appCommand(appID: appID, action: .setVolume(volume), now: now)
     }
 
+    public static func toggleAppMuted(appID: String, now: Date = Date()) -> WidgetCommand? {
+        appCommand(appID: appID, action: .toggleMuted, now: now)
+    }
+
+    public static func adjustAppVolume(
+        appID: String,
+        by delta: Double,
+        now: Date = Date()
+    ) -> WidgetCommand? {
+        appCommand(appID: appID, action: .adjustVolume(delta), now: now)
+    }
+
     public static func setAppBoost(
         appID: String,
         boost: Double,

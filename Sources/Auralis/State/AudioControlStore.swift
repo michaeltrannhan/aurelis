@@ -73,6 +73,11 @@ final class AudioControlStore: ObservableObject {
     @Published private(set) var devices: [AudioDeviceSnapshot] = []
     @Published private(set) var displayRows: [DisplayableAppRow] = []
     @Published private(set) var operationState: AudioOperationState = .idle
+    @Published private(set) var healthSnapshot = AudioHealthSnapshot(
+        phase: .starting,
+        message: "Starting audio discovery…",
+        isRefreshing: false
+    )
     @Published private(set) var issues: [AudioIssue] = []
     @Published private(set) var permissionState: AudioCapturePermissionState = .unknown
     @Published private(set) var deviceVolumeStates: [String: OutputVolumeState] = [:]
@@ -95,7 +100,27 @@ final class AudioControlStore: ObservableObject {
     private var completedShutdownReport: AudioShutdownReport?
     private var lastObservedDefaultOutputDeviceID: String?
     private var lastAvailableOutputDeviceIDs: Set<String> = []
+    private var isRefreshInProgress = false
+    private var hasCompletedInitialRefresh = false
+    private var latestReadyMessage = "Audio ready"
     private(set) var topologyRefreshCount = 0
+
+    private lazy var appControlCoordinator = AppControlCommandCoordinator(
+        currentSettings: { [weak self] identity in
+            self?.settings.appSettings[identity]
+        },
+        publishProjection: { [weak self] identity, projected in
+            self?.publishAppControlProjection(projected, for: identity)
+        },
+        apply: { [weak self] identity, desired, baseline in
+            guard let self else { throw CancellationError() }
+            return try await self.commitAppControlProjection(
+                desired,
+                baseline: baseline,
+                for: identity
+            )
+        }
+    )
 
     private struct EditLookup: Hashable {
         let app: AudioAppIdentity
@@ -196,7 +221,7 @@ final class AudioControlStore: ObservableObject {
                     message: notice.message,
                     severity: .warning
                 )
-                operationState = .degraded(notice.message)
+                refreshDerivedHealth()
             }
             InternalDiagnostics.record(
                 "persistence",
@@ -208,7 +233,7 @@ final class AudioControlStore: ObservableObject {
                 settings = settingsStore.defaultSettings()
                 let message = "This app cannot read the newer settings file at \(settingsStore.settingsURL.path). It was left unchanged; update Auralis before saving settings."
                 reportIssue(id: "settings-version", domain: .persistence, message: message, severity: .error)
-                operationState = .degraded(message)
+                refreshDerivedHealth()
             } else {
                 reportPersistenceFailure(error, id: "settings-load")
             }
@@ -229,11 +254,16 @@ final class AudioControlStore: ObservableObject {
 
     private func refreshUnlocked() async throws {
         guard completedShutdownReport == nil else { throw AudioControlStoreError.shuttingDown }
+        isRefreshInProgress = true
+        refreshDerivedHealth()
+        defer {
+            isRefreshInProgress = false
+            refreshDerivedHealth()
+        }
         InternalDiagnostics.record(
             "audio",
             "refresh.begin permissionAllowsTaps=\(permissionState.allowsProcessTaps)"
         )
-        operationState = .refreshing
         let engineSnapshot: AudioEngineSnapshot
         do {
             engineSnapshot = try await engine.fetchSnapshot(
@@ -242,7 +272,6 @@ final class AudioControlStore: ObservableObject {
             )
         } catch {
             let message = "Backend error: \(error.localizedDescription)"
-            operationState = .failed(message)
             reportIssue(id: "refresh", domain: .backend, message: message, severity: .error, recovery: .retry)
             throw error
         }
@@ -259,6 +288,7 @@ final class AudioControlStore: ObservableObject {
                 )
             }
         devices = engineSnapshot.backend.devices
+        hasCompletedInitialRefresh = true
         deviceVolumeStates = engineSnapshot.output.devices
         let currentDefaultOutputID = devices.first(where: \.isDefault)?.id
         let currentOutputDeviceIDs = Set(devices.map(\.id))
@@ -326,15 +356,8 @@ final class AudioControlStore: ObservableObject {
             dismissIssue(id: "tap-synchronization")
         }
 
-        if let persistenceIssue {
-            operationState = .degraded("Couldn’t save discovered audio state: \(persistenceIssue)")
-        } else if let tapIssue = engineSnapshot.tapIssue {
-            operationState = .degraded("Tap setup error: \(tapIssue)")
-        } else if let restoreIssue = engineSnapshot.restoreIssue {
-            operationState = .degraded("Audio settings restore error: \(restoreIssue)")
-        } else {
-            operationState = .ready(engineSnapshot.statusMessage)
-        }
+        latestReadyMessage = engineSnapshot.statusMessage
+        _ = persistenceIssue
         rebuildDisplayRows()
         InternalDiagnostics.record(
             "audio",
@@ -460,7 +483,6 @@ final class AudioControlStore: ObservableObject {
             "audioCapture state=\(String(describing: permissionState)) allowsTaps=\(permissionState.allowsProcessTaps)"
         )
         if !permissionState.allowsProcessTaps {
-            operationState = .degraded(permissionState.summary)
             reportIssue(
                 id: "audio-permission",
                 domain: .permission,
@@ -474,9 +496,7 @@ final class AudioControlStore: ObservableObject {
 
     func requestAudioCapturePermission() {
         permissionState = permissions.requestAudioCapture()
-        operationState = permissionState.allowsProcessTaps
-            ? .ready(permissionState.summary)
-            : .degraded(permissionState.summary)
+        refreshDerivedHealth()
         launchIntent { store in
             do {
                 try await store.withMutationGate {
@@ -549,6 +569,68 @@ final class AudioControlStore: ObservableObject {
             scheduleEditPreview(key)
         } else {
             launchIntent { store in try? await store.setVolume(volume, for: identity) }
+        }
+    }
+
+    /// Accepts a discrete external control synchronously, publishes its
+    /// projection in the same main-actor turn, and delegates durable work to
+    /// one ordered coordinator.
+    func submitAppControl(
+        _ action: AppControlAction,
+        target: AudioAppIdentity,
+        source: ControlSource
+    ) -> ControlReceipt {
+        InternalDiagnostics.record("control", "submit source=\(String(describing: source)) target=\(target.rawValue)")
+        return appControlCoordinator.submit(
+            action: action,
+            target: target,
+            step: settings.customization.volumeStep.fraction
+        )
+    }
+
+    func controlResult(for receipt: ControlReceipt) async -> ControlResult {
+        await appControlCoordinator.result(for: receipt)
+    }
+
+    private func publishAppControlProjection(_ projected: AppAudioSettings, for identity: AudioAppIdentity) {
+        ensureSettings(for: identity, in: &settings)
+        settings.appSettings[identity] = projected.normalized
+        updateActiveDeviceContext(in: &settings)
+        rebuildDisplayRows()
+    }
+
+    private func commitAppControlProjection(
+        _ projected: AppAudioSettings,
+        baseline: AppAudioSettings,
+        for identity: AudioAppIdentity
+    ) async throws -> AppAudioSettings {
+        await waitUntilReady()
+        return try await withMutationGate {
+            var desired = settings
+            ensureSettings(for: identity, in: &desired)
+            desired.appSettings[identity] = projected.normalized
+            updateActiveDeviceContext(in: &desired)
+            let volumeChanged = projected.volume != baseline.volume
+            let muteChanged = projected.isMuted != baseline.isMuted
+            let desiredCommands = [
+                volumeChanged ? AudioBackendCommand.setVolume(identity, projected.volume) : nil,
+                muteChanged ? AudioBackendCommand.setMuted(identity, projected.isMuted) : nil
+            ].compactMap { $0 }
+            let compensationCommands = [
+                muteChanged ? AudioBackendCommand.setMuted(identity, baseline.isMuted) : nil,
+                volumeChanged ? AudioBackendCommand.setVolume(identity, baseline.volume) : nil
+            ].compactMap { $0 }
+            guard !desiredCommands.isEmpty else { return projected.normalized }
+            try await performSettingsTransaction(
+                desired: desired,
+                issueID: "external-control-\(identity.rawValue)",
+                engineDomain: .backend,
+                app: identity,
+                engineWork: { [engine] in try await engine.apply(desiredCommands) },
+                finalize: { _ in },
+                compensate: { [engine] _ in try await engine.apply(compensationCommands) }
+            )
+            return projected.normalized
         }
     }
 
@@ -2207,7 +2289,6 @@ final class AudioControlStore: ObservableObject {
         device: String? = nil
     ) {
         let message = "Couldn’t apply change: \(error.localizedDescription)"
-        operationState = .degraded(message)
         reportIssue(
             id: id,
             domain: domain,
@@ -2225,7 +2306,6 @@ final class AudioControlStore: ObservableObject {
         app: AudioAppIdentity? = nil
     ) {
         let message = "Couldn’t save settings: \(error.localizedDescription)"
-        operationState = .degraded(message)
         reportIssue(
             id: id,
             domain: .persistence,
@@ -2245,29 +2325,47 @@ final class AudioControlStore: ObservableObject {
         device: String? = nil,
         recovery: AudioRecoveryAction? = nil
     ) {
+        let userFacingMessage = UserFacingFailure.message(from: message)
         let issue = AudioIssue(
             id: id,
             domain: domain,
             severity: severity,
             affectedApp: app,
             affectedDeviceID: device,
-            message: message,
+            message: userFacingMessage,
             recovery: recovery
         )
         let previous = issues.first { $0.id == id }
         issues.removeAll { $0.id == id }
         issues.append(issue)
         guard previous != issue else { return }
-        let diagnostic = "issue id=\(id) domain=\(domain.rawValue) message=\(message)"
+        let diagnostic = "issue id=\(id) domain=\(domain.rawValue) technical=\(message)"
         switch severity {
         case .warning:
             InternalDiagnostics.warning("issue", diagnostic)
         case .error:
             InternalDiagnostics.error("issue", diagnostic)
         }
+        refreshDerivedHealth()
     }
 
-    func dismissIssue(id: String) { issues.removeAll { $0.id == id } }
+    func dismissIssue(id: String) {
+        issues.removeAll { $0.id == id }
+        refreshDerivedHealth()
+    }
+
+    private func refreshDerivedHealth() {
+        let snapshot = AudioHealthReducer.reduce(AudioHealthInputs(
+            permissionState: permissionState,
+            issues: issues,
+            isRefreshing: isRefreshInProgress,
+            hasCompletedInitialRefresh: hasCompletedInitialRefresh,
+            appCount: appSnapshots.count,
+            readyMessage: latestReadyMessage
+        ))
+        healthSnapshot = snapshot
+        operationState = snapshot.compatibilityOperationState
+    }
 
     func reportWidgetIPCConfigurationError(_ message: String?) {
         let id = "widget-ipc-configuration"

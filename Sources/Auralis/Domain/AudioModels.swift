@@ -141,7 +141,7 @@ struct AudioDeviceSnapshot: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
-enum BoostLevel: Double, CaseIterable, Codable, Identifiable, Sendable {
+enum BoostLevel: Double, CaseIterable, Codable, Identifiable, Hashable, Sendable {
     case x1 = 1
     case x2 = 2
     case x3 = 3

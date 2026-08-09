@@ -207,6 +207,14 @@ final class AuralisApplicationDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard !AuralisRuntimeEnvironment.isRunningTests else { return }
+        guard let lifecycle else { return }
+        lifecycle.store.recheckPermissionsOnActivation()
+        guard lifecycle.store.settings.customization.mediaKeysEnabled else { return }
+        Task { await lifecycle.applySettings() }
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !AuralisRuntimeEnvironment.isRunningTests else { return .terminateNow }
         guard let lifecycle else { return .terminateNow }

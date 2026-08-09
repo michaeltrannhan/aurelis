@@ -1188,6 +1188,35 @@ final class AudioControlStoreTests: XCTestCase {
         XCTAssertEqual(store.settings.appSettings[editor]?.volume ?? -1, 1, accuracy: 0.001)
     }
 
+    func testSubmitProjectsRelativeVolumeSynchronously() async throws {
+        let music = AudioAppIdentity(rawValue: "com.example.Music")
+        let backend = MockAudioBackend(apps: [
+            AudioAppSnapshot(identity: music, displayName: "Music", isActive: true, level: 0.4)
+        ])
+        let store = makeStore(backend: backend, permissionClient: grantedClient())
+        await store.waitUntilReady()
+        store.refreshPermissionState()
+        try await store.refresh()
+        try await store.setVolume(0.5, for: music)
+
+        let receipt = store.submit(
+            ControlCommand(
+                target: .app(music),
+                mutation: .adjustVolume(0.1),
+                source: .ui
+            )
+        )
+        XCTAssertTrue(receipt.accepted)
+        XCTAssertEqual(receipt.projected?.volume ?? -1, 0.6, accuracy: 0.0001)
+
+        let result = await store.result(for: receipt.id)
+        if case let .applied(state) = result {
+            XCTAssertEqual(state.volume ?? -1, 0.6, accuracy: 0.0001)
+        } else {
+            XCTFail("expected applied control result, got \(result)")
+        }
+    }
+
     private func grantedClient() -> FakePermissionClient {
         FakePermissionClient(state: AudioCapturePermissionState(screenCapture: .granted, audioUsageDescription: .present))
     }

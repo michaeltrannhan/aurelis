@@ -13,7 +13,7 @@ enum EQGainRange: Double, CaseIterable, Codable, Identifiable, Sendable {
     }
 }
 
-struct EQCurve: Codable, Equatable, Sendable {
+struct EQCurve: Codable, Equatable, Hashable, Sendable {
     static let bandCount = 10
     static let frequencies = ["31", "63", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"]
 

@@ -172,9 +172,16 @@ final class CustomizationTests: XCTestCase {
     func testControlSettingsDefaultToEnabledSafeValues() {
         let customization = AppCustomization()
 
-        XCTAssertTrue(customization.mediaKeysEnabled)
+        // New installs keep media keys off until enabled in Controls settings.
+        XCTAssertFalse(customization.mediaKeysEnabled)
         XCTAssertTrue(customization.hotkeysEnabled)
         XCTAssertEqual(customization.menuBarIconStyle, .speaker)
+    }
+
+    func testMissingMediaKeysFieldPreservesLegacyEnabledDefault() throws {
+        let json = Data(#"{"appearance":"system"}"#.utf8)
+        let decoded = try JSONDecoder().decode(AppCustomization.self, from: json)
+        XCTAssertTrue(decoded.mediaKeysEnabled)
     }
 
     func testOutputControlPresentationUsesExplicitCapabilities() {

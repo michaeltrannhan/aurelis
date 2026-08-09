@@ -34,8 +34,12 @@ enum AudioIssueDomain: String, Equatable, Sendable {
     case externalControl
 }
 
-enum AudioRecoveryAction: Equatable {
+enum AudioRecoveryAction: Equatable, Sendable {
     case retry
+    case refreshAudio
+    case relaunchAfterPermissionChange
+    case replayMutation(ControlCommand)
+    case tryControlAgain
     case retryExternalControls
     case requestAudioPermission
     case openAudioPrivacySettings
@@ -45,7 +49,7 @@ enum AudioRecoveryAction: Equatable {
     case ignoreApp(AudioAppIdentity)
 }
 
-struct AudioIssue: Identifiable, Equatable {
+struct AudioIssue: Identifiable, Equatable, Sendable {
     let id: String
     let domain: AudioIssueDomain
     let severity: AudioIssueSeverity
@@ -53,4 +57,22 @@ struct AudioIssue: Identifiable, Equatable {
     let affectedDeviceID: String?
     let message: String
     let recovery: AudioRecoveryAction?
+
+    init(
+        id: String,
+        domain: AudioIssueDomain,
+        severity: AudioIssueSeverity,
+        affectedApp: AudioAppIdentity? = nil,
+        affectedDeviceID: String? = nil,
+        message: String,
+        recovery: AudioRecoveryAction? = nil
+    ) {
+        self.id = id
+        self.domain = domain
+        self.severity = severity
+        self.affectedApp = affectedApp
+        self.affectedDeviceID = affectedDeviceID
+        self.message = UserFacingFailure.sanitizePublicMessage(message)
+        self.recovery = recovery
+    }
 }

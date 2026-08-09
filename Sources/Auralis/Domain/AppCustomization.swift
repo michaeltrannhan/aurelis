@@ -220,7 +220,7 @@ struct AppCustomization: Codable, Equatable, Sendable {
         volumeStep: VolumeStep = .fivePercent,
         showInactiveApps: Bool = true,
         backendMode: BackendMode = .coreAudioDiscovery,
-        mediaKeysEnabled: Bool = true,
+        mediaKeysEnabled: Bool = false,
         hotkeysEnabled: Bool = true,
         menuBarIconStyle: MenuBarIconStyle = .speaker
     ) {

@@ -15,32 +15,130 @@ concurrency:
 
 jobs:
   strict-concurrency:
-    runs-on: macos-14
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - run: Scripts/run-verification.sh strict
-
-  thread-sanitizer:
-    runs-on: macos-14
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - run: Scripts/run-verification.sh tsan
-
-  sustained-audio-stress:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 20
     env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - run: Scripts/install-ci-xcodegen.sh
+      - run: Scripts/ci-toolchain-preflight.sh
+      - run: Scripts/run-verification.sh strict
+      - name: Upload verification diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: strict-concurrency-diagnostics
+          path: .build/logs
+          if-no-files-found: ignore
+
+  thread-sanitizer:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - run: Scripts/install-ci-xcodegen.sh
+      - run: Scripts/ci-toolchain-preflight.sh
+      - run: Scripts/run-verification.sh tsan
+      - name: Upload verification diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: thread-sanitizer-diagnostics
+          path: .build/logs
+          if-no-files-found: ignore
+
+  address-sanitizer:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - run: Scripts/install-ci-xcodegen.sh
+      - run: Scripts/ci-toolchain-preflight.sh
+      - run: Scripts/run-verification.sh asan
+      - name: Upload verification diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: address-sanitizer-diagnostics
+          path: .build/logs
+          if-no-files-found: ignore
+
+  undefined-behavior-sanitizer:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - run: Scripts/install-ci-xcodegen.sh
+      - run: Scripts/ci-toolchain-preflight.sh
+      - run: Scripts/run-verification.sh ubsan
+      - name: Upload verification diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: undefined-behavior-sanitizer-diagnostics
+          path: .build/logs
+          if-no-files-found: ignore
+
+  coverage:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - run: Scripts/install-ci-xcodegen.sh
+      - run: Scripts/ci-toolchain-preflight.sh
+      - run: Scripts/run-verification.sh coverage
+      - name: Upload verification diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-diagnostics
+          path: .build/logs
+          if-no-files-found: ignore
+
+  sustained-audio-stress:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
       AURALIS_STRESS_ITERATIONS: 100000
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - run: Scripts/install-ci-xcodegen.sh
+      - run: Scripts/ci-toolchain-preflight.sh
       - run: Scripts/run-verification.sh stress
+      - name: Upload verification diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sustained-audio-stress-diagnostics
+          path: .build/logs
+          if-no-files-found: ignore
 
   generated-xcode-products:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
-      - uses: actions/checkout@v4
-      - run: brew install xcodegen
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - run: Scripts/install-ci-xcodegen.sh
+      - run: Scripts/ci-toolchain-preflight.sh
       - run: Scripts/run-verification.sh xcode
+      - name: Upload verification diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: generated-xcode-products-diagnostics
+          path: |
+            .build/logs
+            .build/xcode/**/*.xcresult
+          if-no-files-found: ignore

@@ -8,8 +8,8 @@ set -eu
 #   Scripts/build-debug-app.sh
 #   Scripts/build-release-app.sh
 #   CODE_SIGNING_ALLOWED=NO Scripts/build-release-app.sh
-#   ARCHS="arm64 x86_64" DEVELOPMENT_TEAM=TEAMID \
-#     SIGN_IDENTITY="Apple Development" Scripts/build-debug-app.sh
+#   DEVELOPMENT_TEAM=TEAMID SIGN_IDENTITY="Apple Development" \
+#     Scripts/build-debug-app.sh
 
 fail() {
     printf 'error: %s\n' "$*" >&2
@@ -274,8 +274,8 @@ APP_URL_NAME=${APP_URL_NAME:-$APP_BUNDLE_ID}
 APP_URL_SCHEME=${APP_URL_SCHEME:-auralis}
 MARKETING_VERSION=${MARKETING_VERSION:-0.0.8}
 CURRENT_PROJECT_VERSION=${CURRENT_PROJECT_VERSION:-8}
-ARCHS=${ARCHS:-$(/usr/bin/uname -m)}
-DESTINATION=${DESTINATION:-platform=macOS,arch=$(/usr/bin/uname -m)}
+ARCHS=${ARCHS:-arm64}
+DESTINATION=${DESTINATION:-platform=macOS,arch=arm64}
 SIGN_IDENTITY=${SIGN_IDENTITY:-Apple Development}
 CODE_SIGNING_ALLOWED=${CODE_SIGNING_ALLOWED:-YES}
 DEVELOPMENT_TEAM=${DEVELOPMENT_TEAM:-}
@@ -342,6 +342,11 @@ case "$CONFIGURATION" in
     Debug|Release) ;;
     *) fail "CONFIGURATION must be Debug or Release" ;;
 esac
+
+[ "$(/usr/bin/uname -m)" = arm64 ] ||
+    fail "Auralis supports Apple Silicon hosts only (expected arm64)"
+[ "$ARCHS" = arm64 ] ||
+    fail "Auralis supports only ARCHS=arm64"
 
 if [ -z "$AURALIS_DIAGNOSTICS_MODE" ]; then
     if [ "$CONFIGURATION" = Debug ]; then
@@ -455,9 +460,11 @@ else
     LOG_STEM=$CONFIGURATION-$SIGNING_MODE
 fi
 XCODEGEN_LOG=$LOG_DIR/xcodegen-$LOG_STEM.log
+PROJECT_LIST_LOG=$LOG_DIR/xcodebuild-$LOG_STEM-list.log
 BUILD_LOG=$LOG_DIR/xcodebuild-$LOG_STEM.log
 TEST_LOG=$LOG_DIR/xcodebuild-$LOG_STEM-tests.log
 SUMMARY_LOG=$LOG_DIR/xcodebuild-$LOG_STEM.summary.log
+TEST_RESULT_BUNDLE=$BUILD_ROOT/$SCHEME-$CONFIGURATION-tests.xcresult
 if [ -n "$OUTPUT_APP_OVERRIDE" ]; then
     case "$OUTPUT_APP_OVERRIDE" in
         /*) OUTPUT_APP=$OUTPUT_APP_OVERRIDE ;;
@@ -519,6 +526,7 @@ if [ "$VALIDATE_ONLY" = NO ]; then
         "$DERIVED_DATA_DIR" \
         "$TEST_DERIVED_DATA_DIR" \
         "$TARGETED_TEST_DERIVED_DATA_DIR" \
+        "$TEST_RESULT_BUNDLE" \
         "$STAGED_OUTPUT_APP"
     if [ "$LEGACY_UNSCOPED_OUTPUT_APP" != "$OUTPUT_APP" ]; then
         retire_widget_bundle "$LEGACY_UNSCOPED_OUTPUT_APP/Contents/PlugIns/$WIDGET_NAME.appex"
@@ -548,6 +556,15 @@ if [ "$VALIDATE_ONLY" = NO ]; then
     fi
 
     require_file "$PROJECT_PATH/project.pbxproj"
+    printf '==> Listing generated %s schemes\n' "$PROJECT"
+    set +e
+    run_xcodebuild -list -project "$PROJECT_PATH" >"$PROJECT_LIST_LOG" 2>&1
+    xcodebuild_status=$?
+    set -e
+    if [ "$xcodebuild_status" -ne 0 ]; then
+        /usr/bin/tail -n 40 "$PROJECT_LIST_LOG" >&2
+        fail "xcodebuild -list failed with status $xcodebuild_status (full log: $PROJECT_LIST_LOG)"
+    fi
     SCHEME_PATH=$PROJECT_PATH/xcshareddata/xcschemes/$SCHEME.xcscheme
     require_file "$SCHEME_PATH"
     /usr/bin/grep -q "$TEST_NAME.xctest" "$SCHEME_PATH" ||
@@ -602,6 +619,7 @@ if [ "$RUN_TESTS" = YES ]; then
         -configuration "$CONFIGURATION" \
         -destination "$DESTINATION" \
         -derivedDataPath "$TEST_DERIVED_DATA_DIR" \
+        -resultBundlePath "$TEST_RESULT_BUNDLE" \
         ARCHS="$ARCHS" \
         ONLY_ACTIVE_ARCH=NO \
         MARKETING_VERSION="$MARKETING_VERSION" \

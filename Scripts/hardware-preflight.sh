@@ -5,6 +5,11 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 cd "$REPOSITORY_ROOT"
 
+[ "$(/usr/bin/uname -m)" = arm64 ] || {
+    printf 'error: Auralis supports Apple Silicon hosts only (expected arm64)\n' >&2
+    exit 1
+}
+
 MIN_PHYSICAL_OUTPUTS=${MIN_PHYSICAL_OUTPUTS:-2}
 BUILD_DIRECTORY=$REPOSITORY_ROOT/.build/verification
 PROBE=$BUILD_DIRECTORY/AuralisHardwarePreflight

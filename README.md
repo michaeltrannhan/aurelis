@@ -12,8 +12,12 @@ Accessibility, then add the widget from the gallery.
 
 ## Install
 
-Prerequisites: Xcode, one valid Apple Development code-signing identity in the
-login keychain, and [xcodegen](https://github.com/yonaskolb/XcodeGen):
+Prerequisites: an Apple-silicon Mac running macOS 14.2 or later, Xcode 16.4 or
+newer (Swift 6 or newer), one valid Apple Development code-signing identity in
+the login keychain, and [XcodeGen 2.45.4](https://github.com/yonaskolb/XcodeGen/releases/tag/2.45.4).
+The SwiftPM package, generated Xcode project, and distribution scripts are
+arm64-only; Intel Macs are unsupported. CI uses Xcode 16.4 as its reproducible
+baseline and permits newer local Xcode versions.
 
 ```sh
 brew install xcodegen
@@ -44,8 +48,8 @@ Useful flags: `--skip-build` reinstalls the last Release build, `--no-launch` in
 ## Build
 
 ```sh
-swift build
-swift test
+swift build --arch arm64
+swift test --arch arm64
 ```
 
 Run the debug executable:
@@ -91,7 +95,9 @@ Both use the shared internal builder to regenerate the Xcode project via
 [xcodegen](https://github.com/yonaskolb/XcodeGen), build via `xcodebuild`,
 validate the embedded widget and serialized App Intent parameters, and verify
 live shared-container access between separately signed app and widget probes.
-Install xcodegen first:
+Install the pinned XcodeGen version first (CI downloads its official
+`xcodegen.zip` and validates SHA-256
+`090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef`):
 
 ```sh
 brew install xcodegen
@@ -218,6 +224,9 @@ Run the complete automated matrix, or one independently repeatable gate:
 Scripts/run-verification.sh all
 Scripts/run-verification.sh strict
 Scripts/run-verification.sh tsan
+Scripts/run-verification.sh asan
+Scripts/run-verification.sh ubsan
+Scripts/run-verification.sh coverage
 Scripts/run-verification.sh stress
 Scripts/run-verification.sh xcode
 Scripts/run-verification.sh signed

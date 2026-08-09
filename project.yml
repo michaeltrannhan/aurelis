@@ -9,6 +9,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6.0"
+    ARCHS: arm64
     MARKETING_VERSION: "0.0.8"
     CURRENT_PROJECT_VERSION: "8"
     CODE_SIGN_STYLE: Manual

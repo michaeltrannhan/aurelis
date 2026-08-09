@@ -83,7 +83,8 @@ final class ExternalControlsCoordinatorTests: XCTestCase {
         XCTAssertTrue(mediaIssue.message.contains("Synthetic media-tap failure"))
         let hotkeyIssue = try XCTUnwrap(store.issues.first { $0.id == "global-hotkeys" })
         XCTAssertEqual(hotkeyIssue.recovery, .retryExternalControls)
-        XCTAssertTrue(hotkeyIssue.message.contains("Mute (OSStatus -9876)"))
+        XCTAssertFalse(hotkeyIssue.message.localizedCaseInsensitiveContains("osstatus"))
+        XCTAssertFalse(hotkeyIssue.message.contains("-9876"))
 
         media.startResult = .running
         hotkeys.report = .success

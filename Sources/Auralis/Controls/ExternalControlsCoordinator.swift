@@ -163,9 +163,9 @@ final class ExternalControlsCoordinator: ObservableObject {
 
     private func handleMediaKey(_ event: MediaKeyEvent) {
         switch event {
-        case .volumeUp: perform(.volumeUp)
-        case .volumeDown: perform(.volumeDown)
-        case .muteToggle: perform(.muteToggle)
+        case .volumeUp: perform(.volumeUp, source: .mediaKey)
+        case .volumeDown: perform(.volumeDown, source: .mediaKey)
+        case .muteToggle: perform(.muteToggle, source: .mediaKey)
         }
     }
 
@@ -182,37 +182,36 @@ final class ExternalControlsCoordinator: ObservableObject {
                 return
             }
             store?.reportExternalControlIssue(id: "window-routing", message: nil)
-        case .targetAppVolumeUp: perform(.volumeUp)
-        case .targetAppVolumeDown: perform(.volumeDown)
-        case .targetAppMuteToggle: perform(.muteToggle)
+        case .targetAppVolumeUp: perform(.volumeUp, source: .hotkey)
+        case .targetAppVolumeDown: perform(.volumeDown, source: .hotkey)
+        case .targetAppMuteToggle: perform(.muteToggle, source: .hotkey)
         }
     }
 
-    private func perform(_ action: AppControlAction) {
+    private func perform(_ action: AppControlAction, source: ControlSource) {
         guard let store else { return }
         let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        AppControlStoreExecutor(store: store).perform(
+        let receipt = AppControlStoreExecutor(store: store).perform(
             action,
             frontmostBundleID: frontmost,
-            selectedAppID: nil
+            selectedAppID: nil,
+            source: source
         )
-        presentHUD()
+        presentHUD(receipt: receipt)
     }
 
-    private func presentHUD() {
-        guard let store, !isPopupVisible else { return }
+    private func presentHUD(receipt: ControlReceipt) {
+        guard let store,
+              !isPopupVisible,
+              receipt.accepted,
+              let identity = receipt.target,
+              let projected = receipt.projectedSettings else { return }
         let rows = store.displayRows
-        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        guard let identity = AppControlTargetResolver.resolve(
-            rows: rows,
-            levels: store.appLevels.levels,
-            frontmostBundleID: frontmost,
-            selectedAppID: nil
-        ), let row = rows.first(where: { $0.identity == identity }) else { return }
+        guard let row = rows.first(where: { $0.identity == identity }) else { return }
         hud.show(VolumeHUDState(
             appName: row.displayName,
-            volume: row.settings.volume,
-            isMuted: row.settings.isMuted
+            volume: projected.volume,
+            isMuted: projected.isMuted
         ))
     }
 }

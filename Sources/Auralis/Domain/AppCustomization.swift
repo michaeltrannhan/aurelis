@@ -142,8 +142,8 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "General"
         case .audio: return "Audio"
-        case .shortcuts: return "Shortcuts"
-        case .about: return "About"
+        case .shortcuts: return "Controls"
+        case .about: return "About & diagnostics"
         }
     }
 

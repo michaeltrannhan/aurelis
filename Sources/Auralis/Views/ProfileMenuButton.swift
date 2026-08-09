@@ -50,8 +50,8 @@ struct ProfileMenuButton: View {
                 .frame(width: 24, height: 24)
         }
         .menuStyle(.borderlessButton)
-        .help("Device contexts and presets")
-        .accessibilityLabel("Device contexts and presets")
+        .help("Outputs and presets")
+        .accessibilityLabel("Outputs and presets")
         .alert("Save Current as Preset", isPresented: $isCreatingGlobalProfile) {
             TextField("Profile name", text: $profileName)
             Button("Save") {
@@ -121,7 +121,7 @@ struct ProfileMenuButton: View {
         }
         .buttonStyle(.plain)
         .help("Manage device contexts and presets")
-        .accessibilityLabel("Device contexts and presets")
+        .accessibilityLabel("Outputs and presets")
         .accessibilityValue(profileButtonTitle)
         .accessibilityIdentifier("auralis.main.profiles")
         .popover(isPresented: $isShowingProfilePanel, arrowEdge: .bottom) {
@@ -255,7 +255,7 @@ struct ProfileManagementPopover: View {
                 }
                 .buttonStyle(.plain)
                 .help("Close")
-                .accessibilityLabel("Close profiles")
+                .accessibilityLabel("Close outputs and presets")
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)

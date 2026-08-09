@@ -11,43 +11,29 @@ struct FirstRunView: View {
         VStack(alignment: .leading, spacing: 0) {
             hero
 
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 18) {
                 PermissionStatusView(store: store)
 
-                VStack(alignment: .leading, spacing: 14) {
-                    step(
-                        index: 1,
-                        title: "Grant audio capture",
-                        text: "Screen & System Audio Recording lets Auralis process other apps’ audio. It never records or stores anything.",
-                        icon: "waveform.badge.mic",
-                        done: store.permissionState.allowsProcessTaps
-                    )
-                    step(
-                        index: 2,
-                        title: "Media keys are optional",
-                        text: "Accessibility is only needed for media-key control. Skip it and every popup control still works.",
-                        icon: "keyboard",
-                        done: controls.accessibilityTrusted
-                    )
-                    HStack(spacing: 8) {
-                        Button(controls.accessibilityTrusted ? "Accessibility Granted" : "Request Accessibility") {
-                            controls.requestAccessibilityAccess()
-                        }
-                        .disabled(controls.accessibilityTrusted)
-                        Button("Open System Settings") {
-                            controls.openAccessibilitySettings()
-                        }
-                    }
-                    .controlSize(.small)
-                    .padding(.leading, 42)
-                    step(
-                        index: 3,
-                        title: "Play something and refresh",
-                        text: "Start audio in Music or a browser, refresh the app list, then move that app’s volume slider.",
-                        icon: "play.circle",
-                        done: false
-                    )
-                }
+                step(
+                    index: 1,
+                    title: "Grant audio capture",
+                    text: "Screen & System Audio Recording lets Auralis hear which apps are playing. Nothing is recorded or stored.",
+                    icon: "waveform.badge.mic",
+                    done: store.permissionState.allowsProcessTaps
+                )
+                step(
+                    index: 2,
+                    title: "Discover audible apps",
+                    text: store.displayRows.isEmpty
+                        ? "Play audio in Music or a browser. Auralis refreshes automatically once permission is granted."
+                        : "Found \(store.displayRows.count) app\(store.displayRows.count == 1 ? "" : "s"). You can start mixing now.",
+                    icon: "dot.radiowaves.left.and.right",
+                    done: !store.displayRows.isEmpty
+                )
+
+                Text("Media-key control stays off until you enable it later in Controls settings.")
+                    .font(AuralisTypography.content(.caption))
+                    .foregroundStyle(.secondary)
             }
             .padding(24)
 
@@ -55,12 +41,12 @@ struct FirstRunView: View {
 
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(store.permissionState.allowsProcessTaps ? "You’re all set." : "You can finish this later in Settings.")
-                        .font(.caption)
+                    Text(store.permissionState.allowsProcessTaps ? "Ready when you are." : "You can continue in discovery mode.")
+                        .font(AuralisTypography.content(.caption))
                         .foregroundStyle(.secondary)
                     if let commitErrorMessage {
                         Text(commitErrorMessage)
-                            .font(.caption2)
+                            .font(AuralisTypography.content(.caption2))
                             .foregroundStyle(.red)
                     }
                 }
@@ -68,19 +54,35 @@ struct FirstRunView: View {
                 Button {
                     completeOnboarding()
                 } label: {
+                    Text(isCommitting ? "Saving…" : "Continue in discovery mode")
+                }
+                .disabled(isCommitting)
+                .frame(minHeight: AuralisSpacing.controlMinHit)
+
+                Button {
+                    completeOnboarding()
+                } label: {
                     HStack(spacing: 6) {
                         if isCommitting { ProgressView().controlSize(.small) }
-                        Text(isCommitting ? "Saving…" : "Get Started")
+                        Text(isCommitting ? "Saving…" : "Start mixing")
                     }
                 }
                 .disabled(isCommitting)
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
+                .tint(AuralisColor.signalCyan)
+                .frame(minHeight: AuralisSpacing.controlMinHit)
             }
             .padding(.horizontal, 24)
             .padding(.vertical, 16)
         }
-        .frame(width: 500)
+        .frame(width: 520)
+        .background(AuralisColor.canvas)
+        .task {
+            if store.permissionState.allowsProcessTaps {
+                store.refreshIntent()
+            }
+        }
     }
 
     private func completeOnboarding() {
@@ -92,7 +94,7 @@ struct FirstRunView: View {
                 try await store.completeOnboarding()
                 dismiss()
             } catch {
-                commitErrorMessage = "Couldn’t save setup: \(error.localizedDescription)"
+                commitErrorMessage = UserFacingFailure.from(error, title: "Couldn’t save setup").message
                 isCommitting = false
             }
         }
@@ -103,12 +105,12 @@ struct FirstRunView: View {
             Image(systemName: "waveform.circle.fill")
                 .font(.system(size: 46))
                 .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(AuralisColor.harmonicViolet)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Welcome to Auralis")
-                    .font(.title2.bold())
-                Text("Per-app volume, mute, output routing, boost, and a 10-band EQ — right from your menu bar.")
-                    .font(.callout)
+                Text("Auralis")
+                    .font(AuralisTypography.workspaceTitle(28))
+                Text("Grant audio access, then start mixing audible apps. Media keys stay optional.")
+                    .font(AuralisTypography.content(.callout))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -118,7 +120,7 @@ struct FirstRunView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             LinearGradient(
-                colors: [Color.accentColor.opacity(0.18), Color.accentColor.opacity(0.02)],
+                colors: [AuralisColor.harmonicViolet.opacity(0.18), AuralisColor.signalCyan.opacity(0.08)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -129,19 +131,21 @@ struct FirstRunView: View {
         HStack(alignment: .top, spacing: 12) {
             ZStack {
                 Circle()
-                    .fill(done ? Color.green.opacity(0.18) : Color.accentColor.opacity(0.12))
+                    .fill(done ? Color.green.opacity(0.18) : AuralisColor.signalCyan.opacity(0.12))
                     .frame(width: 30, height: 30)
                 Image(systemName: done ? "checkmark" : icon)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(done ? Color.green : Color.accentColor)
+                    .foregroundStyle(done ? Color.green : AuralisColor.signalCyan)
             }
             VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.headline)
+                Text(title).font(AuralisTypography.content(.headline))
                 Text(text)
-                    .font(.callout)
+                    .font(AuralisTypography.content(.callout))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Step \(index): \(title). \(text)")
     }
 }

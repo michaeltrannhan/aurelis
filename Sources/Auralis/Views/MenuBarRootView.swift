@@ -21,10 +21,9 @@ struct MenuBarRootView: View {
         return store.displayRows.contains { $0.identity == expandedAppID }
     }
 
+    /// Menu popup retains configured 360/400/440 density widths without expansion.
     private var popupWidth: Double {
-        hasExpandedEQ
-            ? dimensions.width
-            : store.settings.customization.popupDensity.collapsedWidth
+        dimensions.width
     }
 
     private var visibleIssues: [AudioIssue] {
@@ -66,9 +65,19 @@ struct MenuBarRootView: View {
                         }
 
                         if store.displayRows.isEmpty {
-                            ContentUnavailableView("No Apps", systemImage: "speaker.slash", description: Text("Refresh or enable inactive apps in Settings."))
-                                .frame(maxWidth: .infinity)
-                                .frame(height: PopupContentLayoutModel.emptyStateHeight)
+                            MixerEmptyStateView(
+                                state: MixerEmptyState(phase: store.mixerPhase),
+                                onRefresh: { store.refreshIntent() },
+                                onShowInactive: {
+                                    var customization = store.settings.customization
+                                    customization.showInactiveApps = true
+                                    var settings = store.settings
+                                    settings.customization = customization
+                                    store.settings = settings
+                                    store.refreshIntent()
+                                }
+                            )
+                            .frame(height: PopupContentLayoutModel.emptyStateHeight)
                         } else {
                             LazyVStack(spacing: 8) {
                                 ForEach(store.displayRows) { row in

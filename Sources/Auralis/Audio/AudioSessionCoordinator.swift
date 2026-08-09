@@ -169,8 +169,16 @@ actor AudioEngineActor {
         )
     }
 
-    /// Lightweight topology probe used to confirm that CoreAudio has settled
-    /// after a hot-plug burst before the store commits a device-context switch.
+    /// Lightweight topology revision for settle polling — no meter, listener,
+    /// routing, or profile side effects beyond reading the current snapshot.
+    func topologyRevision() throws -> TopologyRevision {
+        let snapshot = try fetchTopologySnapshot()
+        return TopologyRevision(
+            defaultOutputUID: snapshot.devices.first(where: \.isDefault)?.id,
+            availableOutputUIDs: Set(snapshot.devices.map(\.id))
+        )
+    }
+
     func fetchTopologySnapshot() throws -> AudioBackendSnapshot {
         try ensureBackend().fetchSnapshot()
     }

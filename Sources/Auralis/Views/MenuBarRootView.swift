@@ -10,6 +10,7 @@ struct MenuBarRootView: View {
     @State private var showsFirstRun = false
     @State private var availableScreenHeight: CGFloat = 700
     @State private var nav = PopupKeyboardNavModel()
+    @State private var searchText = ""
     @FocusState private var popupFocused: Bool
 
     private var dimensions: PopupDimensions {
@@ -38,7 +39,7 @@ struct MenuBarRootView: View {
     private var scrollContentHeight: Double {
         PopupContentLayoutModel.contentHeight(
             dimensions: dimensions,
-            rowCount: store.displayRows.count,
+            rowCount: popupRows.count,
             includesPermissionBanner: !store.permissionState.allowsProcessTaps,
             issueCount: visibleIssues.count,
             includesExpandedEQ: hasExpandedEQ,
@@ -53,6 +54,7 @@ struct MenuBarRootView: View {
             Divider()
 
             OutputVolumeSection(store: store, layout: .compact)
+            searchField
 
             ScrollViewReader { proxy in
                 ScrollView {
@@ -65,20 +67,24 @@ struct MenuBarRootView: View {
                             AudioIssueListView(store: store, issues: visibleIssues, compact: true)
                         }
 
-                        if store.displayRows.isEmpty {
-                            ContentUnavailableView("No Apps", systemImage: "speaker.slash", description: Text("Refresh or enable inactive apps in Settings."))
+                        if popupRows.isEmpty {
+                            ContentUnavailableView(
+                                searchText.isEmpty ? "No audible apps" : "No matching apps",
+                                systemImage: searchText.isEmpty ? "speaker.slash" : "magnifyingglass",
+                                description: Text(searchText.isEmpty ? "Refresh or show inactive apps in Settings." : "Clear search or try another app name.")
+                            )
                                 .frame(maxWidth: .infinity)
                                 .frame(height: PopupContentLayoutModel.emptyStateHeight)
                         } else {
                             LazyVStack(spacing: 8) {
-                                ForEach(store.displayRows) { row in
+                                ForEach(popupRows) { row in
                                     popupRow(row)
                                         .id(row.identity)
                                 }
                             }
                         }
 
-                        if !hasExpandedEQ && !store.displayRows.isEmpty {
+                        if !hasExpandedEQ && !popupRows.isEmpty {
                             keyboardHint
                         }
                     }
@@ -109,7 +115,7 @@ struct MenuBarRootView: View {
         .onAppear {
             controls.isPopupVisible = true
             updateAvailableScreenHeight()
-            nav.sync(apps: store.displayRows.map(\.identity), isEditing: false)
+            syncNavigation()
             popupFocused = true
             showsFirstRun = !store.settings.hasCompletedOnboarding
         }
@@ -119,8 +125,8 @@ struct MenuBarRootView: View {
         }
         .sheet(isPresented: $showsFirstRun) { FirstRunView(store: store) }
         .onChange(of: store.displayRows) { _, rows in
-            nav.sync(apps: rows.map(\.identity), isEditing: false)
-            let visibleIDs = Set(rows.map(\.identity))
+            syncNavigation()
+            let visibleIDs = Set(popupRows.map(\.identity))
             if let keyboardSelectionID, !visibleIDs.contains(keyboardSelectionID) {
                 self.keyboardSelectionID = nil
             }
@@ -150,10 +156,14 @@ struct MenuBarRootView: View {
         .onKeyPress(.escape) {
             if let expandedAppID {
                 closeEQ(for: expandedAppID)
-            } else {
-                keyboardSelectionID = nil
+                return .handled
             }
-            return .handled
+            if !searchText.isEmpty || keyboardSelectionID != nil {
+                searchText = ""
+                keyboardSelectionID = nil
+                return .handled
+            }
+            return .ignored
         }
         .accessibilityHint(PopupKeyboardNavModel.accessibilityHint)
         .accessibilityIdentifier("auralis.popup.mixer")
@@ -208,13 +218,13 @@ struct MenuBarRootView: View {
     }
 
     private func toggleMute(for identity: AudioAppIdentity) {
-        guard let row = store.displayRows.first(where: { $0.identity == identity }) else { return }
+        guard let row = popupRows.first(where: { $0.identity == identity }) else { return }
         store.setMutedIntent(!row.settings.isMuted, for: identity)
     }
 
     private func adjustSelectedVolume(by delta: Double) {
         guard let keyboardSelectionID,
-              let row = store.displayRows.first(where: { $0.identity == keyboardSelectionID }) else { return }
+              let row = popupRows.first(where: { $0.identity == keyboardSelectionID }) else { return }
         store.setVolumeIntent(row.settings.volume + delta, for: keyboardSelectionID)
     }
 
@@ -251,6 +261,43 @@ struct MenuBarRootView: View {
             Spacer(minLength: 4)
 
             headerActions
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Search apps", text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.caption)
+                .accessibilityLabel("Search app channels")
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                    syncNavigation()
+                } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear app search")
+            }
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 28)
+        .background(Color.secondary.opacity(0.09), in: RoundedRectangle(cornerRadius: 7))
+        .onChange(of: searchText) { _, _ in syncNavigation() }
+    }
+
+    private var popupRows: [DisplayableAppRow] {
+        guard !searchText.isEmpty else { return store.displayRows }
+        return store.displayRows.filter { $0.displayName.localizedCaseInsensitiveContains(searchText) }
+    }
+
+    private func syncNavigation() {
+        nav.sync(apps: popupRows.map(\.identity), isEditing: false)
+        let visibleIDs = Set(popupRows.map(\.identity))
+        if let keyboardSelectionID, !visibleIDs.contains(keyboardSelectionID) {
+            self.keyboardSelectionID = nil
         }
     }
 

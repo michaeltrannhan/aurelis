@@ -2,7 +2,6 @@ import SwiftUI
 
 struct FirstRunView: View {
     @ObservedObject var store: AudioControlStore
-    @EnvironmentObject private var controls: ExternalControlsCoordinator
     @Environment(\.dismiss) private var dismiss
     @State private var isCommitting = false
     @State private var commitErrorMessage: String?
@@ -24,28 +23,10 @@ struct FirstRunView: View {
                     )
                     step(
                         index: 2,
-                        title: "Media keys are optional",
-                        text: "Accessibility is only needed for media-key control. Skip it and every popup control still works.",
-                        icon: "keyboard",
-                        done: controls.accessibilityTrusted
-                    )
-                    HStack(spacing: 8) {
-                        Button(controls.accessibilityTrusted ? "Accessibility Granted" : "Request Accessibility") {
-                            controls.requestAccessibilityAccess()
-                        }
-                        .disabled(controls.accessibilityTrusted)
-                        Button("Open System Settings") {
-                            controls.openAccessibilitySettings()
-                        }
-                    }
-                    .controlSize(.small)
-                    .padding(.leading, 42)
-                    step(
-                        index: 3,
-                        title: "Play something and refresh",
-                        text: "Start audio in Music or a browser, refresh the app list, then move that app’s volume slider.",
+                        title: "Find audible apps",
+                        text: "Auralis automatically discovers apps playing audio after permission is granted. You can start mixing now or continue while discovery runs.",
                         icon: "play.circle",
-                        done: false
+                        done: !store.displayRows.isEmpty
                     )
                 }
             }
@@ -65,12 +46,17 @@ struct FirstRunView: View {
                     }
                 }
                 Spacer()
+                Button("Continue in discovery mode") {
+                    completeOnboarding()
+                }
+                .disabled(isCommitting)
                 Button {
+                    store.refreshIntent()
                     completeOnboarding()
                 } label: {
                     HStack(spacing: 6) {
                         if isCommitting { ProgressView().controlSize(.small) }
-                        Text(isCommitting ? "Saving…" : "Get Started")
+                        Text(isCommitting ? "Saving…" : "Start mixing")
                     }
                 }
                 .disabled(isCommitting)

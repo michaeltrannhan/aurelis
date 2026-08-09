@@ -23,6 +23,7 @@ struct AudioHealthInputs: Equatable, Sendable {
     var isRefreshing: Bool = false
     var permissionAllowsTaps: Bool = true
     var permissionDenied: Bool = false
+    var permissionMessage: String? = nil
     var discoveryFailed: Bool = false
     var discoveryFailureMessage: String? = nil
     var persistenceState: PersistenceHealthState = .clean
@@ -57,7 +58,7 @@ enum AudioHealthReducer {
         var issues: [AudioIssue] = []
 
         if inputs.permissionDenied || !inputs.permissionAllowsTaps {
-            let message = inputs.discoveryFailureMessage
+            let message = inputs.permissionMessage
                 ?? "Screen & System Audio Recording is required to control per-app audio."
             issues.append(
                 AudioIssue(
@@ -175,12 +176,19 @@ enum AudioHealthReducer {
         if inputs.isBootstrapping {
             phase = .starting
             message = "Starting…"
+        } else if inputs.discoveryFailed {
+            // Explicit discovery failure stays failed even when permission is also limited.
+            phase = .failed
+            message = UserFacingFailure.sanitizePublicMessage(
+                inputs.discoveryFailureMessage
+                    ?? issues.first(where: { $0.id == "refresh" })?.message
+                    ?? "Audio discovery failed"
+            )
         } else if hasHardFault && (inputs.permissionDenied || !inputs.permissionAllowsTaps) {
             phase = .permissionLimited
-            message = issues.first?.message ?? "Permission required"
-        } else if inputs.discoveryFailed {
-            phase = .failed
-            message = issues.first(where: { $0.id == "refresh" })?.message ?? "Audio discovery failed"
+            message = inputs.permissionMessage
+                ?? issues.first?.message
+                ?? "Permission required"
         } else if hasHardFault {
             phase = .degraded
             message = issues.first?.message ?? "Audio is degraded"

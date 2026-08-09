@@ -536,7 +536,7 @@ final class AudioControlStoreTests: XCTestCase {
 
         XCTAssertEqual(store.displayRows.map(\.identity), [music])
         if case .failed = store.operationState {} else { XCTFail("Expected failed operation state") }
-        XCTAssertEqual(store.issues.last?.recovery, .retry)
+        XCTAssertEqual(store.issues.last?.recovery, .refreshAudio)
     }
 
     func testVolumeGestureCoalescesChangesAndFlushesFinalValue() async throws {
@@ -671,7 +671,7 @@ final class AudioControlStoreTests: XCTestCase {
         XCTAssertEqual(store.issues.last?.domain, .persistence)
         XCTAssertEqual(store.issues.last?.affectedApp, music)
         XCTAssertEqual(store.issues.last?.severity, .error)
-        XCTAssertEqual(store.issues.last?.recovery, .retry)
+        XCTAssertEqual(store.issues.last?.recovery, .refreshAudio)
     }
 
     func testResetKeepsSettingsWhenBackendTeardownFails() async throws {

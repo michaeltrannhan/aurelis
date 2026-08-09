@@ -409,8 +409,8 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         healthInputs.isRefreshing = false
         healthInputs.visibleAppCount = displayRows.count
         healthInputs.statusMessage = engineSnapshot.statusMessage
-        healthInputs.tapFaults = engineSnapshot.tapIssue.map { [$0] } ?? []
-        healthInputs.backendFaults = engineSnapshot.restoreIssue.map { [$0] } ?? []
+        healthInputs.tapFaults = engineSnapshot.tapIssue.map { ["Tap setup error: \($0)"] } ?? []
+        healthInputs.backendFaults = engineSnapshot.restoreIssue.map { ["Audio settings restore error: \($0)"] } ?? []
         if let persistenceIssue {
             healthInputs.persistenceState = .failed
             healthInputs.persistenceMessage = "Couldn’t save discovered audio state: \(persistenceIssue)"
@@ -543,6 +543,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         )
         healthInputs.permissionAllowsTaps = permissionState.allowsProcessTaps
         healthInputs.permissionDenied = !permissionState.allowsProcessTaps
+        healthInputs.permissionMessage = permissionState.allowsProcessTaps ? nil : permissionState.summary
         if !permissionState.allowsProcessTaps {
             reportIssue(
                 id: "audio-permission",
@@ -560,6 +561,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         permissionState = permissions.requestAudioCapture()
         healthInputs.permissionAllowsTaps = permissionState.allowsProcessTaps
         healthInputs.permissionDenied = !permissionState.allowsProcessTaps
+        healthInputs.permissionMessage = permissionState.allowsProcessTaps ? nil : permissionState.summary
         healthInputs.statusMessage = permissionState.summary
         publishHealth()
         launchIntent { store in

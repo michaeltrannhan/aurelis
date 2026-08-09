@@ -65,7 +65,7 @@ final class CustomizationTests: XCTestCase {
     }
 
     func testSettingsTabsExposeExpectedSections() {
-        XCTAssertEqual(SettingsTab.allCases.map(\.label), ["General", "Audio", "Shortcuts", "About"])
+        XCTAssertEqual(SettingsTab.allCases.map(\.label), ["General", "Audio", "Controls", "About & diagnostics"])
         XCTAssertEqual(SettingsTab.general.systemImage, "gearshape")
         XCTAssertEqual(SettingsTab.audio.systemImage, "speaker.wave.2")
     }
@@ -226,7 +226,7 @@ final class CustomizationTests: XCTestCase {
         ]
 
         XCTAssertEqual(actions.map(AudioIssuePresentationModel.recoveryTitle), [
-            "Retry",
+            "Refresh",
             "Retry Controls",
             "Request Access",
             "Open Settings",

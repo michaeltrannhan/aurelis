@@ -75,6 +75,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
     @Published private(set) var operationState: AudioOperationState = .idle
     @Published private(set) var mixerPhase: MixerPhase = .starting
     @Published private(set) var healthSnapshot: AudioHealthSnapshot = .starting
+    @Published private(set) var storePhase: StorePhase = .booting
     @Published private(set) var issues: [AudioIssue] = []
     @Published private(set) var permissionState: AudioCapturePermissionState = .unknown
     @Published private(set) var deviceVolumeStates: [String: OutputVolumeState] = [:]
@@ -83,6 +84,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
     let channels = ChannelModelDirectory()
     private var healthInputs = AudioHealthInputs(isBootstrapping: true)
     private var coordinatorCancellable: AnyCancellable?
+    private var hostLease: AppGroupHostLease?
 
     /// Live meter levels live on their own object so the ~10 Hz stream does not
     /// invalidate views bound to this store. See [[AppLevelStore]].
@@ -115,12 +117,17 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
     }
 
     private struct TopologySignature: Equatable {
-        let defaultOutputID: String?
-        let availableOutputIDs: Set<String>
+        let revision: TopologyRevision
 
         init(_ snapshot: AudioBackendSnapshot) {
-            defaultOutputID = snapshot.devices.first(where: \.isDefault)?.id
-            availableOutputIDs = Set(snapshot.devices.map(\.id))
+            revision = TopologyRevision(
+                defaultOutputUID: snapshot.devices.first(where: \.isDefault)?.id,
+                availableOutputUIDs: Set(snapshot.devices.map(\.id))
+            )
+        }
+
+        init(_ revision: TopologyRevision) {
+            self.revision = revision
         }
     }
 
@@ -187,7 +194,8 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
     // MARK: - Control commanding
 
     func submit(_ command: ControlCommand) -> ControlReceipt {
-        guard completedShutdownReport == nil else {
+        guard storePhase == .running || storePhase == .booting,
+              completedShutdownReport == nil else {
             return .rejected(
                 target: command.target,
                 mutation: command.mutation,
@@ -232,9 +240,11 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
     private func performBootstrap() async {
         defer {
             healthInputs.isBootstrapping = false
+            if storePhase == .booting { storePhase = .running }
             publishHealth()
             bootstrapTask = nil
         }
+        storePhase = .booting
         healthInputs.isBootstrapping = true
         publishHealth()
         InternalDiagnostics.record("persistence", "bootstrap.begin")
@@ -251,6 +261,8 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                     message: notice.message,
                     severity: .warning
                 )
+            } else {
+                healthInputs.persistenceState = .clean
             }
             InternalDiagnostics.record(
                 "persistence",
@@ -468,8 +480,8 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         do {
             for sampleIndex in 0..<maximumSamples {
                 try Task.checkCancellation()
-                let snapshot = try await engine.fetchTopologySnapshot()
-                let signature = TopologySignature(snapshot)
+                let revision = try await engine.topologyRevision()
+                let signature = TopologySignature(revision)
                 if signature == previousSignature { break }
                 previousSignature = signature
                 guard sampleIndex < maximumSamples - 1 else { break }
@@ -2039,6 +2051,14 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
     }
 
     private func performShutdown() async -> AudioShutdownReport {
+        // Synchronously enter shutting-down before rejecting new commands.
+        storePhase = .shuttingDown
+        await mutationGate.cancelAll()
+
+        // Intent/edit tasks first after external controls/widget (caller order).
+        for task in intentTasks.values { task.cancel() }
+        await waitForPendingOperations()
+
         var editErrors: [String] = []
         let keys = Array(editSessions.keys)
         for key in keys {
@@ -2054,6 +2074,9 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         do {
             try await persistence.flush()
             persistenceError = nil
+            if healthInputs.persistenceState != .writeBlocked {
+                healthInputs.persistenceState = .clean
+            }
         } catch {
             persistenceError = error.localizedDescription
             reportPersistenceFailure(error, id: "shutdown-persistence")
@@ -2068,9 +2091,11 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                 domain: .tap,
                 message: "Audio shutdown left recoverable tap resources: \(teardown)",
                 severity: .error,
-                recovery: .retry
+                recovery: .refreshAudio
             )
         }
+        hostLease = nil
+        storePhase = .stopped
         return AudioShutdownReport(
             editSessionErrorDescriptions: editErrors,
             persistenceErrorDescription: persistenceError,
@@ -2260,8 +2285,8 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
 
     // MARK: - Coordination helpers and issues
 
-    private func withMutationGate<Value>(_ operation: () async throws -> Value) async rethrows -> Value {
-        await mutationGate.acquire()
+    private func withMutationGate<Value>(_ operation: () async throws -> Value) async throws -> Value {
+        try await mutationGate.acquire()
         do {
             let value = try await operation()
             await mutationGate.release()
@@ -2273,7 +2298,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
     }
 
     private func launchIntent(_ operation: @escaping @MainActor (AudioControlStore) async -> Void) {
-        guard completedShutdownReport == nil else { return }
+        guard storePhase != .shuttingDown, storePhase != .stopped, completedShutdownReport == nil else { return }
         let id = UUID()
         intentTasks[id] = Task { [weak self] in
             guard let self else { return }

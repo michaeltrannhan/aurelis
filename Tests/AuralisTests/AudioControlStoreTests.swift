@@ -1303,15 +1303,6 @@ private final class LevelProvidingBackend: AudioBackend, AudioBackendAppLevelPro
     }
 }
 
-private struct FakePermissionClient: AudioCapturePermissionClient {
-    var state: AudioCapturePermissionState
-
-    func currentState() -> AudioCapturePermissionState { state }
-    func requestScreenCaptureAccess() -> AudioCapturePermissionState { state }
-    func openPrivacySettings() {}
-    func relaunchApp() async throws {}
-}
-
 private final class EventingBackend: AudioBackend, AudioBackendUpdatePublishing {
     private var snapshots: [AudioBackendSnapshot]
     private let repeatingSnapshot: AudioBackendSnapshot?

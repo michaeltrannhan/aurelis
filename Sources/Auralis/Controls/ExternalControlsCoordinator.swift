@@ -94,7 +94,9 @@ final class ExternalControlsCoordinator: ObservableObject {
 
     private func configureMediaKeys() {
         guard let store else { return }
-        mediaKeyMonitor.onEvent = { [weak self] event in self?.handleMediaKey(event) }
+        mediaKeyMonitor.onEvent = { [weak self] event in
+            self?.handleMediaKey(event) ?? false
+        }
         mediaKeyMonitor.onOperationalFailure = { [weak self] message in
             self?.store?.reportExternalControlIssue(
                 id: "media-keys",
@@ -150,8 +152,7 @@ final class ExternalControlsCoordinator: ObservableObject {
             store.reportExternalControlIssue(id: "global-hotkeys", message: nil)
         } else {
             let details = report.failures.map { failure in
-                let target = failure.action?.label ?? "event handler"
-                return "\(target) (OSStatus \(failure.status))"
+                failure.action?.label ?? "event handler"
             }.joined(separator: ", ")
             store.reportExternalControlIssue(
                 id: "global-hotkeys",
@@ -161,11 +162,11 @@ final class ExternalControlsCoordinator: ObservableObject {
         }
     }
 
-    private func handleMediaKey(_ event: MediaKeyEvent) {
+    private func handleMediaKey(_ event: MediaKeyEvent) -> Bool {
         switch event {
-        case .volumeUp: perform(.volumeUp)
-        case .volumeDown: perform(.volumeDown)
-        case .muteToggle: perform(.muteToggle)
+        case .volumeUp: return perform(.volumeUp, source: .mediaKey)
+        case .volumeDown: return perform(.volumeDown, source: .mediaKey)
+        case .muteToggle: return perform(.muteToggle, source: .mediaKey)
         }
     }
 
@@ -182,37 +183,34 @@ final class ExternalControlsCoordinator: ObservableObject {
                 return
             }
             store?.reportExternalControlIssue(id: "window-routing", message: nil)
-        case .targetAppVolumeUp: perform(.volumeUp)
-        case .targetAppVolumeDown: perform(.volumeDown)
-        case .targetAppMuteToggle: perform(.muteToggle)
+        case .targetAppVolumeUp: _ = perform(.volumeUp, source: .hotkey)
+        case .targetAppVolumeDown: _ = perform(.volumeDown, source: .hotkey)
+        case .targetAppMuteToggle: _ = perform(.muteToggle, source: .hotkey)
         }
     }
 
-    private func perform(_ action: AppControlAction) {
-        guard let store else { return }
+    @discardableResult
+    private func perform(_ action: AppControlAction, source: ControlSource) -> Bool {
+        guard let store else { return false }
         let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        AppControlStoreExecutor(store: store).perform(
+        let receipt = AppControlStoreExecutor(store: store).perform(
             action,
             frontmostBundleID: frontmost,
-            selectedAppID: nil
+            selectedAppID: nil,
+            source: source
         )
-        presentHUD()
+        guard let receipt, receipt.accepted else { return false }
+        presentHUD(from: receipt)
+        return true
     }
 
-    private func presentHUD() {
-        guard let store, !isPopupVisible else { return }
-        let rows = store.displayRows
-        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        guard let identity = AppControlTargetResolver.resolve(
-            rows: rows,
-            levels: store.appLevels.levels,
-            frontmostBundleID: frontmost,
-            selectedAppID: nil
-        ), let row = rows.first(where: { $0.identity == identity }) else { return }
+    private func presentHUD(from receipt: ControlReceipt) {
+        guard !isPopupVisible else { return }
+        guard let projected = receipt.projected else { return }
         hud.show(VolumeHUDState(
-            appName: row.displayName,
-            volume: row.settings.volume,
-            isMuted: row.settings.isMuted
+            appName: projected.displayName ?? "Auralis",
+            volume: projected.volume ?? 0,
+            isMuted: projected.isMuted ?? false
         ))
     }
 }

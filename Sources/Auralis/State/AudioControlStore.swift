@@ -79,8 +79,10 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
     @Published private(set) var permissionState: AudioCapturePermissionState = .unknown
     @Published private(set) var deviceVolumeStates: [String: OutputVolumeState] = [:]
     @Published private(set) var contextSwitchState: AudioContextSwitchState = .idle
+    let commandCoordinator = ControlCommandCoordinator()
+    let channels = ChannelModelDirectory()
     private var healthInputs = AudioHealthInputs(isBootstrapping: true)
-    private var pendingControlResults: [UUID: Task<ControlResult, Never>] = [:]
+    private var coordinatorCancellable: AnyCancellable?
 
     /// Live meter levels live on their own object so the ~10 Hz stream does not
     /// invalidate views bound to this store. See [[AppLevelStore]].
@@ -171,6 +173,10 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         self.permissions = AudioPermissionCoordinator(client: permissionClient)
         self.settings = defaults
         self.permissionState = permissions.state
+        commandCoordinator.attach(store: self)
+        coordinatorCancellable = commandCoordinator.$actionStates.sink { [weak self] states in
+            self?.channels.apply(actionStates: states)
+        }
         rebuildDisplayRows()
         publishHealth()
         bootstrapTask = Task { [weak self] in
@@ -192,39 +198,20 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                 )
             )
         }
-
-        do {
-            let projected = try project(command)
-            let receipt = ControlReceipt.accepted(
-                target: command.target,
-                mutation: command.mutation,
-                source: command.source,
-                projected: projected
-            )
-            let receiptID = receipt.id
-            pendingControlResults[receiptID] = Task { [weak self] in
-                guard let self else { return .cancelled }
-                return await self.executeControl(command, projected: projected)
-            }
-            return receipt
-        } catch {
-            let failure = UserFacingFailure.from(error, title: "Control unavailable")
-            return .rejected(
-                target: command.target,
-                mutation: command.mutation,
-                source: command.source,
-                failure: failure
-            )
-        }
+        return commandCoordinator.submit(command)
     }
 
     func result(for receiptID: UUID) async -> ControlResult {
-        if let task = pendingControlResults[receiptID] {
-            let result = await task.value
-            pendingControlResults[receiptID] = nil
-            return result
+        await commandCoordinator.result(for: receiptID)
+    }
+
+    func executeProjectedControl(_ command: ControlCommand) async -> ControlResult {
+        do {
+            let projected = try project(command)
+            return await executeControl(command, projected: projected)
+        } catch {
+            return .rejected(UserFacingFailure.from(error))
         }
-        return .timedOut
     }
 
     func recheckPermissionsOnActivation() {
@@ -2162,6 +2149,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                 rhsID: rhs.identity.rawValue
             )
         }
+        channels.reconcile(rows: displayRows, devices: devices, volumes: deviceVolumeStates)
     }
 
     private static func deduplicatedSnapshots(_ snapshots: [AudioAppSnapshot]) -> [AudioAppSnapshot] {

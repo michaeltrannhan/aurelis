@@ -37,7 +37,8 @@ struct MediaTapRecoveryPolicy: Equatable, Sendable {
 
 @MainActor
 protocol MediaKeyMonitoring: AnyObject {
-    var onEvent: ((MediaKeyEvent) -> Void)? { get set }
+    /// Return true when the target accepted the command and the event should be swallowed.
+    var onEvent: ((MediaKeyEvent) -> Bool)? { get set }
     var onOperationalFailure: ((String) -> Void)? { get set }
     func start() -> MediaKeyMonitorStartResult
     func stop()
@@ -57,7 +58,7 @@ final class MediaKeyMonitor: MediaKeyMonitoring {
     private var recoveryWorkItem: DispatchWorkItem?
     private var recoveryPolicy: MediaTapRecoveryPolicy
 
-    var onEvent: ((MediaKeyEvent) -> Void)?
+    var onEvent: ((MediaKeyEvent) -> Bool)?
     var onOperationalFailure: ((String) -> Void)?
 
     init(
@@ -149,15 +150,14 @@ final class MediaKeyMonitor: MediaKeyMonitoring {
         _ = tap
     }
 
-    /// Returns true if a recognized media key was handled and should be
-    /// swallowed so macOS does not also show its system HUD.
+    /// Returns true if a recognized media key was accepted by a control target
+    /// and should be swallowed so macOS does not also show its system HUD.
     fileprivate func handle(cgEvent: CGEvent) -> Bool {
         guard let nsEvent = NSEvent(cgEvent: cgEvent),
               nsEvent.type == .systemDefined,
               nsEvent.subtype.rawValue == 8,
               let event = decoder.decode(data1: nsEvent.data1) else { return false }
-        onEvent?(event)
-        return true
+        return onEvent?(event) ?? false
     }
 }
 

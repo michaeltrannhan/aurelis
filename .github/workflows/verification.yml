@@ -13,34 +13,176 @@ concurrency:
   group: verification-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+
 jobs:
-  strict-concurrency:
-    runs-on: macos-14
-    timeout-minutes: 20
+  preflight:
+    runs-on: macos-15
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - run: Scripts/run-verification.sh strict
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - name: Install pinned XcodeGen
+        run: Scripts/install-xcodegen-ci.sh
+      - name: Toolchain preflight
+        run: Scripts/ci-preflight.sh
+      - name: Generate Xcode project and list schemes
+        run: |
+          xcodegen generate
+          xcodebuild -list -project Auralis.xcodeproj
+
+  strict-concurrency:
+    needs: preflight
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - name: Install pinned XcodeGen
+        run: Scripts/install-xcodegen-ci.sh
+      - name: Preflight
+        run: Scripts/ci-preflight.sh
+      - name: Strict concurrency tests
+        run: Scripts/run-verification.sh strict
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: strict-concurrency-logs
+          path: |
+            .build/logs
+            **/*.xcresult
+          if-no-files-found: ignore
 
   thread-sanitizer:
-    runs-on: macos-14
-    timeout-minutes: 30
+    needs: preflight
+    runs-on: macos-15
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
-      - run: Scripts/run-verification.sh tsan
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - name: Install pinned XcodeGen
+        run: Scripts/install-xcodegen-ci.sh
+      - name: Preflight
+        run: Scripts/ci-preflight.sh
+      - name: Thread Sanitizer
+        run: Scripts/run-verification.sh tsan
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsan-logs
+          path: |
+            .build/logs
+            **/*.xcresult
+          if-no-files-found: ignore
+
+  address-sanitizer:
+    needs: preflight
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - name: Install pinned XcodeGen
+        run: Scripts/install-xcodegen-ci.sh
+      - name: Preflight
+        run: Scripts/ci-preflight.sh
+      - name: Address Sanitizer
+        run: Scripts/run-verification.sh asan
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asan-logs
+          path: |
+            .build/logs
+            **/*.xcresult
+          if-no-files-found: ignore
+
+  undefined-behavior-sanitizer:
+    needs: preflight
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - name: Install pinned XcodeGen
+        run: Scripts/install-xcodegen-ci.sh
+      - name: Preflight
+        run: Scripts/ci-preflight.sh
+      - name: Undefined Behavior Sanitizer
+        run: Scripts/run-verification.sh ubsan
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubsan-logs
+          path: |
+            .build/logs
+            **/*.xcresult
+          if-no-files-found: ignore
 
   sustained-audio-stress:
-    runs-on: macos-14
-    timeout-minutes: 20
+    needs: preflight
+    runs-on: macos-15
+    timeout-minutes: 25
     env:
       AURALIS_STRESS_ITERATIONS: 100000
     steps:
-      - uses: actions/checkout@v4
-      - run: Scripts/run-verification.sh stress
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - name: Install pinned XcodeGen
+        run: Scripts/install-xcodegen-ci.sh
+      - name: Preflight
+        run: Scripts/ci-preflight.sh
+      - name: Sustained audio stress
+        run: Scripts/run-verification.sh stress
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress-logs
+          path: |
+            .build/logs
+            **/*.xcresult
+          if-no-files-found: ignore
 
   generated-xcode-products:
-    runs-on: macos-14
-    timeout-minutes: 30
+    needs: preflight
+    runs-on: macos-15
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
-      - run: brew install xcodegen
-      - run: Scripts/run-verification.sh xcode
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - name: Install pinned XcodeGen
+        run: Scripts/install-xcodegen-ci.sh
+      - name: Preflight
+        run: Scripts/ci-preflight.sh
+      - name: Generated Debug/Release products
+        run: Scripts/run-verification.sh xcode
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcode-product-logs
+          path: |
+            .build/logs
+            **/*.xcresult
+          if-no-files-found: ignore
+
+  coverage:
+    needs: preflight
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - name: Install pinned XcodeGen
+        run: Scripts/install-xcodegen-ci.sh
+      - name: Preflight
+        run: Scripts/ci-preflight.sh
+      - name: Coverage floor (59%)
+        run: Scripts/run-verification.sh coverage
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-logs
+          path: |
+            .build/logs
+            **/*.xcresult
+          if-no-files-found: ignore

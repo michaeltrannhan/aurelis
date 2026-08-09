@@ -2,6 +2,8 @@
 
 Auralis is a macOS SwiftUI menu-bar audio controller inspired by FineTune. It includes CoreAudio discovery and process taps, per-app volume/mute/boost/EQ, single- and multi-device routing, automatic per-output contexts, reusable preset templates, reconnect-aware output settings, global controls, typed recovery state, first-run guidance, and versioned JSON persistence.
 
+**Platform baseline:** macOS 14.2 or newer on Apple Silicon (arm64) only. Intel and universal binaries are out of scope. Hosted CI uses macOS 15 runners with Xcode 16.4 (`DEVELOPER_DIR=/Applications/Xcode_16.4.app/Contents/Developer`); newer local Xcode versions are accepted when they meet that minimum.
+
 The application, executable, Swift/Xcode targets, widget, bundle identifiers, URL scheme, and release artifacts all use the Auralis identity.
 
 Signed builds use the `com.michaeltrannhan.Auralis` and
@@ -12,11 +14,12 @@ Accessibility, then add the widget from the gallery.
 
 ## Install
 
-Prerequisites: Xcode, one valid Apple Development code-signing identity in the
-login keychain, and [xcodegen](https://github.com/yonaskolb/XcodeGen):
+Prerequisites: Xcode 16.4 or newer, one valid Apple Development code-signing
+identity in the login keychain, and [XcodeGen 2.45.4](https://github.com/yonaskolb/XcodeGen/releases/tag/2.45.4):
 
 ```sh
 brew install xcodegen
+xcodegen --version   # expect 2.45.4 for CI parity
 ```
 
 One command builds the signed Release app, installs it, registers the desktop widget, and launches Auralis:
@@ -216,21 +219,28 @@ Run the complete automated matrix, or one independently repeatable gate:
 
 ```sh
 Scripts/run-verification.sh all
+Scripts/run-verification.sh preflight
 Scripts/run-verification.sh strict
 Scripts/run-verification.sh tsan
+Scripts/run-verification.sh asan
+Scripts/run-verification.sh ubsan
 Scripts/run-verification.sh stress
 Scripts/run-verification.sh xcode
+Scripts/run-verification.sh coverage
 Scripts/run-verification.sh signed
 Scripts/run-verification.sh hardware
 ```
 
 The stress iteration count is configurable with `AURALIS_STRESS_ITERATIONS`.
+Coverage starts at a 59% global line-coverage floor (`AURALIS_COVERAGE_FLOOR`).
 The Xcode gate renders the production small, medium, and large widget views and
 runs a product-verifier fault matrix. The `signed` gate additionally exercises
 live app/widget access to the shared app-group container and distribution
 rejection paths. The read-only `hardware` gate verifies that physical outputs
 are available and the aggregate/journal starting state is clean; it does not
 replace the hands-on hardware matrix.
+Hosted GitHub Actions pins `actions/checkout` v5.0.1 and installs XcodeGen
+2.45.4 with a SHA-256-verified release zip before generating the project.
 Certificate-backed Release packaging and notarization use
 `Scripts/package-release.sh`. Before distributing, verify the signed artifact,
 notarization, permissions, audio routes, and widget behavior on physical hardware.

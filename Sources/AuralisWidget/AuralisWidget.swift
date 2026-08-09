@@ -110,8 +110,8 @@ struct AuralisMixerWidget: Widget {
     }
 }
 
-/// EQ widget — systemLarge shows a focused 10-band EQ for the first active app,
-/// with five bands per row and ±0.5 dB buttons.
+/// Quick Remote widget (technical kind preserved as AuralisEQWidget so installed
+/// large EQ widgets upgrade in place).
 struct AuralisEQWidget: Widget {
     let kind: String = "AuralisEQWidget"
 
@@ -122,8 +122,8 @@ struct AuralisEQWidget: Widget {
                     Color(nsColor: .windowBackgroundColor)
                 }
         }
-        .configurationDisplayName("Auralis EQ")
-        .description("10-band equalizer for an active audio app.")
-        .supportedFamilies([.systemLarge])
+        .configurationDisplayName("Auralis Quick Remote")
+        .description("Focused-app volume, mute, boost, route summary, and Open Inspector.")
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }

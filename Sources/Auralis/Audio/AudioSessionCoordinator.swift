@@ -169,8 +169,16 @@ actor AudioEngineActor {
         )
     }
 
-    /// Lightweight topology probe used to confirm that CoreAudio has settled
-    /// after a hot-plug burst before the store commits a device-context switch.
+    /// Lightweight topology revision for settle polling — no meter, listener,
+    /// routing, or profile side effects beyond reading the current snapshot.
+    func topologyRevision() throws -> TopologyRevision {
+        let snapshot = try fetchTopologySnapshot()
+        return TopologyRevision(
+            defaultOutputUID: snapshot.devices.first(where: \.isDefault)?.id,
+            availableOutputUIDs: Set(snapshot.devices.map(\.id))
+        )
+    }
+
     func fetchTopologySnapshot() throws -> AudioBackendSnapshot {
         try ensureBackend().fetchSnapshot()
     }
@@ -430,13 +438,11 @@ actor AudioEngineActor {
         restoredOutputDeviceUIDs.formIntersection(availableUIDs)
         let newlyAvailableUIDs = availableUIDs.subtracting(restoredOutputDeviceUIDs)
         guard !newlyAvailableUIDs.isEmpty else { return }
-        guard let output = backend as? AudioBackendOutputVolumeControlling else {
-            restoredOutputDeviceUIDs.formUnion(newlyAvailableUIDs)
-            return
-        }
+        let output = backend as? AudioBackendOutputVolumeControlling
 
         var failedUIDs = Set<String>()
-        if let preferred = settings.preferredOutputDeviceID,
+        if let output,
+           let preferred = settings.preferredOutputDeviceID,
            newlyAvailableUIDs.contains(preferred),
            snapshot.devices.contains(where: { $0.id == preferred && !$0.isDefault }) {
             do {
@@ -451,24 +457,27 @@ actor AudioEngineActor {
         }
 
         for uid in newlyAvailableUIDs {
-            guard let desired = settings.deviceSettings[uid] else {
+            let desired = settings.deviceSettings[uid]
+            do {
+                if let output, let desired {
+                    let current = try output.readOutputVolume(forUID: uid)
+                    if current.capabilities.canSetVolume {
+                        try output.setOutputVolume(desired.volume, forUID: uid)
+                    }
+                    if current.capabilities.canSetMute {
+                        try output.setOutputMuted(desired.isMuted, forUID: uid)
+                    }
+                }
+                try backend.apply(.setOutputEQ(uid, desired?.eq ?? EQCurve()))
                 if !failedUIDs.contains(uid) {
                     restoredOutputDeviceUIDs.insert(uid)
                 }
-                continue
-            }
-            do {
-                let current = try output.readOutputVolume(forUID: uid)
-                if current.capabilities.canSetVolume {
-                    try output.setOutputVolume(desired.volume, forUID: uid)
-                }
-                if current.capabilities.canSetMute {
-                    try output.setOutputMuted(desired.isMuted, forUID: uid)
-                }
-                restoredOutputDeviceUIDs.insert(uid)
             } catch {
                 failedUIDs.insert(uid)
-                issues.append("Couldn’t restore \(desired.displayName): \(error.localizedDescription)")
+                let name = desired?.displayName
+                    ?? snapshot.devices.first(where: { $0.id == uid })?.name
+                    ?? "output"
+                issues.append("Couldn’t restore \(name): \(error.localizedDescription)")
             }
         }
     }

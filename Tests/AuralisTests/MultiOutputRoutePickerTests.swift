@@ -88,11 +88,11 @@ final class MultiOutputRoutePickerTests: XCTestCase {
 
         let summary = model.summary(devices: devices)
         XCTAssertEqual(summary.title, "4 Outputs")
-        XCTAssertEqual(summary.detail, "Multi-Output (4 devices) · 2 missing")
+        XCTAssertEqual(summary.detail, "Multiple Outputs (4 devices) · 2 missing")
         XCTAssertEqual(summary.selectedCount, 4)
         XCTAssertEqual(summary.missingCount, 2)
         XCTAssertTrue(summary.isMultiOutput)
-        XCTAssertEqual(summary.accessibilityValue, "Multi-Output, 4 outputs, 2 missing")
+        XCTAssertEqual(summary.accessibilityValue, "Multiple Outputs, 4 outputs, 2 missing")
     }
 
     func testCompactSummariesCoverDefaultSingleAndMissingRoutes() {
@@ -101,8 +101,8 @@ final class MultiOutputRoutePickerTests: XCTestCase {
             devices: devices
         )
         XCTAssertEqual(defaultSummary.title, "MacBook Speakers")
-        XCTAssertEqual(defaultSummary.detail, "Follow Default (MacBook Speakers)")
-        XCTAssertEqual(defaultSummary.accessibilityValue, "Follow Default, MacBook Speakers")
+        XCTAssertEqual(defaultSummary.detail, "Follow System (MacBook Speakers)")
+        XCTAssertEqual(defaultSummary.accessibilityValue, "Follow System, MacBook Speakers")
 
         let singleSummary = MultiOutputRoutePickerModel.summary(
             for: .selectedDevice("usb"),

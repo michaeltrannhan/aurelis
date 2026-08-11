@@ -4,9 +4,9 @@ import XCTest
 @MainActor
 final class PopupKeyboardNavModelTests: XCTestCase {
     func testVisibleAndAccessibilityHintsDocumentStableReturnAndSpaceOwnership() {
-        XCTAssertTrue(PopupKeyboardNavModel.visibleKeyboardHint.contains("Return EQ"))
+        XCTAssertTrue(PopupKeyboardNavModel.visibleKeyboardHint.contains("Return Process EQ"))
         XCTAssertTrue(PopupKeyboardNavModel.visibleKeyboardHint.contains("Space mute"))
-        XCTAssertTrue(PopupKeyboardNavModel.accessibilityHint.contains("Return opens its equalizer"))
+        XCTAssertTrue(PopupKeyboardNavModel.accessibilityHint.contains("Return opens its Process EQ"))
         XCTAssertTrue(PopupKeyboardNavModel.accessibilityHint.contains("Space toggles mute"))
     }
 

@@ -33,6 +33,8 @@ final class CoreAudioPeakMeter {
 /// Format-aware, queue-confined render engine. All heap storage is allocated in
 /// `init`; `render` only performs pointer traversal, scalar DSP, `memset`, and a
 /// single atomic peak publication.
+///
+/// Signal order: Process EQ → app gain ramp → per-slice Output EQ → limiter.
 final class CoreAudioPCMRenderer {
     static let realtimeHeapAllocationBudget = 0
     /// At 48 kHz with 128-frame callbacks, 250 µs keeps one fully active tap
@@ -42,11 +44,16 @@ final class CoreAudioPCMRenderer {
     let inputFormat: CoreAudioPCMFormat
     let outputFormat: CoreAudioPCMFormat
     let maximumFrameCount: Int
+    let channelMap: CoreAudioOutputChannelMap
     let peakMeter: CoreAudioPeakMeter
 
     private let inputScratch: UnsafeMutableBufferPointer<Float>
+    private let processScratch: UnsafeMutableBufferPointer<Float>
     private let gainScratch: UnsafeMutableBufferPointer<Float>
-    private let eqProcessor: CoreAudioGraphicEQProcessor
+    private let outputSliceIndexByChannel: UnsafeMutableBufferPointer<Int32>
+    private let outputSnapshotScratch: UnsafeMutableBufferPointer<CoreAudioBiquadRenderSnapshot>
+    private let processEQProcessor: CoreAudioGraphicEQProcessor
+    private let outputEQProcessors: [CoreAudioGraphicEQProcessor]
     private var gainState: CoreAudioRealtimeGainState
     private var ramp: CoreAudioGainRamp
 
@@ -55,6 +62,7 @@ final class CoreAudioPCMRenderer {
         outputFormat: CoreAudioPCMFormat,
         maximumFrameCount: Int,
         initialGainState: CoreAudioRealtimeGainState,
+        channelMap: CoreAudioOutputChannelMap? = nil,
         peakMeter: CoreAudioPeakMeter = CoreAudioPeakMeter()
     ) throws {
         try CoreAudioPCMFormat.validatePair(
@@ -66,6 +74,18 @@ final class CoreAudioPCMRenderer {
         self.outputFormat = outputFormat
         self.maximumFrameCount = maximumFrameCount
         self.peakMeter = peakMeter
+
+        let resolvedMap = channelMap ?? .singleDevice(
+            uid: "",
+            channelCount: outputFormat.channelCount
+        )
+        guard !resolvedMap.slices.isEmpty,
+              resolvedMap.totalChannelCount == outputFormat.channelCount else {
+            throw CoreAudioPCMFormatError.invalidTotalChannelCount(
+                resolvedMap.totalChannelCount
+            )
+        }
+        self.channelMap = resolvedMap
         gainState = initialGainState
         ramp = CoreAudioGainRamp(
             currentGain: initialGainState.targetGain,
@@ -73,31 +93,69 @@ final class CoreAudioPCMRenderer {
         )
         inputScratch = .allocate(capacity: maximumFrameCount * inputFormat.channelCount)
         inputScratch.initialize(repeating: 0)
+        processScratch = .allocate(capacity: maximumFrameCount * inputFormat.channelCount)
+        processScratch.initialize(repeating: 0)
         gainScratch = .allocate(capacity: maximumFrameCount)
         gainScratch.initialize(repeating: initialGainState.targetGain)
-        eqProcessor = CoreAudioGraphicEQProcessor(
+        processEQProcessor = CoreAudioGraphicEQProcessor(
             sampleRate: outputFormat.sampleRate,
-            channelCount: outputFormat.channelCount,
-            curve: initialGainState.eq
+            channelCount: inputFormat.channelCount,
+            curve: initialGainState.processEQ
         )
+
+        let processors = resolvedMap.slices.enumerated().map { index, slice in
+            CoreAudioGraphicEQProcessor(
+                sampleRate: outputFormat.sampleRate,
+                channelCount: slice.channelCount,
+                curve: initialGainState.outputEQ(at: index)
+            )
+        }
+        outputEQProcessors = processors
+
+        outputSnapshotScratch = .allocate(capacity: processors.count)
+        outputSnapshotScratch.initialize(repeating: processors[0].renderSnapshot())
+        for index in processors.indices {
+            outputSnapshotScratch[index] = processors[index].renderSnapshot()
+        }
+
+        outputSliceIndexByChannel = .allocate(capacity: outputFormat.channelCount)
+        outputSliceIndexByChannel.initialize(repeating: 0)
+        for (sliceIndex, slice) in resolvedMap.slices.enumerated() {
+            for channel in slice.channelRange {
+                outputSliceIndexByChannel[channel] = Int32(sliceIndex)
+            }
+        }
     }
 
     deinit {
         inputScratch.deallocate()
+        processScratch.deallocate()
         gainScratch.deallocate()
+        outputSliceIndexByChannel.deallocate()
+        outputSnapshotScratch.deinitialize()
+        outputSnapshotScratch.deallocate()
     }
 
     func updateGainState(_ state: CoreAudioRealtimeGainState) {
-        let eqChanged = gainState.eq != state.eq
+        let previous = gainState
+        if previous.processEQ != state.processEQ {
+            processEQProcessor.updateCurve(state.processEQ)
+        }
+        for index in outputEQProcessors.indices
+        where previous.outputEQ(at: index) != state.outputEQ(at: index) {
+            outputEQProcessors[index].updateCurve(state.outputEQ(at: index))
+        }
         gainState = state
-        if eqChanged { eqProcessor.updateCurve(state.eq) }
     }
 
     func updateSampleRate(_ sampleRate: Double) {
         guard sampleRate.isFinite,
               (CoreAudioPCMFormat.minimumSampleRate...CoreAudioPCMFormat.maximumSampleRate)
                 .contains(sampleRate) else { return }
-        eqProcessor.updateSampleRate(sampleRate)
+        processEQProcessor.updateSampleRate(sampleRate)
+        for processor in outputEQProcessors {
+            processor.updateSampleRate(sampleRate)
+        }
         ramp.coefficient = CoreAudioGainRamp.coefficient(sampleRate: sampleRate)
     }
 
@@ -131,7 +189,13 @@ final class CoreAudioPCMRenderer {
         }
         Self.zeroAll(outputs)
         guard frameCount > 0 else { return }
-        let eqSnapshot = eqProcessor.renderSnapshot()
+        let processSnapshot = processEQProcessor.renderSnapshot()
+        var outputSnapshotIndex = 0
+        while outputSnapshotIndex < outputEQProcessors.count {
+            outputSnapshotScratch[outputSnapshotIndex] =
+                outputEQProcessors[outputSnapshotIndex].renderSnapshot()
+            outputSnapshotIndex += 1
+        }
         let targetGain = gainState.targetGain
         var localRamp = ramp
         var peak: Float = 0
@@ -140,6 +204,22 @@ final class CoreAudioPCMRenderer {
         var frame = 0
         while frame < frameCount {
             gainScratch[frame] = localRamp.next(targetGain: targetGain)
+            frame += 1
+        }
+
+        // Process EQ is shared. Compute it once before the signal fans out to
+        // destination channel slices.
+        frame = 0
+        while frame < frameCount {
+            var channel = 0
+            while channel < inputFormat.channelCount {
+                let index = frame * inputFormat.channelCount + channel
+                processScratch[index] = processSnapshot.processSample(
+                    inputScratch[index],
+                    channel: channel
+                )
+                channel += 1
+            }
             frame += 1
         }
 
@@ -159,9 +239,17 @@ final class CoreAudioPCMRenderer {
                     let outputChannel = globalOutputChannel + localChannel
                     if outputChannel < outputFormat.channelCount {
                         let inputChannel = outputChannel % inputFormat.channelCount
-                        let input = inputScratch[frame * inputFormat.channelCount + inputChannel]
-                        let equalized = eqSnapshot.processSample(input, channel: outputChannel)
-                        let output = CoreAudioSoftLimiter.apply(equalized * gainScratch[frame])
+                        let processed = processScratch[
+                            frame * inputFormat.channelCount + inputChannel
+                        ]
+                        let gained = processed * gainScratch[frame]
+                        let sliceIndex = Int(outputSliceIndexByChannel[outputChannel])
+                        let slice = channelMap.slices[sliceIndex]
+                        let equalized = outputSnapshotScratch[sliceIndex].processSample(
+                            gained,
+                            channel: outputChannel - slice.channelOffset
+                        )
+                        let output = CoreAudioSoftLimiter.apply(equalized)
                         samples[frameOffset + localChannel] = output
                         let magnitude = output < 0 ? -output : output
                         if magnitude > peak { peak = magnitude }
@@ -184,22 +272,30 @@ final class CoreAudioPCMRenderer {
 
     var storageFingerprint: (
         inputScratch: UInt,
+        processScratch: UInt,
         gainScratch: UInt,
         coefficientsA: UInt,
         coefficientsB: UInt,
         activeSectionsA: UInt,
         activeSectionsB: UInt,
-        delays: UInt
+        delays: UInt,
+        outputSliceIndexByChannel: UInt,
+        outputSnapshotScratch: UInt,
+        outputProcessorCount: Int
     ) {
-        let eq = eqProcessor.storageFingerprint
+        let process = processEQProcessor.storageFingerprint
         return (
             UInt(bitPattern: inputScratch.baseAddress!),
+            UInt(bitPattern: processScratch.baseAddress!),
             UInt(bitPattern: gainScratch.baseAddress!),
-            eq.coefficientsA,
-            eq.coefficientsB,
-            eq.activeSectionsA,
-            eq.activeSectionsB,
-            eq.delays
+            process.coefficientsA,
+            process.coefficientsB,
+            process.activeSectionsA,
+            process.activeSectionsB,
+            process.delays,
+            UInt(bitPattern: outputSliceIndexByChannel.baseAddress!),
+            UInt(bitPattern: outputSnapshotScratch.baseAddress!),
+            outputEQProcessors.count
         )
     }
 

@@ -67,6 +67,8 @@ final class CoreAudioDiscoveryBackend: AudioBackend {
             (tapManager as? CoreAudioRealtimeTapControlling)?.setBoost(boost, for: identity)
         case let .setEQ(identity, eq):
             (tapManager as? CoreAudioRealtimeTapControlling)?.setEQ(eq, for: identity)
+        case let .setOutputEQ(uid, eq):
+            (tapManager as? CoreAudioRealtimeTapControlling)?.setOutputEQ(eq, forUID: uid)
         case let .setRoute(identity, route):
             try (tapManager as? CoreAudioRouteControlling)?.setRoute(identity, route)
         }

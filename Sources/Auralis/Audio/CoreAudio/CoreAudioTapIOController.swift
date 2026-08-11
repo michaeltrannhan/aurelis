@@ -212,17 +212,24 @@ final class CoreAudioTapIOController {
                     scope: kAudioDevicePropertyScopeOutput
                 )
                 let maximumFrameCount = try Self.maximumFrameCount(for: aggregateID)
+                let outputFormat = try CoreAudioPCMFormat(
+                    streamDescriptions: outputDescriptions,
+                    configuredBufferChannelCounts: outputBufferChannels
+                )
+                let channelMap = try CoreAudioOutputChannelMap.build(
+                    outputDeviceUIDs: self.outputDeviceUIDs,
+                    aggregateOutputChannelCount: outputFormat.channelCount,
+                    channelCountForUID: Self.outputChannelCount(forUID:)
+                )
                 return try CoreAudioPCMRenderer(
                     inputFormat: CoreAudioPCMFormat(
                         streamDescriptions: inputDescriptions,
                         configuredBufferChannelCounts: inputBufferChannels
                     ),
-                    outputFormat: CoreAudioPCMFormat(
-                        streamDescriptions: outputDescriptions,
-                        configuredBufferChannelCounts: outputBufferChannels
-                    ),
+                    outputFormat: outputFormat,
                     maximumFrameCount: maximumFrameCount,
-                    initialGainState: initialGainState
+                    initialGainState: initialGainState,
+                    channelMap: channelMap
                 )
             }
         } catch let error as CoreAudioPCMFormatError {
@@ -522,6 +529,20 @@ final class CoreAudioTapIOController {
             throw CoreAudioTapStartFailure.deviceUnavailable
         }
         return OutputDeviceInfo(uid: uid, nominalSampleRate: nominalSampleRate)
+    }
+
+    private static func outputChannelCount(forUID uid: String) throws -> Int {
+        let objectID = try CoreAudioPropertyReader.deviceObjectID(forUID: uid)
+        let channelCount = try streamConfiguration(
+            for: objectID,
+            scope: kAudioDevicePropertyScopeOutput
+        ).reduce(0, +)
+        guard channelCount > 0 else {
+            throw CoreAudioTapStartFailure.fatal(
+                "A selected output has no addressable playback channels"
+            )
+        }
+        return channelCount
     }
 }
 

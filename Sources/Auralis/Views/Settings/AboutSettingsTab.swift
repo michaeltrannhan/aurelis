@@ -14,7 +14,7 @@ struct AboutSettingsTab: View {
                     Text("Version \(version)")
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                    Text("Per-app volume, mute, boost, and realtime 10-band EQ for macOS using Core Audio process taps.")
+                    Text("Per-app volume, mute, boost, and Process EQ, plus per-device Output EQ, using Core Audio process taps.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }

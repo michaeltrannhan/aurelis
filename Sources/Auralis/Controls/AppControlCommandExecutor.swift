@@ -7,7 +7,7 @@ enum AppControlAction {
 }
 
 /// Pure command math plus a store-applying executor. Volume-up auto-unmutes;
-/// volume-down that reaches zero auto-mutes.
+/// volume-down that reaches zero auto-mutes — applied as one atomic mutation.
 enum AppControlCommandExecutor {
     static func nextSettings(settings: AppAudioSettings, action: AppControlAction, step: Double) -> AppAudioSettings {
         var next = settings
@@ -25,30 +25,45 @@ enum AppControlCommandExecutor {
         }
         return next
     }
+
+    static func mutation(for action: AppControlAction, step: Double) -> ControlMutation {
+        switch action {
+        case .volumeUp: .adjustVolume(step)
+        case .volumeDown: .adjustVolume(-step)
+        case .muteToggle: .toggleMute
+        }
+    }
 }
 
-/// Applies a control action to the resolved target app through the store.
+/// Applies a control action to the resolved target app through the commanding surface.
 @MainActor
 struct AppControlStoreExecutor {
     let store: AudioControlStore
 
-    func perform(_ action: AppControlAction, frontmostBundleID: String?, selectedAppID: AudioAppIdentity?) {
+    @discardableResult
+    func perform(
+        _ action: AppControlAction,
+        frontmostBundleID: String?,
+        selectedAppID: AudioAppIdentity?,
+        source: ControlSource = .ui
+    ) -> ControlReceipt? {
         guard let identity = AppControlTargetResolver.resolve(
             rows: store.displayRows,
             levels: store.appLevels.levels,
             frontmostBundleID: frontmostBundleID,
             selectedAppID: selectedAppID
-        ), let current = store.displayRows.first(where: { $0.identity == identity })?.settings else {
-            return
+        ) else {
+            return nil
         }
 
         let step = store.settings.customization.volumeStep.fraction
-        let next = AppControlCommandExecutor.nextSettings(settings: current, action: action, step: step)
-        if next.volume != current.volume {
-            store.setVolumeIntent(next.volume, for: identity)
-        }
-        if next.isMuted != current.isMuted {
-            store.setMutedIntent(next.isMuted, for: identity)
-        }
+        let mutation = AppControlCommandExecutor.mutation(for: action, step: step)
+        return store.submit(
+            ControlCommand(
+                target: .app(identity),
+                mutation: mutation,
+                source: source
+            )
+        )
     }
 }

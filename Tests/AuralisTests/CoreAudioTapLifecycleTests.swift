@@ -235,6 +235,75 @@ final class CoreAudioTapLifecycleTests: XCTestCase {
         XCTAssertEqual(manager.gainState(for: music), CoreAudioRealtimeGainState(volume: 0.25, boost: .x4, isMuted: true, eq: curve))
     }
 
+    func testOutputEQRefreshesOnlyTapStatesRoutedThroughThatDevice() throws {
+        let music = AudioAppIdentity(rawValue: "music")
+        let browser = AudioAppIdentity(rawValue: "browser")
+        let manager = CoreAudioProcessTapManager(
+            operations: FakeTapOperations(),
+            controllerFactory: FakeControllerFactory().make
+        )
+        manager.setAvailableOutputUIDs(
+            ["built-in", "usb", "display"],
+            defaultOutputUID: "built-in"
+        )
+        try manager.setRoute(music, .multiOutput(["usb", "display"]))
+        try manager.setRoute(browser, .selectedDevice("display"))
+        var musicProcess = EQCurve()
+        musicProcess.setGain(2, at: 3)
+        var browserProcess = EQCurve()
+        browserProcess.setGain(-2, at: 3)
+        manager.setEQ(musicProcess, for: music)
+        manager.setEQ(browserProcess, for: browser)
+        try manager.reconcile(targets: [
+            CoreAudioTapTarget(identity: music, displayName: "Music", processObjectIDs: [10]),
+            CoreAudioTapTarget(identity: browser, displayName: "Browser", processObjectIDs: [11]),
+        ])
+
+        var usbEQ = EQCurve()
+        usbEQ.setGain(6, at: 5)
+        manager.setOutputEQ(usbEQ, forUID: "usb")
+
+        XCTAssertEqual(manager.gainState(for: music)?.processEQ, musicProcess)
+        XCTAssertEqual(manager.gainState(for: music)?.outputEQs, [usbEQ, EQCurve()])
+        XCTAssertEqual(manager.gainState(for: browser)?.processEQ, browserProcess)
+        XCTAssertEqual(manager.gainState(for: browser)?.outputEQs, [EQCurve()])
+
+        var displayEQ = EQCurve()
+        displayEQ.setGain(-6, at: 5)
+        manager.setOutputEQ(displayEQ, forUID: "display")
+
+        XCTAssertEqual(manager.gainState(for: music)?.outputEQs, [usbEQ, displayEQ])
+        XCTAssertEqual(manager.gainState(for: browser)?.outputEQs, [displayEQ])
+        XCTAssertEqual(manager.gainState(for: music)?.processEQ, musicProcess)
+        XCTAssertEqual(manager.gainState(for: browser)?.processEQ, browserProcess)
+    }
+
+    func testOutputEQCacheDoesNotRetainDormantDefaultAppState() throws {
+        let music = AudioAppIdentity(rawValue: "music")
+        let manager = CoreAudioProcessTapManager(
+            operations: FakeTapOperations(),
+            controllerFactory: FakeControllerFactory().make
+        )
+        manager.setAvailableOutputUIDs(["usb"], defaultOutputUID: "usb")
+        var outputEQ = EQCurve()
+        outputEQ.setGain(5, at: 5)
+        manager.setOutputEQ(outputEQ, forUID: "usb")
+        let target = CoreAudioTapTarget(
+            identity: music,
+            displayName: "Music",
+            processObjectIDs: [10]
+        )
+
+        try manager.reconcile(targets: [target])
+        XCTAssertEqual(manager.gainState(for: music)?.outputEQs, [outputEQ])
+
+        try manager.reconcile(targets: [])
+        XCTAssertNil(manager.gainState(for: music))
+
+        try manager.reconcile(targets: [target])
+        XCTAssertEqual(manager.gainState(for: music)?.outputEQs, [outputEQ])
+    }
+
     func testBackendForwardsEQCommandsToRealtimeTapController() throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         let manager = FakeRealtimeTapManager()
@@ -1253,6 +1322,7 @@ private final class FailsFirstNControllerFactory {
 
 private final class FakeRealtimeTapManager: CoreAudioTapManaging, CoreAudioRealtimeTapControlling {
     private(set) var eqUpdates: [AudioAppIdentity: EQCurve] = [:]
+    private(set) var outputEQUpdates: [String: EQCurve] = [:]
     var activeSessions: [CoreAudioTapSession] = []
 
     func reconcile(targets: [CoreAudioTapTarget]) throws {}
@@ -1264,5 +1334,9 @@ private final class FakeRealtimeTapManager: CoreAudioTapManaging, CoreAudioRealt
 
     func setEQ(_ eq: EQCurve, for identity: AudioAppIdentity) {
         eqUpdates[identity] = eq
+    }
+
+    func setOutputEQ(_ eq: EQCurve, forUID uid: String) {
+        outputEQUpdates[uid] = eq
     }
 }

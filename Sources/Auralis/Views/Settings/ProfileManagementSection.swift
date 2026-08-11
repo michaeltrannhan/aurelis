@@ -13,6 +13,9 @@ struct ProfileManagementSection: View {
 
     @State private var newPresetName = ""
     @State private var pendingAction: DestructiveAction?
+    @State private var pendingPresetDeleteID: UUID?
+    @State private var isCreatingPreset = false
+    @State private var creationErrorMessage: String?
 
     private enum DestructiveAction {
         case reset(AudioDeviceSnapshot)
@@ -47,7 +50,7 @@ struct ProfileManagementSection: View {
             Label("Remembered Outputs", systemImage: "hifispeaker.2.fill")
                 .font(.headline)
             settingsHelper(
-                "Every output saves its own routing, volume, boost, and EQ automatically. Switching outputs restores the matching context."
+                "Every output saves app routing, volume, boost, Process EQ, and its physical-device Output EQ automatically."
             )
         }
 
@@ -65,17 +68,31 @@ struct ProfileManagementSection: View {
             Label("Preset Library", systemImage: "square.stack.3d.up.fill")
                 .font(.headline)
             settingsHelper(
-                "Presets are reusable starting points. Applying one copies it to a device; later edits remain local to that output."
+                "Presets capture the app mix and Output EQ for every routed device. Applying one makes an independent copy."
             )
         }
 
-        HStack {
-            TextField("New preset name", text: $newPresetName)
-                .onSubmit(createPreset)
-                .accessibilityIdentifier("auralis.profiles.new-preset-name")
-            Button("Save Current as Preset") { createPreset() }
-                .disabled(!canCreatePreset || store.currentOutput == nil)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                TextField("New preset name", text: $newPresetName)
+                    .onSubmit(createPreset)
+                    .disabled(isCreatingPreset)
+                    .accessibilityIdentifier("auralis.profiles.new-preset-name")
+                Button(action: createPreset) {
+                    if isCreatingPreset {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Save Current as Preset")
+                    }
+                }
+                .disabled(!canCreatePreset || store.currentOutput == nil || isCreatingPreset)
                 .accessibilityIdentifier("auralis.profiles.save-preset")
+            }
+            if let creationErrorMessage {
+                Text(creationErrorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
         }
 
         if presets.isEmpty {
@@ -237,7 +254,7 @@ struct ProfileManagementSection: View {
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
                 Text(preset.name).lineLimit(1)
-                Text("\(preset.appSettings.count) app settings")
+                Text(presetSummary(preset))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -246,12 +263,32 @@ struct ProfileManagementSection: View {
                 store.applyProfileIntent(preset.id)
             }
             .disabled(store.currentOutput == nil)
+            Button("Update") {
+                store.updateProfileIntent(preset.id)
+            }
+            .help("Update \(preset.name) from the current app mix and routed Output EQs")
             Button(role: .destructive) {
-                store.deleteProfileIntent(preset.id)
+                pendingPresetDeleteID = preset.id
             } label: {
                 Image(systemName: "trash")
             }
             .help("Delete \(preset.name)")
+        }
+        .confirmationDialog(
+            "Delete \(preset.name)?",
+            isPresented: Binding(
+                get: { pendingPresetDeleteID == preset.id },
+                set: { if !$0 { pendingPresetDeleteID = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Preset", role: .destructive) {
+                store.deleteProfileIntent(preset.id)
+                pendingPresetDeleteID = nil
+            }
+            Button("Cancel", role: .cancel) { pendingPresetDeleteID = nil }
+        } message: {
+            Text("Output contexts already copied from this preset will stay unchanged.")
         }
     }
 
@@ -321,7 +358,7 @@ struct ProfileManagementSection: View {
         guard let action = pendingAction else { return "" }
         switch action {
         case .reset:
-            return "Routing, app volume, boost, and EQ for this output will return to safe neutral values."
+            return "Routing, app volume, boost, Process EQ, and Output EQ will return to safe neutral values."
         case .forget:
             return "Its saved context will be removed. A new neutral context will be created if it reconnects."
         }
@@ -329,6 +366,14 @@ struct ProfileManagementSection: View {
 
     private func matchingPreset(for context: AudioProfile) -> AudioProfile? {
         presets.first { context.matchesMixerPreset($0) }
+    }
+
+    private func presetSummary(_ preset: AudioProfile) -> String {
+        let appCount = preset.appSettings.count
+        let outputCount = preset.deviceSettings.count
+        let appWord = appCount == 1 ? "app" : "apps"
+        let outputWord = outputCount == 1 ? "output EQ" : "output EQs"
+        return "\(appCount) \(appWord) · \(outputCount) \(outputWord)"
     }
 
     private func contextSummary(
@@ -339,7 +384,7 @@ struct ProfileManagementSection: View {
         if let matchingPreset {
             return "Preset · \(matchingPreset.name) · autosaved"
         }
-        return "Custom mix · \(context.appSettings.count) apps · autosaved"
+        return "Custom mix · \(context.appSettings.count) apps · \(context.deviceSettings.count) output EQs · autosaved"
     }
 
     private func statusPill(_ text: String, tint: Color) -> some View {
@@ -352,9 +397,18 @@ struct ProfileManagementSection: View {
     }
 
     private func createPreset() {
-        guard canCreatePreset else { return }
+        guard canCreatePreset, !isCreatingPreset else { return }
         let name = newPresetName
-        newPresetName = ""
-        store.createProfileIntent(named: name, scope: .global)
+        creationErrorMessage = nil
+        isCreatingPreset = true
+        Task { @MainActor in
+            do {
+                _ = try await store.createProfile(named: name, scope: .global)
+                newPresetName = ""
+            } catch {
+                creationErrorMessage = "Couldn’t save the preset. Your name and current mix are unchanged."
+            }
+            isCreatingPreset = false
+        }
     }
 }

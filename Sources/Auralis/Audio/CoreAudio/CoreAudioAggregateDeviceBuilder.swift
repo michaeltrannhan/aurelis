@@ -25,12 +25,9 @@ enum CoreAudioAggregateDeviceBuilder {
     ) -> [String: Any] {
         precondition(!outputDeviceUIDs.isEmpty, "An aggregate device needs at least one output")
         let clockDeviceUID = outputDeviceUIDs[0]
-        // Stacked aggregates mirror the same processed stream to every
-        // subdevice. Non-stacked concatenates channels into one wider device,
-        // which does NOT mirror audio to all outputs. Multi-output mirroring
-        // requires stacked=true (matching FineTune's approach). Single output
-        // uses stacked=false so all channels stay addressable.
-        let isStacked = outputDeviceUIDs.count > 1
+        // Non-stacked aggregates concatenate physical channels. The renderer
+        // explicitly fans the shared process signal into every device slice,
+        // which makes a distinct Output EQ possible for each destination.
 
         return [
             kAudioAggregateDeviceNameKey: "Auralis-\(appName)",
@@ -38,7 +35,7 @@ enum CoreAudioAggregateDeviceBuilder {
             kAudioAggregateDeviceMainSubDeviceKey: clockDeviceUID,
             kAudioAggregateDeviceClockDeviceKey: clockDeviceUID,
             kAudioAggregateDeviceIsPrivateKey: true,
-            kAudioAggregateDeviceIsStackedKey: isStacked,
+            kAudioAggregateDeviceIsStackedKey: false,
             kAudioAggregateDeviceTapAutoStartKey: true,
             kAudioAggregateDeviceSubDeviceListKey: outputDeviceUIDs.enumerated().map { index, uid in
                 [

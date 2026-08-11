@@ -142,8 +142,8 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "General"
         case .audio: return "Audio"
-        case .shortcuts: return "Shortcuts"
-        case .about: return "About"
+        case .shortcuts: return "Controls"
+        case .about: return "About & diagnostics"
         }
     }
 
@@ -220,7 +220,7 @@ struct AppCustomization: Codable, Equatable, Sendable {
         volumeStep: VolumeStep = .fivePercent,
         showInactiveApps: Bool = true,
         backendMode: BackendMode = .coreAudioDiscovery,
-        mediaKeysEnabled: Bool = true,
+        mediaKeysEnabled: Bool = false,
         hotkeysEnabled: Bool = true,
         menuBarIconStyle: MenuBarIconStyle = .speaker
     ) {

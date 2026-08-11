@@ -215,6 +215,55 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertFalse(decoded.hasCompletedOnboarding)
     }
 
+    func testVersionEightLoadsAndPersistsAsV9WithFlatOutputEQ() throws {
+        let url = uniqueSettingsURL()
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = Data(
+            """
+            {
+              "version": 8,
+              "deviceSettings": {
+                "built-in": {
+                  "displayName": "MacBook Speakers",
+                  "volume": 0.8,
+                  "isMuted": false
+                }
+              },
+              "appSettings": {
+                "music": {"displayName": "Music", "volume": 0.65}
+              },
+              "profiles": [{
+                "name": "Legacy Desk",
+                "deviceSettings": {
+                  "usb": {
+                    "displayName": "USB DAC",
+                    "volume": 0.7,
+                    "isMuted": false
+                  }
+                }
+              }]
+            }
+            """.utf8
+        )
+        try data.write(to: url)
+        let store = SettingsStore(settingsURL: url)
+
+        let migrated = try store.load()
+
+        XCTAssertEqual(migrated.version, PersistedSettings.currentVersion)
+        XCTAssertEqual(migrated.appSettings[AudioAppIdentity(rawValue: "music")]?.volume, 0.65)
+        XCTAssertEqual(migrated.deviceSettings["built-in"]?.volume, 0.8)
+        XCTAssertEqual(migrated.deviceSettings["built-in"]?.eq, EQCurve())
+        XCTAssertEqual(migrated.profiles.first?.deviceSettings["usb"]?.eq, EQCurve())
+        let persisted = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        )
+        XCTAssertEqual(persisted["version"] as? Int, 9)
+    }
+
     func testVersionFourFlatProfileMigratesToActiveGlobalProfile() throws {
         let profileID = "11111111-1111-1111-1111-111111111111"
         let data = Data(

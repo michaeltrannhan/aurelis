@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+@testable import Auralis
 
 extension XCTestCase {
     /// Returns a unique file URL and registers cleanup for its entire parent
@@ -44,6 +45,15 @@ struct SeededRandomNumberGenerator: RandomNumberGenerator {
         value = (value ^ (value >> 27)) &* 0x94D0_49BB_1331_11EB
         return value ^ (value >> 31)
     }
+}
+
+struct FakePermissionClient: AudioCapturePermissionClient {
+    var state: AudioCapturePermissionState
+
+    func currentState() -> AudioCapturePermissionState { state }
+    func requestScreenCaptureAccess() -> AudioCapturePermissionState { state }
+    func openPrivacySettings() {}
+    func relaunchApp() async throws {}
 }
 
 /// Deterministically runs DispatchWorkItems scheduled by retry state machines.

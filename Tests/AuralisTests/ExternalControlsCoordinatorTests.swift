@@ -13,8 +13,7 @@ final class ExternalControlsCoordinatorTests: XCTestCase {
             media: media,
             hotkeys: hotkeys
         )
-        let store = makeStore()
-        await store.waitUntilReady()
+        let store = await makeStore()
 
         coordinator.start(store: store)
         coordinator.start(store: store)
@@ -40,8 +39,7 @@ final class ExternalControlsCoordinatorTests: XCTestCase {
             media: media,
             hotkeys: hotkeys
         )
-        let store = makeStore()
-        await store.waitUntilReady()
+        let store = await makeStore()
 
         coordinator.start(store: store)
 
@@ -73,8 +71,7 @@ final class ExternalControlsCoordinatorTests: XCTestCase {
             media: media,
             hotkeys: hotkeys
         )
-        let store = makeStore()
-        await store.waitUntilReady()
+        let store = await makeStore()
 
         coordinator.start(store: store)
 
@@ -83,7 +80,8 @@ final class ExternalControlsCoordinatorTests: XCTestCase {
         XCTAssertTrue(mediaIssue.message.contains("Synthetic media-tap failure"))
         let hotkeyIssue = try XCTUnwrap(store.issues.first { $0.id == "global-hotkeys" })
         XCTAssertEqual(hotkeyIssue.recovery, .retryExternalControls)
-        XCTAssertTrue(hotkeyIssue.message.contains("Mute (OSStatus -9876)"))
+        XCTAssertTrue(hotkeyIssue.message.contains("Mute"))
+        XCTAssertFalse(hotkeyIssue.message.contains("OSStatus"))
 
         media.startResult = .running
         hotkeys.report = .success
@@ -104,8 +102,7 @@ final class ExternalControlsCoordinatorTests: XCTestCase {
             media: media,
             hotkeys: StubHotkeyRegistrar()
         )
-        let store = makeStore()
-        await store.waitUntilReady()
+        let store = await makeStore()
         coordinator.start(store: store)
 
         media.onOperationalFailure?("Event tap kept flapping")
@@ -126,8 +123,7 @@ final class ExternalControlsCoordinatorTests: XCTestCase {
             hotkeys: hotkeys,
             router: router
         )
-        let store = makeStore()
-        await store.waitUntilReady()
+        let store = await makeStore()
         coordinator.start(store: store)
 
         hotkeys.onAction?(.showMixer)
@@ -151,8 +147,7 @@ final class ExternalControlsCoordinatorTests: XCTestCase {
             media: StubMediaKeyMonitor(),
             hotkeys: StubHotkeyRegistrar()
         )
-        let store = makeStore()
-        await store.waitUntilReady()
+        let store = await makeStore()
         coordinator.start(store: store)
 
         coordinator.openAccessibilitySettings()
@@ -187,15 +182,20 @@ final class ExternalControlsCoordinatorTests: XCTestCase {
         )
     }
 
-    private func makeStore() -> AudioControlStore {
+    private func makeStore(mediaKeysEnabled: Bool = true) async -> AudioControlStore {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("Auralis-ExternalControls-\(UUID().uuidString).json")
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
-        return AudioControlStore(
+        let store = AudioControlStore(
             settingsStore: SettingsStore(settingsURL: url),
             backend: MockAudioBackend(),
             permissionClient: ExternalControlsAudioPermissionClient()
         )
+        await store.waitUntilReady()
+        var settings = store.settings
+        settings.customization.mediaKeysEnabled = mediaKeysEnabled
+        store.settings = settings
+        return store
     }
 }
 
@@ -238,7 +238,7 @@ private final class StubAccessibilityClient: AccessibilityPermissionClient {
 
 @MainActor
 private final class StubMediaKeyMonitor: MediaKeyMonitoring {
-    var onEvent: ((MediaKeyEvent) -> Void)?
+    var onEvent: ((MediaKeyEvent) -> Bool)?
     var onOperationalFailure: ((String) -> Void)?
     var startResult: MediaKeyMonitorStartResult
     private(set) var startCount = 0

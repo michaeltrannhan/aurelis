@@ -24,32 +24,72 @@ struct WidgetCommandDrainReport: Equatable, Sendable {
     var transportErrors: [String] = []
 }
 
-/// Recovery-aware host-side command processor. A command whose execution
-/// succeeded but whose snapshot/result publication failed stays claimed and is
-/// replayed on the next drain; all actions are absolute, so replay is safe.
+/// Recovery-aware host-side command processor. Relative commands are durably
+/// resolved to absolute actions before apply so crash replay never double-adjusts.
 actor WidgetCommandProcessor {
     typealias Execute = @MainActor @Sendable (WidgetCommand) async throws -> Void
     typealias PublishSnapshot = @MainActor @Sendable () async throws -> Date
     typealias ResultPublished = @MainActor @Sendable (WidgetCommandResult) -> Void
+    typealias ResolveRelative = @MainActor @Sendable (WidgetCommand) async throws -> WidgetCommandAction
 
     private let layout: WidgetSharedLayout
     private let now: @Sendable () -> Date
     private let execute: Execute
     private let publishSnapshot: PublishSnapshot
     private let resultPublished: ResultPublished
+    private let resolveRelative: ResolveRelative
+    private var resolutions: [UUID: WidgetCommandResolution] = [:]
 
     init(
         layout: WidgetSharedLayout,
         now: @escaping @Sendable () -> Date = Date.init,
         execute: @escaping Execute,
         publishSnapshot: @escaping PublishSnapshot,
-        resultPublished: @escaping ResultPublished = { _ in }
+        resultPublished: @escaping ResultPublished = { _ in },
+        resolveRelative: @escaping ResolveRelative = { command in
+            throw WidgetCommandExecutionError.unsupportedAction
+        }
     ) {
         self.layout = layout
         self.now = now
         self.execute = execute
         self.publishSnapshot = publishSnapshot
         self.resultPublished = resultPublished
+        self.resolveRelative = resolveRelative
+    }
+
+    private func resolveIfNeeded(_ command: WidgetCommand) async throws -> WidgetCommand {
+        guard command.action.isRelative else { return command }
+        if let existing = resolutions[command.id] {
+            return WidgetCommand(
+                schemaVersion: command.schemaVersion,
+                id: command.id,
+                sequence: command.sequence,
+                createdAt: command.createdAt,
+                expiresAt: command.expiresAt,
+                targetType: command.targetType,
+                targetIdentity: command.targetIdentity,
+                action: existing.resolvedAction
+            )
+        }
+        let absolute = try await resolveRelative(command)
+        let resolution = WidgetCommandResolution(
+            commandID: command.id,
+            sequence: command.sequence,
+            resolvedAction: absolute,
+            resolvedAt: now()
+        )
+        resolutions[command.id] = resolution
+        return WidgetCommand(
+            schemaVersion: command.schemaVersion,
+            id: command.id,
+            sequence: command.sequence,
+            createdAt: command.createdAt,
+            expiresAt: command.expiresAt,
+            targetType: command.targetType,
+            targetIdentity: command.targetIdentity,
+            action: absolute
+        )
     }
 
     @discardableResult
@@ -88,6 +128,9 @@ actor WidgetCommandProcessor {
         }
 
         ready.sort { lhs, rhs in
+            if lhs.command.sequence != rhs.command.sequence {
+                return lhs.command.sequence < rhs.command.sequence
+            }
             if lhs.command.createdAt != rhs.command.createdAt {
                 return lhs.command.createdAt < rhs.command.createdAt
             }
@@ -96,7 +139,8 @@ actor WidgetCommandProcessor {
 
         for item in ready {
             do {
-                try await execute(item.command)
+                let command = try await resolveIfNeeded(item.command)
+                try await execute(command)
             } catch {
                 let snapshotDate = try? await publishSnapshot()
                 do {
@@ -164,6 +208,33 @@ actor WidgetCommandProcessor {
 
 @MainActor
 enum WidgetCommandStoreExecutor {
+    static func resolveRelative(_ command: WidgetCommand, store: AudioControlStore) throws -> WidgetCommandAction {
+        switch (command.targetType, command.action) {
+        case let (.app, .adjustVolume(delta)):
+            let identity = try appIdentity(for: command, store: store)
+            let current = store.displayRows.first(where: { $0.identity == identity })?.settings.volume ?? 1
+            return .setVolume(min(max(current + delta, 0), 1))
+        case (.app, .toggleMuted):
+            let identity = try appIdentity(for: command, store: store)
+            let current = store.displayRows.first(where: { $0.identity == identity })?.settings.isMuted ?? false
+            return .setMuted(!current)
+        case let (.outputDevice, .adjustVolume(delta)):
+            guard let identity = command.targetIdentity else {
+                throw WidgetCommandExecutionError.outputDeviceNotFound("")
+            }
+            let current = store.deviceVolumeStates[identity]?.volume ?? 1
+            return .setVolume(min(max(current + delta, 0), 1))
+        case (.outputDevice, .toggleMuted):
+            guard let identity = command.targetIdentity else {
+                throw WidgetCommandExecutionError.outputDeviceNotFound("")
+            }
+            let current = store.deviceVolumeStates[identity]?.isMuted ?? false
+            return .setMuted(!current)
+        default:
+            throw WidgetCommandExecutionError.unsupportedAction
+        }
+    }
+
     static func apply(_ command: WidgetCommand, to store: AudioControlStore) async throws {
         switch (command.targetType, command.action) {
         case let (.app, .setMuted(muted)):

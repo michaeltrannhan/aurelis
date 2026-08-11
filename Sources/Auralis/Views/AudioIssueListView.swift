@@ -15,7 +15,10 @@ enum AudioIssuePresentationModel {
 
     static func recoveryTitle(_ recovery: AudioRecoveryAction) -> String {
         switch recovery {
-        case .retry: "Retry"
+        case .retry, .refreshAudio: "Refresh"
+        case .relaunchAfterPermissionChange: "Relaunch Auralis"
+        case .replayMutation: "Try Again"
+        case .tryControlAgain: "Try that control again"
         case .retryExternalControls: "Retry Controls"
         case .requestAudioPermission: "Request Access"
         case .openAudioPrivacySettings: "Open Settings"
@@ -56,10 +59,17 @@ struct AudioIssueListView: View {
                     .font(compact ? .caption : .callout)
                     .fixedSize(horizontal: false, vertical: true)
                 if let recovery = issue.recovery {
-                    Button(AudioIssuePresentationModel.recoveryTitle(recovery)) {
-                        perform(recovery)
+                    let title = AudioIssuePresentationModel.recoveryTitle(recovery)
+                    if recovery == .tryControlAgain {
+                        Text(title)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Button(title) {
+                            perform(recovery)
+                        }
+                        .controlSize(.small)
                     }
-                    .controlSize(.small)
                 }
             }
             Spacer(minLength: 4)
@@ -79,8 +89,14 @@ struct AudioIssueListView: View {
 
     private func perform(_ recovery: AudioRecoveryAction) {
         switch recovery {
-        case .retry:
+        case .retry, .refreshAudio:
             store.refreshIntent()
+        case .relaunchAfterPermissionChange:
+            store.relaunchForPermission()
+        case let .replayMutation(command):
+            _ = store.submit(command)
+        case .tryControlAgain:
+            break
         case .retryExternalControls:
             controls.applySettings()
         case .requestAudioPermission:

@@ -311,6 +311,8 @@ public enum WidgetCommandTargetType: String, Codable, Equatable, Sendable {
 public enum WidgetCommandAction: Codable, Equatable, Sendable {
     case setMuted(Bool)
     case setVolume(Double)
+    case adjustVolume(Double)
+    case toggleMuted
     case setBoost(Double)
     case setEQBandGain(band: Int, gain: Double)
     case selectOutput
@@ -324,8 +326,15 @@ public enum WidgetCommandAction: Codable, Equatable, Sendable {
     }
 
     private enum Kind: String, Codable {
-        case setMuted, setVolume, setBoost, setEQBandGain, selectOutput, applyProfile
+        case setMuted, setVolume, adjustVolume, toggleMuted, setBoost, setEQBandGain, selectOutput, applyProfile
         case assignProfileToCurrentOutput, revertProfileChanges, refresh
+    }
+
+    public var isRelative: Bool {
+        switch self {
+        case .adjustVolume, .toggleMuted: true
+        default: false
+        }
     }
 
     public init(from decoder: Decoder) throws {
@@ -336,6 +345,10 @@ public enum WidgetCommandAction: Codable, Equatable, Sendable {
             self = .setMuted(try container.decode(Bool.self, forKey: .value))
         case .setVolume:
             self = .setVolume(try container.decode(Double.self, forKey: .value))
+        case .adjustVolume:
+            self = .adjustVolume(try container.decode(Double.self, forKey: .value))
+        case .toggleMuted:
+            self = .toggleMuted
         case .setBoost:
             self = .setBoost(try container.decode(Double.self, forKey: .value))
         case .setEQBandGain:
@@ -365,6 +378,11 @@ public enum WidgetCommandAction: Codable, Equatable, Sendable {
         case let .setVolume(value):
             try container.encode(Kind.setVolume, forKey: .type)
             try container.encode(value, forKey: .value)
+        case let .adjustVolume(value):
+            try container.encode(Kind.adjustVolume, forKey: .type)
+            try container.encode(value, forKey: .value)
+        case .toggleMuted:
+            try container.encode(Kind.toggleMuted, forKey: .type)
         case let .setBoost(value):
             try container.encode(Kind.setBoost, forKey: .type)
             try container.encode(value, forKey: .value)
@@ -410,12 +428,14 @@ public enum WidgetCommandValidationError: String, Error, Codable, Equatable, Loc
 
 /// Versioned per-file command envelope used by the widget command directory.
 public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
-    public static let currentSchemaVersion = 5
+    public static let currentSchemaVersion = 6
+    public static let legacyCompatibleSchemaVersion = 5
     public static let defaultLifetime: TimeInterval = 30
     public static let maximumLifetime: TimeInterval = 120
 
     public let schemaVersion: Int
     public let id: UUID
+    public let sequence: UInt64
     public let createdAt: Date
     public let expiresAt: Date
     public let targetType: WidgetCommandTargetType
@@ -425,6 +445,7 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
     public init(
         schemaVersion: Int = WidgetCommand.currentSchemaVersion,
         id: UUID = UUID(),
+        sequence: UInt64 = 0,
         createdAt: Date = Date(),
         expiresAt: Date? = nil,
         targetType: WidgetCommandTargetType,
@@ -433,11 +454,42 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
     ) {
         self.schemaVersion = schemaVersion
         self.id = id
+        self.sequence = sequence
         self.createdAt = createdAt
         self.expiresAt = expiresAt ?? createdAt.addingTimeInterval(Self.defaultLifetime)
         self.targetType = targetType
         self.targetIdentity = targetIdentity
         self.action = action
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, id, sequence, createdAt, expiresAt, targetType, targetIdentity, action
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            schemaVersion: container.tolerant(Int.self, forKey: .schemaVersion) ?? Self.legacyCompatibleSchemaVersion,
+            id: try container.decode(UUID.self, forKey: .id),
+            sequence: container.tolerant(UInt64.self, forKey: .sequence) ?? 0,
+            createdAt: try container.decode(Date.self, forKey: .createdAt),
+            expiresAt: try container.decode(Date.self, forKey: .expiresAt),
+            targetType: try container.decode(WidgetCommandTargetType.self, forKey: .targetType),
+            targetIdentity: container.tolerant(String.self, forKey: .targetIdentity),
+            action: try container.decode(WidgetCommandAction.self, forKey: .action)
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(id, forKey: .id)
+        try container.encode(sequence, forKey: .sequence)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(expiresAt, forKey: .expiresAt)
+        try container.encode(targetType, forKey: .targetType)
+        try container.encodeIfPresent(targetIdentity, forKey: .targetIdentity)
+        try container.encode(action, forKey: .action)
     }
 
     public static func app(
@@ -611,6 +663,7 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
     ) -> WidgetCommand {
         WidgetCommand(
             id: id,
+            sequence: WidgetCommandSequence.next(),
             createdAt: createdAt,
             expiresAt: createdAt.addingTimeInterval(lifetime),
             targetType: targetType,
@@ -620,7 +673,11 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
     }
 
     public func validate(now: Date = Date()) throws {
-        guard schemaVersion == Self.currentSchemaVersion else {
+        guard schemaVersion == Self.currentSchemaVersion
+            || schemaVersion == Self.legacyCompatibleSchemaVersion else {
+            throw WidgetCommandValidationError.unsupportedSchema
+        }
+        if schemaVersion == Self.legacyCompatibleSchemaVersion, action.isRelative {
             throw WidgetCommandValidationError.unsupportedSchema
         }
         let created = createdAt.timeIntervalSinceReferenceDate
@@ -649,11 +706,16 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
             guard value.isFinite, (0...1).contains(value) else {
                 throw WidgetCommandValidationError.invalidValue
             }
-        case (.app, .setMuted):
+        case (.app, .setMuted), (.app, .toggleMuted):
             try Self.requireIdentity(identity)
         case let (.app, .setVolume(value)):
             try Self.requireIdentity(identity)
             guard value.isFinite, (0...1).contains(value) else {
+                throw WidgetCommandValidationError.invalidValue
+            }
+        case let (.app, .adjustVolume(delta)):
+            try Self.requireIdentity(identity)
+            guard delta.isFinite, (-1...1).contains(delta) else {
                 throw WidgetCommandValidationError.invalidValue
             }
         case let (.app, .setBoost(value)):
@@ -668,11 +730,16 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
                   (-24...24).contains(gain) else {
                 throw WidgetCommandValidationError.invalidValue
             }
-        case (.outputDevice, .setMuted):
+        case (.outputDevice, .setMuted), (.outputDevice, .toggleMuted):
             try Self.requireIdentity(identity)
         case let (.outputDevice, .setVolume(value)):
             try Self.requireIdentity(identity)
             guard value.isFinite, (0...1).contains(value) else {
+                throw WidgetCommandValidationError.invalidValue
+            }
+        case let (.outputDevice, .adjustVolume(delta)):
+            try Self.requireIdentity(identity)
+            guard delta.isFinite, (-1...1).contains(delta) else {
                 throw WidgetCommandValidationError.invalidValue
             }
         case (.outputDevice, .selectOutput):

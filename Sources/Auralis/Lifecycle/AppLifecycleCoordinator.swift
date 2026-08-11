@@ -162,6 +162,8 @@ final class AppLifecycleCoordinator {
     }
 
     private func performStop() async -> AppLifecycleStopReport {
+        // Shutdown order: controls → widget watcher/drain → store intents/edits/
+        // persistence/engine/host lease → stopped.
         controls.stop()
         await widgetBridge.stop()
         let audioReport = await store.shutdown()
@@ -207,6 +209,14 @@ final class AuralisApplicationDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard !AuralisRuntimeEnvironment.isRunningTests else { return }
+        guard let lifecycle else { return }
+        lifecycle.store.recheckPermissionsOnActivation()
+        guard lifecycle.store.settings.customization.mediaKeysEnabled else { return }
+        Task { await lifecycle.applySettings() }
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !AuralisRuntimeEnvironment.isRunningTests else { return .terminateNow }
         guard let lifecycle else { return .terminateNow }
@@ -214,7 +224,13 @@ final class AuralisApplicationDelegate: NSObject, NSApplicationDelegate {
         terminationReplyPending = true
         Task {
             InternalDiagnostics.record("lifecycle", "termination.begin")
+            // Exactly-once 2.5s reply deadline.
+            let deadline = Task {
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                sender.reply(toApplicationShouldTerminate: true)
+            }
             let report = await lifecycle.stop()
+            deadline.cancel()
             let summary = "termination.complete controls=\(report.externalControlsStopped) "
                 + "widgetTransport=\(report.widgetTransportStopped) "
                 + "editErrors=\(report.audio.editSessionErrorDescriptions.count) "
@@ -231,5 +247,11 @@ final class AuralisApplicationDelegate: NSObject, NSApplicationDelegate {
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // Ordinary second launch activates the owner; lease handoff is used for permission relaunch.
+        sender.activate(ignoringOtherApps: true)
+        return true
     }
 }

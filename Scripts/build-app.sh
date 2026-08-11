@@ -8,8 +8,9 @@ set -eu
 #   Scripts/build-debug-app.sh
 #   Scripts/build-release-app.sh
 #   CODE_SIGNING_ALLOWED=NO Scripts/build-release-app.sh
-#   ARCHS="arm64 x86_64" DEVELOPMENT_TEAM=TEAMID \
+#   ARCHS=arm64 DEVELOPMENT_TEAM=TEAMID \
 #     SIGN_IDENTITY="Apple Development" Scripts/build-debug-app.sh
+#   (Intel/universal builds are out of scope; arm64-only.)
 
 fail() {
     printf 'error: %s\n' "$*" >&2
@@ -274,7 +275,16 @@ APP_URL_NAME=${APP_URL_NAME:-$APP_BUNDLE_ID}
 APP_URL_SCHEME=${APP_URL_SCHEME:-auralis}
 MARKETING_VERSION=${MARKETING_VERSION:-0.0.8}
 CURRENT_PROJECT_VERSION=${CURRENT_PROJECT_VERSION:-8}
-ARCHS=${ARCHS:-$(/usr/bin/uname -m)}
+ARCHS=${ARCHS:-arm64}
+case " $ARCHS " in
+    *" x86_64 "*|*" i386 "*)
+        fail "Auralis supports Apple Silicon only; requested ARCHS='$ARCHS'"
+        ;;
+esac
+case " $ARCHS " in
+    *" arm64 "*) ;;
+    *) fail "Auralis requires ARCHS to include arm64; requested ARCHS='$ARCHS'" ;;
+esac
 DESTINATION=${DESTINATION:-platform=macOS,arch=$(/usr/bin/uname -m)}
 SIGN_IDENTITY=${SIGN_IDENTITY:-Apple Development}
 CODE_SIGNING_ALLOWED=${CODE_SIGNING_ALLOWED:-YES}

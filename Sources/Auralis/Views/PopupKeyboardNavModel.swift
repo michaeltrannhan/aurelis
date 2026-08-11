@@ -3,8 +3,8 @@ import Foundation
 /// Pure ordering model backing arrow-key navigation in the popup. Editing mode
 /// clears the order so keyboard selection is disabled while reordering.
 final class PopupKeyboardNavModel {
-    static let visibleKeyboardHint = "↑/↓ select · Return EQ · Space mute · ←/→ volume"
-    static let accessibilityHint = "Up and Down select an app. Return opens its equalizer. Space toggles mute. Left and Right adjust volume."
+    static let visibleKeyboardHint = "↑/↓ select · Return Process EQ · Space mute · ←/→ volume"
+    static let accessibilityHint = "Up and Down select an app. Return opens its Process EQ. Space toggles mute. Left and Right adjust volume."
 
     private(set) var orderedAppIDs: [AudioAppIdentity] = []
 

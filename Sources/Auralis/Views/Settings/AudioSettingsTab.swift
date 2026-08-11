@@ -42,7 +42,7 @@ struct AudioSettingsTab: View {
                         Text(range.label).tag(range)
                     }
                 }
-                settingsHelper("Changing EQ range reclamps existing per-app EQ curves to the selected dB limit.")
+                settingsHelper("Changing EQ range reclamps existing Process and Output EQ curves to the selected dB limit.")
             }
 
             ProfileManagementSection(store: store)

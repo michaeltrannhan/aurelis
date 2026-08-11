@@ -79,6 +79,10 @@ final class WidgetBridge: ObservableObject {
             },
             resultPublished: { [weak self] _ in
                 self?.reloadTimelines()
+            },
+            resolveRelative: { [weak store] command in
+                guard let store else { throw WidgetBridgeError.storeUnavailable }
+                return try WidgetCommandStoreExecutor.resolveRelative(command, store: store)
             }
         )
 
@@ -106,11 +110,14 @@ final class WidgetBridge: ObservableObject {
     func stop() async {
         guard isStarted else { return }
         InternalDiagnostics.record("widget", "bridge.stop begin")
+        // Quiescent shutdown: stop watcher, await drain of in-flight work,
+        // preserve unexecuted claims, write stopped snapshot, then clear processor.
+        watcher.stop()
         snapshotTask?.cancel()
         snapshotTask = nil
         heartbeatTask?.cancel()
         heartbeatTask = nil
-        drainTask?.cancel()
+        if let drainTask { await drainTask.value }
         drainTask = nil
         drainRequested = false
         subscriptions.removeAll()
@@ -118,8 +125,6 @@ final class WidgetBridge: ObservableObject {
         if (try? await writeSnapshotNow(hostState: .stopped)) != nil {
             reloadTimelines()
         }
-        watcher.stop()
-        processor = nil
         isStarted = false
         InternalDiagnostics.record("widget", "bridge.stop complete")
     }

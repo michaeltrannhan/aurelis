@@ -40,23 +40,36 @@ struct AudioEditSessionKey: Hashable, Sendable {
 
 actor AudioMutationGate {
     private var isLocked = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
 
-    func acquire() async {
+    func acquire() async throws {
+        try Task.checkCancellation()
         if !isLocked {
             isLocked = true
             return
         }
-        await withCheckedContinuation { continuation in
-            waiters.append(continuation)
+        let id = UUID()
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            waiters[id] = continuation
         }
+        try Task.checkCancellation()
     }
 
     func release() {
-        if waiters.isEmpty {
-            isLocked = false
+        if let id = waiters.keys.sorted(by: { $0.uuidString < $1.uuidString }).first {
+            let continuation = waiters.removeValue(forKey: id)!
+            continuation.resume()
         } else {
-            waiters.removeFirst().resume()
+            isLocked = false
+        }
+    }
+
+    func cancelAll() {
+        let pending = waiters
+        waiters.removeAll()
+        isLocked = false
+        for (_, continuation) in pending {
+            continuation.resume(throwing: CancellationError())
         }
     }
 }

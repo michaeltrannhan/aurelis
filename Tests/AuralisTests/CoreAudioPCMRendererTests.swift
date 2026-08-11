@@ -222,6 +222,110 @@ final class CoreAudioPCMRendererTests: XCTestCase {
         XCTAssertEqual(output.samples(inBuffer: 0)[0], Float(centerBand[0]) * 0.1, accuracy: 0.000_01)
     }
 
+    func testFlatOutputEQMatchesProcessOnlyPathForSingleDevice() throws {
+        var process = EQCurve()
+        process.setGain(6, at: 5)
+        let inputFormat = try CoreAudioPCMFormat(streamDescription: Self.streamDescription(
+            sampleRate: 48_000,
+            channels: 2,
+            interleaved: true
+        ))
+        let outputFormat = try CoreAudioPCMFormat(streamDescription: Self.streamDescription(
+            sampleRate: 48_000,
+            channels: 2,
+            interleaved: true
+        ))
+        let map = CoreAudioOutputChannelMap.singleDevice(uid: "speakers", channelCount: 2)
+        let processOnly = try CoreAudioPCMRenderer(
+            inputFormat: inputFormat,
+            outputFormat: outputFormat,
+            maximumFrameCount: 8,
+            initialGainState: CoreAudioRealtimeGainState(
+                volume: 1,
+                boost: .x1,
+                isMuted: false,
+                processEQ: process,
+                outputEQs: []
+            ),
+            channelMap: map
+        )
+        let cascaded = try CoreAudioPCMRenderer(
+            inputFormat: inputFormat,
+            outputFormat: outputFormat,
+            maximumFrameCount: 8,
+            initialGainState: CoreAudioRealtimeGainState(
+                volume: 1,
+                boost: .x1,
+                isMuted: false,
+                processEQ: process,
+                outputEQs: [EQCurve()]
+            ),
+            channelMap: map
+        )
+        let input = OwnedAudioBufferList(channelGroups: [2], frameCount: 8)
+        let firstOutput = OwnedAudioBufferList(channelGroups: [2], frameCount: 8)
+        let secondOutput = OwnedAudioBufferList(channelGroups: [2], frameCount: 8)
+        input.write(
+            [0.2, -0.1, 0.15, 0.05] + Array(repeating: 0, count: 12),
+            toBuffer: 0
+        )
+
+        processOnly.render(inputData: UnsafePointer(input.pointer), outputData: firstOutput.pointer)
+        cascaded.render(inputData: UnsafePointer(input.pointer), outputData: secondOutput.pointer)
+
+        XCTAssertEqual(firstOutput.samples(inBuffer: 0), secondOutput.samples(inBuffer: 0))
+    }
+
+    func testDistinctOutputEQCurvesLandInCorrectDeviceSlices() throws {
+        var process = EQCurve()
+        process.setGain(3, at: 4)
+        var usbEQ = EQCurve()
+        usbEQ.setGain(9, at: 5)
+        var displayEQ = EQCurve()
+        displayEQ.setGain(-9, at: 5)
+
+        let inputFormat = try CoreAudioPCMFormat(streamDescription: Self.streamDescription(
+            sampleRate: 48_000,
+            channels: 2,
+            interleaved: true
+        ))
+        let outputFormat = try CoreAudioPCMFormat(
+            streamDescriptions: [
+                Self.streamDescription(sampleRate: 48_000, channels: 2, interleaved: true),
+                Self.streamDescription(sampleRate: 48_000, channels: 2, interleaved: true),
+            ],
+            configuredBufferChannelCounts: [2, 2]
+        )
+        let map = CoreAudioOutputChannelMap(slices: [
+            .init(deviceUID: "usb", channelOffset: 0, channelCount: 2),
+            .init(deviceUID: "display", channelOffset: 2, channelCount: 2),
+        ])
+        let renderer = try CoreAudioPCMRenderer(
+            inputFormat: inputFormat,
+            outputFormat: outputFormat,
+            maximumFrameCount: 8,
+            initialGainState: CoreAudioRealtimeGainState(
+                volume: 1,
+                boost: .x1,
+                isMuted: false,
+                processEQ: process,
+                outputEQs: [usbEQ, displayEQ]
+            ),
+            channelMap: map
+        )
+        let input = OwnedAudioBufferList(channelGroups: [2], frameCount: 8)
+        let output = OwnedAudioBufferList(channelGroups: [2, 2], frameCount: 8)
+        input.write([0.2, 0] + Array(repeating: 0, count: 14), toBuffer: 0)
+
+        renderer.render(inputData: UnsafePointer(input.pointer), outputData: output.pointer)
+
+        let usbSamples = output.samples(inBuffer: 0)
+        let displaySamples = output.samples(inBuffer: 1)
+        XCTAssertGreaterThan(abs(usbSamples[0] - displaySamples[0]), 0.001)
+        XCTAssertTrue(usbSamples.allSatisfy(\.isFinite))
+        XCTAssertTrue(displaySamples.allSatisfy(\.isFinite))
+    }
+
     func testCenterBandFrequencyResponseAtSupportedSampleRates() throws {
         for sampleRate in [44_100.0, 48_000.0, 96_000.0] {
             let frameCount = 8_192
@@ -304,12 +408,16 @@ final class CoreAudioPCMRendererTests: XCTestCase {
 
         XCTAssertEqual(CoreAudioPCMRenderer.realtimeHeapAllocationBudget, 0)
         XCTAssertEqual(before.inputScratch, after.inputScratch)
+        XCTAssertEqual(before.processScratch, after.processScratch)
         XCTAssertEqual(before.gainScratch, after.gainScratch)
         XCTAssertEqual(before.coefficientsA, after.coefficientsA)
         XCTAssertEqual(before.coefficientsB, after.coefficientsB)
         XCTAssertEqual(before.activeSectionsA, after.activeSectionsA)
         XCTAssertEqual(before.activeSectionsB, after.activeSectionsB)
         XCTAssertEqual(before.delays, after.delays)
+        XCTAssertEqual(before.outputSliceIndexByChannel, after.outputSliceIndexByChannel)
+        XCTAssertEqual(before.outputSnapshotScratch, after.outputSnapshotScratch)
+        XCTAssertEqual(before.outputProcessorCount, after.outputProcessorCount)
         if ProcessInfo.processInfo.environment["AURALIS_INSTRUMENTED_TESTS"] != "1" {
             XCTAssertLessThan(
                 microsecondsPerCallback,
@@ -329,9 +437,37 @@ final class CoreAudioPCMRendererTests: XCTestCase {
         for band in 0..<EQCurve.bandCount {
             curve.setGain(band.isMultiple(of: 2) ? 12 : -12, at: band)
         }
-        let renderer = try Self.makeRenderer(maximumFrames: frameCount, curve: curve)
+        let inputFormat = try CoreAudioPCMFormat(streamDescription: Self.streamDescription(
+            sampleRate: 48_000,
+            channels: 2,
+            interleaved: true
+        ))
+        let outputFormat = try CoreAudioPCMFormat(
+            streamDescriptions: Array(repeating: Self.streamDescription(
+                sampleRate: 48_000,
+                channels: 2,
+                interleaved: true
+            ), count: 4),
+            configuredBufferChannelCounts: [2, 2, 2, 2]
+        )
+        let channelMap = CoreAudioOutputChannelMap(slices: (0..<4).map { index in
+            .init(deviceUID: "output-\(index)", channelOffset: index * 2, channelCount: 2)
+        })
+        let renderer = try CoreAudioPCMRenderer(
+            inputFormat: inputFormat,
+            outputFormat: outputFormat,
+            maximumFrameCount: frameCount,
+            initialGainState: CoreAudioRealtimeGainState(
+                volume: 1,
+                boost: .x1,
+                isMuted: false,
+                processEQ: curve,
+                outputEQs: Array(repeating: curve, count: 4)
+            ),
+            channelMap: channelMap
+        )
         let input = OwnedAudioBufferList(channelGroups: [2], frameCount: frameCount, repeating: 0.2)
-        let output = OwnedAudioBufferList(channelGroups: [2], frameCount: frameCount)
+        let output = OwnedAudioBufferList(channelGroups: [2, 2, 2, 2], frameCount: frameCount)
         let before = renderer.storageFingerprint
         let start = DispatchTime.now().uptimeNanoseconds
 
@@ -341,7 +477,8 @@ final class CoreAudioPCMRendererTests: XCTestCase {
                     volume: Double((iteration % 100) + 1) / 100,
                     boost: BoostLevel.allCases[iteration % BoostLevel.allCases.count],
                     isMuted: false,
-                    eq: curve
+                    processEQ: curve,
+                    outputEQs: Array(repeating: curve, count: 4)
                 ))
             }
             renderer.render(inputData: UnsafePointer(input.pointer), outputData: output.pointer)
@@ -351,18 +488,24 @@ final class CoreAudioPCMRendererTests: XCTestCase {
         let microsecondsPerCallback = Double(elapsed) / Double(iterations) / 1_000
         let after = renderer.storageFingerprint
         XCTAssertEqual(after.inputScratch, before.inputScratch)
+        XCTAssertEqual(after.processScratch, before.processScratch)
         XCTAssertEqual(after.gainScratch, before.gainScratch)
         XCTAssertEqual(after.coefficientsA, before.coefficientsA)
         XCTAssertEqual(after.coefficientsB, before.coefficientsB)
         XCTAssertEqual(after.activeSectionsA, before.activeSectionsA)
         XCTAssertEqual(after.activeSectionsB, before.activeSectionsB)
         XCTAssertEqual(after.delays, before.delays)
-        XCTAssertTrue(output.samples(inBuffer: 0).allSatisfy(\.isFinite))
+        XCTAssertEqual(after.outputSliceIndexByChannel, before.outputSliceIndexByChannel)
+        XCTAssertEqual(after.outputSnapshotScratch, before.outputSnapshotScratch)
+        XCTAssertEqual(after.outputProcessorCount, before.outputProcessorCount)
+        for bufferIndex in 0..<4 {
+            XCTAssertTrue(output.samples(inBuffer: bufferIndex).allSatisfy(\.isFinite))
+        }
         if ProcessInfo.processInfo.environment["AURALIS_INSTRUMENTED_TESTS"] != "1" {
             XCTAssertLessThan(
                 microsecondsPerCallback,
-                CoreAudioPCMRenderer.callbackBudgetMicroseconds,
-                "Stress averaged \(microsecondsPerCallback) µs over \(iterations) callbacks"
+                CoreAudioPCMRenderer.callbackBudgetMicroseconds * 4,
+                "Four-output stress averaged \(microsecondsPerCallback) µs over \(iterations) callbacks"
             )
         }
     }

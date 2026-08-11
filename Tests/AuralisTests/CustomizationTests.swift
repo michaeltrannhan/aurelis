@@ -65,7 +65,7 @@ final class CustomizationTests: XCTestCase {
     }
 
     func testSettingsTabsExposeExpectedSections() {
-        XCTAssertEqual(SettingsTab.allCases.map(\.label), ["General", "Audio", "Shortcuts", "About"])
+        XCTAssertEqual(SettingsTab.allCases.map(\.label), ["General", "Audio", "Controls", "About & diagnostics"])
         XCTAssertEqual(SettingsTab.general.systemImage, "gearshape")
         XCTAssertEqual(SettingsTab.audio.systemImage, "speaker.wave.2")
     }
@@ -172,9 +172,16 @@ final class CustomizationTests: XCTestCase {
     func testControlSettingsDefaultToEnabledSafeValues() {
         let customization = AppCustomization()
 
-        XCTAssertTrue(customization.mediaKeysEnabled)
+        // New installs keep media keys off until enabled in Controls settings.
+        XCTAssertFalse(customization.mediaKeysEnabled)
         XCTAssertTrue(customization.hotkeysEnabled)
         XCTAssertEqual(customization.menuBarIconStyle, .speaker)
+    }
+
+    func testMissingMediaKeysFieldPreservesLegacyEnabledDefault() throws {
+        let json = Data(#"{"appearance":"system"}"#.utf8)
+        let decoded = try JSONDecoder().decode(AppCustomization.self, from: json)
+        XCTAssertTrue(decoded.mediaKeysEnabled)
     }
 
     func testOutputControlPresentationUsesExplicitCapabilities() {
@@ -219,7 +226,7 @@ final class CustomizationTests: XCTestCase {
         ]
 
         XCTAssertEqual(actions.map(AudioIssuePresentationModel.recoveryTitle), [
-            "Retry",
+            "Refresh",
             "Retry Controls",
             "Request Access",
             "Open Settings",

@@ -4,19 +4,44 @@ struct CoreAudioRealtimeGainState: Equatable {
     var volume: Float
     var boost: BoostLevel
     var isMuted: Bool
-    var eq: EQCurve
+    /// Per-app Process EQ, applied once before gain and fan-out.
+    var processEQ: EQCurve
+    /// Curves ordered in parallel with the tap controller's output UIDs.
+    var outputEQs: [EQCurve]
 
-    init(volume: Double, boost: BoostLevel, isMuted: Bool, eq: EQCurve = EQCurve()) {
+    init(
+        volume: Double,
+        boost: BoostLevel,
+        isMuted: Bool,
+        processEQ: EQCurve = EQCurve(),
+        outputEQs: [EQCurve] = []
+    ) {
         self.volume = Float(AppCustomization.clampedVolume(volume, fallback: 1))
         self.boost = boost
         self.isMuted = isMuted
-        self.eq = eq
+        self.processEQ = processEQ
+        self.outputEQs = outputEQs
+    }
+
+    /// Compatibility spelling for characterization tests and call sites that
+    /// predate explicit Process/Output stage naming.
+    init(volume: Double, boost: BoostLevel, isMuted: Bool, eq: EQCurve) {
+        self.init(volume: volume, boost: boost, isMuted: isMuted, processEQ: eq)
     }
 
     var targetGain: Float {
         guard !isMuted else { return 0 }
         let gain = volume * Float(boost.rawValue)
         return gain.isFinite ? max(gain, 0) : 1
+    }
+
+    mutating func syncOutputEQs(forUIDs uids: [String], source: [String: EQCurve]) {
+        outputEQs = uids.map { source[$0] ?? EQCurve() }
+    }
+
+    func outputEQ(at index: Int) -> EQCurve {
+        guard outputEQs.indices.contains(index) else { return EQCurve() }
+        return outputEQs[index]
     }
 }
 

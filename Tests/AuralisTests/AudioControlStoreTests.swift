@@ -152,6 +152,7 @@ final class AudioControlStoreTests: XCTestCase {
         ])
         let store = makeStore(backend: backend)
         try await store.refresh()
+        backend.clearCommands()
 
         try await store.setVolume(0.25, for: music)
         try await store.setMuted(true, for: music)
@@ -578,6 +579,144 @@ final class AudioControlStoreTests: XCTestCase {
         XCTAssertEqual(try store.settingsStore.load().appSettings[music]?.eq, EQCurve())
     }
 
+    func testOutputEQGestureFlushesOneCurveAndPersistsPerDevice() async throws {
+        let usb = AudioDeviceSnapshot(id: "usb", name: "USB DAC", isDefault: true)
+        let backend = MockAudioBackend(devices: [usb])
+        let store = makeStore(backend: backend)
+        try await store.refresh()
+        backend.clearCommands()
+
+        store.beginOutputEQEditing(band: 5, for: usb.id)
+        for value in 1...12 {
+            store.setOutputEQGainIntent(Double(value) / 2, band: 5, for: usb.id)
+        }
+        store.endOutputEQEditing(band: 5, for: usb.id)
+        await store.waitForPendingOperations()
+
+        var expected = EQCurve()
+        expected.setGain(6, at: 5)
+        XCTAssertEqual(backend.commands, [.setOutputEQ(usb.id, expected)])
+        XCTAssertEqual(store.settings.deviceSettings[usb.id]?.eq, expected)
+        XCTAssertEqual(store.channels.outputModel(for: usb.id)?.visibleEQ, expected)
+        XCTAssertEqual(try store.settingsStore.load().deviceSettings[usb.id]?.eq, expected)
+    }
+
+    func testOutputEQCommandProjectsExecutesAndPersistsForDevice() async throws {
+        let usb = AudioDeviceSnapshot(id: "usb", name: "USB DAC", isDefault: true)
+        let backend = MockAudioBackend(devices: [usb])
+        let store = makeStore(backend: backend)
+        try await store.refresh()
+        backend.clearCommands()
+        var expected = EQCurve()
+        expected.setGain(-3, at: 2)
+        expected.setGain(4.5, at: 5)
+
+        let receipt = store.submit(ControlCommand(
+            target: .outputDevice(usb.id),
+            mutation: .setEQ(expected),
+            source: .hotkey
+        ))
+
+        XCTAssertTrue(receipt.accepted)
+        XCTAssertEqual(receipt.projected?.eq, expected)
+        let result = await store.result(for: receipt.id)
+        guard case let .applied(actual) = result else {
+            return XCTFail("Expected applied Output EQ command, got \(result)")
+        }
+        let appliedEQ = try XCTUnwrap(actual.eq)
+        XCTAssertEqual(appliedEQ, expected)
+        XCTAssertEqual(store.settings.deviceSettings[usb.id]?.eq, expected)
+        XCTAssertEqual(try store.settingsStore.load().deviceSettings[usb.id]?.eq, expected)
+        XCTAssertEqual(backend.commands, [.setOutputEQ(usb.id, expected)])
+    }
+
+    func testOutputEQPersistenceFailureCompensatesEngineAndStore() async throws {
+        let usb = AudioDeviceSnapshot(id: "usb", name: "USB DAC", isDefault: true)
+        var baselineEQ = EQCurve()
+        baselineEQ.setGain(3, at: 2)
+        let settingsURL = uniqueSettingsURL()
+        let settingsStore = SettingsStore(settingsURL: settingsURL)
+        try settingsStore.save(PersistedSettings(deviceSettings: [
+            usb.id: DeviceAudioSettings(
+                displayName: usb.name,
+                volume: 0.75,
+                isMuted: false,
+                eq: baselineEQ
+            )
+        ]))
+        let backend = MockAudioBackend(devices: [usb])
+        let store = AudioControlStore(
+            settingsStore: settingsStore,
+            backend: backend,
+            permissionClient: grantedClient()
+        )
+        try await store.refresh()
+        backend.clearCommands()
+        try blockPersistence(at: settingsURL)
+        defer { try? FileManager.default.removeItem(at: settingsURL.deletingLastPathComponent()) }
+
+        store.setOutputEQGainIntent(-6, band: 4, for: usb.id)
+        await store.waitForPendingOperations()
+
+        var changed = baselineEQ
+        changed.setGain(-6, at: 4)
+        XCTAssertEqual(
+            backend.commands,
+            [.setOutputEQ(usb.id, changed), .setOutputEQ(usb.id, baselineEQ)]
+        )
+        XCTAssertEqual(store.settings.deviceSettings[usb.id]?.eq, baselineEQ)
+        XCTAssertEqual(store.channels.outputModel(for: usb.id)?.visibleEQ, baselineEQ)
+        XCTAssertEqual(store.issues.last?.id, "output-eq-\(usb.id)-persistence")
+        XCTAssertEqual(store.issues.last?.domain, .persistence)
+    }
+
+    func testMultiOutputPresetRoundTripsEveryRoutedOutputEQ() async throws {
+        let music = AudioAppIdentity(rawValue: "music")
+        let speakers = AudioDeviceSnapshot(
+            id: "built-in",
+            name: "MacBook Speakers",
+            isDefault: true
+        )
+        let usb = AudioDeviceSnapshot(id: "usb", name: "USB DAC")
+        let backend = MockAudioBackend(
+            apps: [AudioAppSnapshot(identity: music, displayName: "Music")],
+            devices: [speakers, usb]
+        )
+        let store = makeStore(backend: backend)
+        try await store.refresh()
+        try await store.setRoute(.multiOutput([speakers.id, usb.id]), for: music)
+        try await store.setEQGain(2, band: 3, for: music)
+        try await store.setOutputEQGain(5, band: 5, for: speakers.id)
+        try await store.setOutputEQGain(-7, band: 5, for: usb.id)
+
+        let presetID = try await store.createProfile(named: "Desk", scope: .global)
+        let captured = try XCTUnwrap(store.settings.profiles.first { $0.id == presetID })
+        XCTAssertEqual(Set(captured.deviceSettings.keys), [speakers.id, usb.id])
+        XCTAssertEqual(captured.deviceSettings[speakers.id]?.eq.gains[5], 5)
+        XCTAssertEqual(captured.deviceSettings[usb.id]?.eq.gains[5], -7)
+        XCTAssertEqual(captured.appSettings[music]?.eq.gains[3], 2)
+
+        try await store.setOutputEQGain(-2, band: 5, for: speakers.id)
+        try await store.setOutputEQGain(3, band: 5, for: usb.id)
+        backend.clearCommands()
+        try await store.applyProfile(presetID)
+
+        XCTAssertEqual(store.settings.deviceSettings[speakers.id]?.eq.gains[5], 5)
+        XCTAssertEqual(store.settings.deviceSettings[usb.id]?.eq.gains[5], -7)
+        XCTAssertEqual(store.settings.appSettings[music]?.eq.gains[3], 2)
+        XCTAssertTrue(backend.commands.contains(.setOutputEQ(
+            speakers.id,
+            captured.deviceSettings[speakers.id]!.eq
+        )))
+        XCTAssertTrue(backend.commands.contains(.setOutputEQ(
+            usb.id,
+            captured.deviceSettings[usb.id]!.eq
+        )))
+        let persisted = try store.settingsStore.load()
+        XCTAssertEqual(persisted.deviceSettings[speakers.id]?.eq.gains[5], 5)
+        XCTAssertEqual(persisted.deviceSettings[usb.id]?.eq.gains[5], -7)
+    }
+
     func testPersistenceFailureCompensatesBackendAndRetriesTheRolledBackState() async throws {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         var baselineEQ = EQCurve()
@@ -912,6 +1051,8 @@ final class AudioControlStoreTests: XCTestCase {
         )
 
         try await store.setVolume(0.9, for: music)
+        try await store.setOutputEQGain(7, band: 5, for: home.id)
+        backend.clearCommands()
         try await store.removeOutputConfiguration(for: home.id)
 
         let neutralContext = try XCTUnwrap(store.outputConfiguration(for: home.id))
@@ -919,6 +1060,9 @@ final class AudioControlStoreTests: XCTestCase {
         XCTAssertNil(store.settings.activeGlobalProfileID)
         XCTAssertEqual(store.settings.activeLocalProfileID, neutralContext.id)
         XCTAssertEqual(store.settings.appSettings[music]?.volume ?? -1, 1, accuracy: 0.001)
+        XCTAssertEqual(store.settings.deviceSettings[home.id]?.eq, EQCurve())
+        XCTAssertEqual(neutralContext.deviceSettings[home.id]?.eq, EQCurve())
+        XCTAssertTrue(backend.commands.contains(.setOutputEQ(home.id, EQCurve())))
         XCTAssertNotNil(store.settings.profiles.first { $0.id == presetID })
     }
 

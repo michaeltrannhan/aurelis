@@ -13,6 +13,31 @@ enum EQGainRange: Double, CaseIterable, Codable, Identifiable, Sendable {
     }
 }
 
+/// Identifies where a shared EQ curve runs in the audio signal path.
+///
+/// Process EQ belongs to one app. Output EQ belongs to one physical output
+/// device and is shared by every app routed to that device.
+enum EQStage: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {
+    case process
+    case output
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .process: "Process EQ"
+        case .output: "Output EQ"
+        }
+    }
+
+    var shortTitle: String {
+        switch self {
+        case .process: "Process"
+        case .output: "Output"
+        }
+    }
+}
+
 struct EQCurve: Codable, Equatable, Hashable, Sendable {
     static let bandCount = 10
     static let frequencies = ["31", "63", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"]

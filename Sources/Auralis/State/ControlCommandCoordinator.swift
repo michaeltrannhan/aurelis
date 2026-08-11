@@ -187,6 +187,8 @@ final class ControlCommandCoordinator: ObservableObject {
             return ControlProjectedState(
                 volume: state?.volume,
                 isMuted: state?.isMuted,
+                eq: store.settings.deviceSettings[deviceID]?.eq
+                    ?? EQCurve(range: store.settings.customization.eqGainRange),
                 displayName: device?.name ?? deviceID
             )
         case .activeApps:

@@ -49,7 +49,7 @@ struct PermissionPresentation {
             secondary = .openSettings
         case .notDetermined:
             title = "Enable real-time audio control"
-            detail = "Grant Screen & System Audio Recording to control volume, mute, boost and EQ for each app. Discovery works without it."
+            detail = "Grant Screen & System Audio Recording to control app volume, mute, boost, Process EQ, and routed Output EQ. Discovery works without it."
             systemImage = "waveform.badge.mic"
             tint = .orange
             primary = .request

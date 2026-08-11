@@ -1,6 +1,6 @@
 # Auralis
 
-Auralis is a macOS SwiftUI menu-bar audio controller inspired by FineTune. It includes CoreAudio discovery and process taps, per-app volume/mute/boost/EQ, single- and multi-device routing, automatic per-output contexts, reusable preset templates, reconnect-aware output settings, global controls, typed recovery state, first-run guidance, and versioned JSON persistence.
+Auralis is a macOS SwiftUI menu-bar audio controller inspired by FineTune. It includes CoreAudio discovery and process taps, per-app volume/mute/boost/Process EQ, per-device Output EQ, single- and multi-device routing, automatic per-output contexts, reusable preset templates, reconnect-aware output settings, global controls, typed recovery state, first-run guidance, and versioned JSON persistence.
 
 **Platform baseline:** macOS 14.2 or newer on Apple Silicon (arm64) only. Intel and universal binaries are out of scope. Hosted CI uses macOS 15 runners with Xcode 16.4 (`DEVELOPER_DIR=/Applications/Xcode_16.4.app/Contents/Developer`); newer local Xcode versions are accepted when they meet that minimum.
 
@@ -107,7 +107,7 @@ Auralis ships two macOS WidgetKit configurations:
 - **Auralis Mixer / systemSmall** — a focused master-output remote with volume down/up, mute, current profile, and active-app status.
 - **Auralis Mixer / systemMedium** — master output with quick output cycling plus two app rows with mute, volume, boost, and refresh.
 - **Auralis Mixer / systemLarge** — a control-center layout with Global/output configuration status, direct output selection, a roomy master volume/mute panel, batch mute/unmute/50% actions, and two full app mixer rows.
-- **Auralis EQ / systemLarge** — a focused 10-band EQ chart with ±0.5 dB buttons per band.
+- **Auralis EQ / systemLarge** — a focused per-app Process EQ chart with ±0.5 dB buttons per band. Output EQ remains in the host app.
 
 Interactive controls are backed by `AppIntent`s that queue absolute commands into a shared App Group container. This includes output selection, device and app volume/mute, profile application, batch active-app controls, boost, EQ, and refresh. The app drains the queue via a `DispatchSource` file watcher and applies changes to its `AudioControlStore`. The app writes a `WidgetSnapshot` (compact Codable summary) to the same container on every store change so the widget always renders fresh state.
 
@@ -118,7 +118,8 @@ Changing an output device's volume, mute state, or selecting it as the default o
 Audio contexts and presets are available from the main-window header, menu-bar
 popup, Audio settings, and the large Mixer widget. Every physical output owns
 an automatically saved context keyed by its CoreAudio UID. That context contains
-the complete per-app mix—routing, volume, mute, boost, and EQ—so LG UltraFine
+the complete app mix—routing, volume, mute, boost, and Process EQ—plus Output
+EQ for every routed physical device, so LG UltraFine
 settings cannot leak into MacBook Speakers after an unplug or default-output
 change. Newly discovered outputs start neutral: follow the system default,
 default app volume, unmuted, 1× boost, and flat EQ.
@@ -127,9 +128,10 @@ Named presets are detached templates. Applying one copies its mix into a single
 output context; later edits remain local to that output and save automatically.
 Unavailable explicit routes temporarily follow the current system output while
 retaining their saved UID for restoration on reconnect. CoreAudio hot-plug
-bursts are stabilized before Auralis commits the final context switch. Version-8
+bursts are stabilized before Auralis commits the final context switch. Version-9
 persistence preserves existing output configurations as automatic contexts and
-keeps Global profiles as copyable presets.
+keeps Global profiles as copyable presets. Version-8 files migrate additively;
+missing Output EQ curves load flat without resetting existing settings.
 
 ### Widget architecture
 
@@ -248,12 +250,12 @@ notarization, permissions, audio routes, and widget behavior on physical hardwar
 ## Current Scope
 
 - Menu-bar popup app named Auralis.
-- Desktop widget (systemSmall/Medium/Large) with interactive mute, volume, boost, and EQ controls via AppIntents.
+- Desktop widget (systemSmall/Medium/Large) with interactive mute, volume, boost, and Process EQ controls via AppIntents.
 - CoreAudio active output app and output device discovery.
 - Reconnect-aware per-device volume/mute restoration and preferred default-output selection.
-- Named profiles for app controls, output routes, device controls, and preferred output.
-- Per-app volume, mute, boost, pin, ignore, and 10-band EQ state.
-- Per-app follow-default, single-output, and ordered multi-output routing through private CoreAudio aggregate devices, with active-device and matching-sample-rate validation.
+- Named profiles for app controls, Process EQ, output routes, per-device Output EQ, device controls, and preferred output.
+- Per-app volume, mute, boost, pin, ignore, and 10-band Process EQ state; per-physical-device 10-band Output EQ state.
+- Per-app follow-default, single-output, and ordered multi-output routing through non-stacked private CoreAudio aggregate devices, with the first output as clock and distinct Output EQ per channel slice.
 - Early per-app volume, mute, and boost processing through private CoreAudio process taps.
 - Customizable appearance, popup density, default new-app volume, EQ gain range, volume step, and inactive app visibility.
 - JSON settings under Application Support by default.

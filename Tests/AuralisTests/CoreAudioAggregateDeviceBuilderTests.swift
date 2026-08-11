@@ -38,7 +38,7 @@ final class CoreAudioAggregateDeviceBuilderTests: XCTestCase {
         XCTAssertEqual(description[kAudioAggregateDeviceMainSubDeviceKey] as? String, "usb")
         XCTAssertEqual(description[kAudioAggregateDeviceClockDeviceKey] as? String, "usb")
         XCTAssertEqual(description[kAudioAggregateDeviceIsPrivateKey] as? Bool, true)
-        XCTAssertEqual(description[kAudioAggregateDeviceIsStackedKey] as? Bool, true)
+        XCTAssertEqual(description[kAudioAggregateDeviceIsStackedKey] as? Bool, false)
 
         let subdevices = try XCTUnwrap(
             description[kAudioAggregateDeviceSubDeviceListKey] as? [[String: Any]]

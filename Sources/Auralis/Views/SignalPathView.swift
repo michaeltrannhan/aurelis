@@ -3,9 +3,9 @@ import SwiftUI
 struct SignalPathNode: Identifiable, Equatable {
     enum Kind: Equatable {
         case app
+        case processEQ
         case gain
-        case eq
-        case boost
+        case outputEQ
         case output
     }
 
@@ -13,12 +13,17 @@ struct SignalPathNode: Identifiable, Equatable {
     let kind: Kind
     let title: String
     let detail: String
-    var isFailed: Bool = false
+    var isActive = false
+    var isFailed = false
 }
 
+/// A compact, literal map of the selected app's render order. Accent color
+/// communicates stage at a glance, while the stage names keep it usable when
+/// color differentiation is unavailable.
 struct SignalPathView: View {
     let nodes: [SignalPathNode]
     var pulseToken: UUID?
+
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -30,69 +35,93 @@ struct SignalPathView: View {
                 }
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(AuralisColor.panel.opacity(0.72), in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(AuralisColor.panel)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(AuralisColor.hairline)
+        )
         .overlay {
             if let pulseToken, !reduceMotion {
-                AuroraPulseOverlay(token: pulseToken)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                ConfirmedSignalPulse(token: pulseToken)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
                     .allowsHitTesting(false)
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityLabel)
-    }
-
-    private var accessibilityLabel: String {
-        nodes.map { "\($0.title) \($0.detail)" }.joined(separator: ", then ")
+        .accessibilityLabel(
+            nodes.map { "\($0.title), \($0.detail)" }.joined(separator: ", then ")
+        )
     }
 
     private func nodeView(_ node: SignalPathNode) -> some View {
-        VStack(spacing: 3) {
+        let accent = accent(for: node.kind)
+        return VStack(spacing: 2) {
             Text(node.title)
-                .font(AuralisTypography.workspaceTitle(13))
-                .foregroundStyle(node.isFailed ? AuralisColor.peakRose : .primary)
+                .font(AuralisTypography.workspaceTitle(12))
+                .foregroundStyle(node.isFailed ? Color.red : accent)
                 .lineLimit(1)
             Text(node.detail)
-                .font(AuralisTypography.metric(11))
-                .foregroundStyle(node.isFailed ? AuralisColor.peakRose : .secondary)
+                .font(AuralisTypography.metric(9))
+                .foregroundStyle(node.isFailed ? Color.red : Color.secondary)
                 .lineLimit(1)
         }
-        .frame(minWidth: 72)
         .padding(.horizontal, 6)
-        .accessibilityAddTraits(node.isFailed ? .isSelected : [])
+        .padding(.vertical, 3)
+        .frame(minWidth: 64, maxWidth: .infinity)
+        .background(
+            node.isActive ? accent.opacity(0.10) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 6)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(node.isActive ? accent.opacity(0.5) : Color.clear)
+        )
+        .accessibilityAddTraits(node.isActive ? .isSelected : [])
     }
 
     private func connector(failedAfter: Bool) -> some View {
-        Rectangle()
-            .fill(failedAfter ? AuralisColor.peakRose.opacity(0.55) : AuralisColor.signalCyan.opacity(0.45))
-            .frame(height: 2)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 4)
+        HStack(spacing: 2) {
+            Rectangle()
+                .fill(failedAfter ? Color.red : AuralisColor.hairline)
+                .frame(height: 1)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(failedAfter ? Color.red : Color.secondary)
+        }
+        .frame(minWidth: 18, maxWidth: 34)
+        .accessibilityHidden(true)
+    }
+
+    private func accent(for kind: SignalPathNode.Kind) -> Color {
+        switch kind {
+        case .processEQ: AuralisColor.stageAccent(.process)
+        case .outputEQ: AuralisColor.stageAccent(.output)
+        case .app, .gain, .output: .primary
+        }
     }
 }
 
-private struct AuroraPulseOverlay: View {
+private struct ConfirmedSignalPulse: View {
     let token: UUID
     @State private var progress: CGFloat = 0
 
     var body: some View {
-        GeometryReader { geo in
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [AuralisColor.signalCyan.opacity(0.55), .clear],
-                        center: .center,
-                        startRadius: 0,
-                        endRadius: 18
-                    )
+        GeometryReader { proxy in
+            Capsule()
+                .fill(AuralisColor.signalCyan)
+                .frame(width: 12, height: 2)
+                .offset(
+                    x: max(proxy.size.width - 12, 0) * progress,
+                    y: proxy.size.height - 3
                 )
-                .frame(width: 28, height: 28)
-                .offset(x: (geo.size.width - 28) * progress, y: (geo.size.height - 28) / 2)
                 .onAppear {
                     progress = 0
-                    withAnimation(.easeInOut(duration: 0.85)) {
+                    withAnimation(.easeInOut(duration: 0.7)) {
                         progress = 1
                     }
                 }
@@ -108,33 +137,86 @@ enum SignalPathBuilder {
         isMuted: Bool,
         boost: BoostLevel,
         outputName: String,
+        activeStage: EQStage? = nil,
         failedAt: SignalPathNode.Kind? = nil
     ) -> [SignalPathNode] {
-        let percent = "\(Int((volume * 100).rounded()))%"
+        nodes(
+            appName: appName,
+            volume: volume,
+            isMuted: isMuted,
+            boost: boost,
+            outputNames: [outputName],
+            activeStage: activeStage,
+            failedAt: failedAt
+        )
+    }
+
+    static func nodes(
+        appName: String,
+        volume: Double,
+        isMuted: Bool,
+        boost: BoostLevel,
+        outputNames: [String],
+        activeStage: EQStage? = nil,
+        failedAt: SignalPathNode.Kind? = nil
+    ) -> [SignalPathNode] {
+        let normalizedOutputs = outputNames.isEmpty ? ["Output"] : outputNames
+        let outputCount = normalizedOutputs.count
+        let outputTitle = outputCount == 1
+            ? shortName(normalizedOutputs[0])
+            : "\(outputCount) outputs"
+        let outputDetail = outputCount == 1
+            ? "Destination"
+            : normalizedOutputs.map(shortName).joined(separator: " + ")
+        let gainTitle = isMuted
+            ? "Mute"
+            : "\(Int((volume * 100).rounded()))%"
+        let gainDetail = boost == .x1 ? "App gain" : "\(boost.label) boost"
+
         return [
-            SignalPathNode(id: "app", kind: .app, title: appName, detail: "Source", isFailed: failedAt == .app),
+            SignalPathNode(
+                id: "app",
+                kind: .app,
+                title: shortName(appName),
+                detail: "Source",
+                isFailed: failedAt == .app
+            ),
+            SignalPathNode(
+                id: "process-eq",
+                kind: .processEQ,
+                title: "Process EQ",
+                detail: "Per app",
+                isActive: activeStage == .process,
+                isFailed: failedAt == .processEQ
+            ),
             SignalPathNode(
                 id: "gain",
                 kind: .gain,
-                title: isMuted ? "Mute" : percent,
-                detail: isMuted ? "Muted" : "Level",
+                title: gainTitle,
+                detail: gainDetail,
                 isFailed: failedAt == .gain
             ),
-            SignalPathNode(id: "eq", kind: .eq, title: "EQ", detail: "10-band", isFailed: failedAt == .eq),
             SignalPathNode(
-                id: "boost",
-                kind: .boost,
-                title: boost.label,
-                detail: "Boost",
-                isFailed: failedAt == .boost
+                id: "output-eq",
+                kind: .outputEQ,
+                title: outputCount == 1 ? "Output EQ" : "Output EQ ×\(outputCount)",
+                detail: "Per device",
+                isActive: activeStage == .output,
+                isFailed: failedAt == .outputEQ
             ),
             SignalPathNode(
                 id: "output",
                 kind: .output,
-                title: outputName,
-                detail: "Output",
+                title: outputTitle,
+                detail: outputDetail,
                 isFailed: failedAt == .output
             ),
         ]
+    }
+
+    private static func shortName(_ value: String) -> String {
+        let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.count > 22 else { return value }
+        return String(value.prefix(20)) + "…"
     }
 }

@@ -13,6 +13,7 @@ protocol CoreAudioRealtimeTapControlling: AnyObject {
     func setMuted(_ muted: Bool, for identity: AudioAppIdentity)
     func setBoost(_ boost: BoostLevel, for identity: AudioAppIdentity)
     func setEQ(_ eq: EQCurve, for identity: AudioAppIdentity)
+    func setOutputEQ(_ eq: EQCurve, forUID uid: String)
 }
 
 protocol CoreAudioRouteControlling: AnyObject {
@@ -199,6 +200,7 @@ final class CoreAudioProcessTapManager: CoreAudioTapManaging, CoreAudioRouteCont
     private var statesByIdentity: [AudioAppIdentity: TapSessionState] = [:]
     private var availableOutputUIDs: [String] = []
     private var storedDefaultOutputDeviceUIDs: [String] = []
+    private var outputEQByUID: [String: EQCurve] = [:]
 
     var defaultOutputDeviceUIDs: [String] {
         get { onLifecycleQueue { storedDefaultOutputDeviceUIDs } }
@@ -521,6 +523,7 @@ final class CoreAudioProcessTapManager: CoreAudioTapManaging, CoreAudioRouteCont
 
         let configuration = resolvedOutputConfiguration(for: identity, state: state)
         state.requestedConfiguration = configuration
+        syncOutputEQs(into: &state, outputUIDs: configuration.outputUIDs)
         if state.controller != nil,
            state.outputConfiguration == configuration,
            !state.requiresControllerReplacement,
@@ -583,6 +586,16 @@ final class CoreAudioProcessTapManager: CoreAudioTapManaging, CoreAudioRouteCont
             throw error
         }
         statesByIdentity[identity] = state
+    }
+
+    private func syncOutputEQs(
+        into state: inout TapSessionState,
+        outputUIDs: [String]
+    ) {
+        state.gainState.syncOutputEQs(
+            forUIDs: outputUIDs,
+            source: outputEQByUID
+        )
     }
 
     private func startInitialController(
@@ -973,9 +986,16 @@ final class CoreAudioProcessTapManager: CoreAudioTapManaging, CoreAudioRouteCont
               state.session == nil,
               state.ownedControllerCount == 0,
               state.route == .followDefault,
-              state.gainState == Self.defaultGainState else { return }
+              isDefaultLikeGainState(state.gainState) else { return }
         state.retryWorkItem?.cancel()
         statesByIdentity.removeValue(forKey: identity)
+    }
+
+    private func isDefaultLikeGainState(_ state: CoreAudioRealtimeGainState) -> Bool {
+        state.volume == Self.defaultGainState.volume
+            && state.boost == Self.defaultGainState.boost
+            && state.isMuted == Self.defaultGainState.isMuted
+            && state.processEQ == Self.defaultGainState.processEQ
     }
 
     private func onLifecycleQueue<T>(_ operation: () throws -> T) rethrows -> T {
@@ -1048,10 +1068,28 @@ extension CoreAudioProcessTapManager: CoreAudioRealtimeTapControlling {
     func setEQ(_ eq: EQCurve, for identity: AudioAppIdentity) {
         onLifecycleQueue {
             var state = statesByIdentity[identity] ?? TapSessionState()
-            state.gainState.eq = eq
+            state.gainState.processEQ = eq
             statesByIdentity[identity] = state
             state.controller?.updateGainState(state.gainState)
             pruneIfEligible(identity)
+        }
+    }
+
+    func setOutputEQ(_ eq: EQCurve, forUID uid: String) {
+        onLifecycleQueue {
+            let uid = uid.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !uid.isEmpty else { return }
+            outputEQByUID[uid] = eq
+
+            for identity in Array(statesByIdentity.keys) {
+                guard var state = statesByIdentity[identity] else { continue }
+                let outputUIDs = state.controller?.outputDeviceUIDs
+                    ?? resolvedOutputConfiguration(for: identity, state: state).outputUIDs
+                guard outputUIDs.contains(uid) else { continue }
+                syncOutputEQs(into: &state, outputUIDs: outputUIDs)
+                statesByIdentity[identity] = state
+                state.controller?.updateGainState(state.gainState)
+            }
         }
     }
 }

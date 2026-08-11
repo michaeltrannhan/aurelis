@@ -2,7 +2,7 @@ import XCTest
 @testable import Auralis
 
 final class AuroraConsolePresentationTests: XCTestCase {
-    func testSignalPathBuilderMatchesMusicMuteEQBoostOutputStory() {
+    func testSignalPathBuilderNamesBothEQStagesAndFailureLocation() {
         let nodes = SignalPathBuilder.nodes(
             appName: "Music",
             volume: 0.8,
@@ -11,9 +11,29 @@ final class AuroraConsolePresentationTests: XCTestCase {
             outputName: "MacBook Speakers",
             failedAt: .gain
         )
-        XCTAssertEqual(nodes.map(\.title), ["Music", "Mute", "EQ", "2x", "MacBook Speakers"])
-        XCTAssertTrue(nodes[1].isFailed)
+        XCTAssertEqual(
+            nodes.map(\.title),
+            ["Music", "Process EQ", "Mute", "Output EQ", "MacBook Speakers"]
+        )
+        XCTAssertEqual(nodes[2].detail, "2x boost")
+        XCTAssertTrue(nodes[2].isFailed)
         XCTAssertFalse(nodes[0].isFailed)
+    }
+
+    func testSignalPathBuilderExplainsMultiOutputFanoutAndActiveStage() {
+        let nodes = SignalPathBuilder.nodes(
+            appName: "Music",
+            volume: 0.8,
+            isMuted: false,
+            boost: .x1,
+            outputNames: ["USB DAC", "Studio Display"],
+            activeStage: .output
+        )
+
+        XCTAssertEqual(nodes[3].title, "Output EQ ×2")
+        XCTAssertTrue(nodes[3].isActive)
+        XCTAssertEqual(nodes.last?.title, "2 outputs")
+        XCTAssertEqual(nodes.last?.detail, "USB DAC + Studio Display")
     }
 
     func testMixerEmptyStateMapsPhases() {

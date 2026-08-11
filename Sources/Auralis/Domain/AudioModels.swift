@@ -331,21 +331,26 @@ struct DeviceAudioSettings: Codable, Equatable, Sendable {
     var displayName: String
     var volume: Double
     var isMuted: Bool
+    /// Per-device Output EQ, applied after Process EQ and app gain.
+    var eq: EQCurve
 
     init(
         displayName: String,
         volume: Double,
-        isMuted: Bool
+        isMuted: Bool,
+        eq: EQCurve = EQCurve()
     ) {
         self.displayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         self.volume = min(max(volume.isFinite ? volume : 1, 0), 1)
         self.isMuted = isMuted
+        self.eq = eq
     }
 
     private enum CodingKeys: String, CodingKey {
         case displayName
         case volume
         case isMuted
+        case eq
     }
 
     init(from decoder: Decoder) throws {
@@ -353,7 +358,8 @@ struct DeviceAudioSettings: Codable, Equatable, Sendable {
         self.init(
             displayName: container.tolerant(String.self, forKey: .displayName) ?? "Output Device",
             volume: container.tolerantDouble(forKey: .volume) ?? 1,
-            isMuted: container.tolerant(Bool.self, forKey: .isMuted) ?? false
+            isMuted: container.tolerant(Bool.self, forKey: .isMuted) ?? false,
+            eq: container.tolerant(EQCurve.self, forKey: .eq) ?? EQCurve()
         )
     }
 
@@ -361,7 +367,8 @@ struct DeviceAudioSettings: Codable, Equatable, Sendable {
         DeviceAudioSettings(
             displayName: displayName.isEmpty ? "Output Device" : displayName,
             volume: volume,
-            isMuted: isMuted
+            isMuted: isMuted,
+            eq: EQCurve(gains: eq.gains, range: eq.range)
         )
     }
 }
@@ -510,7 +517,9 @@ struct AudioProfile: Codable, Equatable, Identifiable, Sendable {
     }
 
     func matchesMixerPreset(_ preset: AudioProfile) -> Bool {
-        name == preset.name && appSettings == preset.appSettings
+        name == preset.name
+            && appSettings == preset.appSettings
+            && deviceSettings == preset.deviceSettings
     }
 
     static func flatAppSettings(

@@ -56,7 +56,7 @@ struct AppRowView: View {
     }
 
     /// The full route label is useful in the desktop mixer, but the menu-bar row
-    /// should name the actual destination without repeating "Follow Default".
+    /// should name the actual destination without repeating "Follow System".
     private var compactRouteLabel: String {
         routeSummary.title
     }
@@ -72,6 +72,7 @@ struct AppRowView: View {
     private var desktopBody: some View {
         HStack(spacing: 12) {
             AudioLevelMeter(levels: levels, identity: row.identity, isMuted: row.settings.isMuted)
+                .frame(width: 50, height: 32)
             appIcon.frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.displayName).font(.body.weight(.medium)).lineLimit(1)
@@ -110,7 +111,7 @@ struct AppRowView: View {
                     .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
                     .frame(width: 28, height: 28)
             }
-            .buttonStyle(.plain).help(isSelected ? "Close Equalizer" : "Equalizer")
+            .buttonStyle(.plain).help(isSelected ? "Close Process EQ" : "Open Process EQ")
         }
         .padding(.horizontal, 12).padding(.vertical, 7)
         .frame(minHeight: rowHeight)
@@ -327,12 +328,13 @@ struct AppRowView: View {
                         )
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(isSelected ? "Hide equalizer for \(row.displayName)" : "Show equalizer for \(row.displayName)")
-                .help(isSelected ? "Hide EQ" : "Show EQ")
+                .accessibilityLabel(isSelected ? "Close Process EQ for \(row.displayName)" : "Open Process EQ for \(row.displayName)")
+                .help(isSelected ? "Close Process EQ" : "Open Process EQ")
             }
 
             HStack(spacing: 7) {
                 CompactAudioLevelMeter(levels: levels, identity: row.identity, isMuted: row.settings.isMuted)
+                    .frame(width: 28, height: 6)
 
                 Slider(value: Binding(
                     get: { row.settings.volume },
@@ -373,7 +375,7 @@ struct AppRowView: View {
             }
             if !devices.isEmpty {
                 Menu("Output") {
-                    Button("Follow Default") { Task { try? await onRoute(.followDefault) } }
+                    Button("Follow System") { Task { try? await onRoute(.followDefault) } }
                     ForEach(devices) { device in
                         Button(device.name) { Task { try? await onRoute(.selectedDevice(device.id)) } }
                     }
@@ -651,6 +653,7 @@ private final class AppKitAudioLevelMeterView: NSView {
         switch style {
         case .compact:
             let radius = bounds.height / 2
+            let fillWidth = bounds.width * currentLevel
             backgroundLayer.frame = bounds
             backgroundLayer.cornerRadius = radius
             backgroundLayer.backgroundColor = NSColor.secondaryLabelColor
@@ -658,10 +661,11 @@ private final class AppKitAudioLevelMeterView: NSView {
             fillLayer.frame = CGRect(
                 x: bounds.minX,
                 y: bounds.minY,
-                width: bounds.width * currentLevel,
+                width: fillWidth,
                 height: bounds.height
             )
-            fillLayer.cornerRadius = radius
+            fillLayer.cornerRadius = min(radius, fillWidth / 2)
+            fillLayer.isHidden = fillWidth < 0.5
             fillLayer.backgroundColor = (isMuted
                 ? NSColor.secondaryLabelColor
                 : NSColor.systemGreen).cgColor

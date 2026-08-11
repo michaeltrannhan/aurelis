@@ -87,11 +87,11 @@ struct MultiOutputRoutePickerModel: Equatable {
             let defaultName = uniqueDevices.first(where: \.isDefault)?.name ?? "System Output"
             return MultiOutputRouteSummary(
                 title: defaultName,
-                detail: "Follow Default (\(defaultName))",
+                detail: "Follow System (\(defaultName))",
                 selectedCount: 0,
                 missingCount: 0,
                 isMultiOutput: false,
-                accessibilityValue: "Follow Default, \(defaultName)"
+                accessibilityValue: "Follow System, \(defaultName)"
             )
         case let .selectedDevice(deviceID):
             let name = namesByID[deviceID]
@@ -115,11 +115,11 @@ struct MultiOutputRoutePickerModel: Equatable {
             let missingAccessibility = missingCount == 0 ? "" : ", \(missingCount) missing"
             return MultiOutputRouteSummary(
                 title: "\(count) \(outputWord)",
-                detail: "Multi-Output (\(count) \(deviceWord))\(missingDetail)",
+                detail: "Multiple Outputs (\(count) \(deviceWord))\(missingDetail)",
                 selectedCount: count,
                 missingCount: missingCount,
                 isMultiOutput: true,
-                accessibilityValue: "Multi-Output, \(count) \(outputWord.lowercased())\(missingAccessibility)"
+                accessibilityValue: "Multiple Outputs, \(count) \(outputWord.lowercased())\(missingAccessibility)"
             )
         }
     }
@@ -197,7 +197,7 @@ struct MultiOutputRoutePicker: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
                     routeChoice(
-                        title: "Follow Default",
+                        title: "Follow System",
                         subtitle: availableDevices.first(where: \.isDefault)?.name ?? "System Output",
                         isSelected: model.draftRoute == .followDefault
                     ) {
@@ -205,7 +205,7 @@ struct MultiOutputRoutePicker: View {
                         model.selectFollowDefault()
                     }
 
-                    sectionLabel("Single Output")
+                    sectionLabel("One Output")
                     ForEach(availableDevices) { device in
                         routeChoice(
                             title: device.name,
@@ -231,7 +231,7 @@ struct MultiOutputRoutePicker: View {
                         .padding(.vertical, 4)
 
                     HStack(spacing: 6) {
-                        sectionLabel("Multi-Output")
+                        sectionLabel("Multiple Outputs")
                         Spacer()
                         if model.selectedDeviceCount > 0 {
                             countBadge(model.selectedDeviceCount)
@@ -241,7 +241,7 @@ struct MultiOutputRoutePicker: View {
                         }
                     }
 
-                    Text("Selected outputs are tried in the priority order below. Changes apply together.")
+                    Text("Every selected output plays at the same time. The first output supplies the clock; changes apply together.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -297,7 +297,18 @@ struct MultiOutputRoutePicker: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                Button(model.hasChanges ? "Apply" : "Done") {
+                Button("Cancel", role: .cancel) {
+                    onDismiss()
+                }
+                .disabled(isApplying)
+
+                if isApplying {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Applying output route")
+                }
+
+                Button(model.hasChanges ? "Apply Route" : "Done") {
                     applyOrDismiss()
                 }
                 .disabled(isApplying)
@@ -306,7 +317,7 @@ struct MultiOutputRoutePicker: View {
             }
         }
         .padding(12)
-        .frame(width: 300)
+        .frame(width: 330)
         .onChange(of: route) { _, newRoute in
             // The store publishes the desired route optimistically while its
             // engine/persistence transaction runs. Ignore that transient value
@@ -358,6 +369,7 @@ struct MultiOutputRoutePicker: View {
             .contentShape(Rectangle())
             .padding(.horizontal, 5)
             .padding(.vertical, 4)
+            .frame(minHeight: AuralisSpacing.comfortableControlHit)
             .background(isSelected ? Color.accentColor.opacity(0.10) : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 5))
         }
@@ -386,6 +398,7 @@ struct MultiOutputRoutePicker: View {
             .contentShape(Rectangle())
             .padding(.horizontal, 5)
             .padding(.vertical, 4)
+            .frame(minHeight: AuralisSpacing.comfortableControlHit)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
@@ -400,10 +413,11 @@ struct MultiOutputRoutePicker: View {
         let subtitle = isMissing ? deviceID : (device?.isDefault == true ? "System default" : nil)
 
         return HStack(spacing: 6) {
-            Text("\(index + 1)")
+            Text(index == 0 ? "C" : "\(index + 1)")
                 .font(.caption2.monospacedDigit().weight(.semibold))
                 .frame(width: 18, height: 18)
                 .background(Color.secondary.opacity(0.12), in: Circle())
+                .help(index == 0 ? "Clock output" : "Output \(index + 1)")
             routeText(title: title, subtitle: subtitle)
             Spacer(minLength: 4)
             Button {
@@ -411,6 +425,10 @@ struct MultiOutputRoutePicker: View {
                 model.moveMultiOutputDevice(deviceID, .up)
             } label: {
                 Image(systemName: "chevron.up")
+                    .frame(
+                        width: AuralisSpacing.controlMinHit,
+                        height: AuralisSpacing.controlMinHit
+                    )
             }
             .buttonStyle(.borderless)
             .disabled(index == 0)
@@ -421,6 +439,10 @@ struct MultiOutputRoutePicker: View {
                 model.moveMultiOutputDevice(deviceID, .down)
             } label: {
                 Image(systemName: "chevron.down")
+                    .frame(
+                        width: AuralisSpacing.controlMinHit,
+                        height: AuralisSpacing.controlMinHit
+                    )
             }
             .buttonStyle(.borderless)
             .disabled(index == model.multiOutputDeviceIDs.count - 1)
@@ -432,6 +454,10 @@ struct MultiOutputRoutePicker: View {
             } label: {
                 Image(systemName: "minus.circle")
                     .foregroundStyle(isMissing ? Color.orange : Color.secondary)
+                    .frame(
+                        width: AuralisSpacing.controlMinHit,
+                        height: AuralisSpacing.controlMinHit
+                    )
             }
             .buttonStyle(.borderless)
             .help("Remove output")
@@ -440,7 +466,7 @@ struct MultiOutputRoutePicker: View {
         .padding(.horizontal, 5)
         .padding(.vertical, 3)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Priority \(index + 1), \(title)\(isMissing ? ", missing" : "")")
+        .accessibilityLabel("\(index == 0 ? "Clock output" : "Output \(index + 1)"), \(title)\(isMissing ? ", missing" : "")")
     }
 
     private func routeText(title: String, subtitle: String?) -> some View {

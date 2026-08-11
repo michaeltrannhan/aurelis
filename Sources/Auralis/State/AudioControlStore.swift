@@ -99,6 +99,9 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
     private var editSessions: [AudioEditSessionKey: PersistedSettings] = [:]
     private var activeEditKeys: [EditLookup: AudioEditSessionKey] = [:]
     private var editTasks: [AudioEditSessionKey: Task<Void, Never>] = [:]
+    private var outputEQEditSessions: [OutputEQEditSessionKey: PersistedSettings] = [:]
+    private var activeOutputEQEditKeys: [OutputEQEditLookup: OutputEQEditSessionKey] = [:]
+    private var outputEQEditTasks: [OutputEQEditSessionKey: Task<Void, Never>] = [:]
     private var shutdownTask: Task<AudioShutdownReport, Never>?
     private var completedShutdownReport: AudioShutdownReport?
     private var lastObservedDefaultOutputDeviceID: String?
@@ -114,6 +117,18 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         let deviceUID: String
         let volume: Double?
         let isMuted: Bool?
+        let eq: EQCurve
+    }
+
+    private struct OutputEQEditLookup: Hashable {
+        let deviceUID: String
+        let band: Int
+    }
+
+    private struct OutputEQEditSessionKey: Hashable {
+        let deviceUID: String
+        let band: Int
+        let gestureToken: UUID
     }
 
     private struct TopologySignature: Equatable {
@@ -161,6 +176,10 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
 
     var activeEditSessionKeys: Set<AudioEditSessionKey> {
         Set(editSessions.keys)
+    }
+
+    var activeOutputEQEditSessionCount: Int {
+        outputEQEditSessions.count
     }
 
     init(
@@ -627,6 +646,69 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         setDeviceMutedIntent(!(deviceVolumeStates[deviceUID]?.isMuted ?? false), for: deviceUID)
     }
 
+    func setOutputEQGainIntent(_ gain: Double, band: Int, for deviceUID: String) {
+        let lookup = OutputEQEditLookup(deviceUID: deviceUID, band: band)
+        if let key = activeOutputEQEditKeys[lookup] {
+            mutateLiveOutputEQ(deviceUID: deviceUID) {
+                $0.setGain(gain, at: band)
+            }
+            scheduleOutputEQEditPreview(key)
+        } else {
+            launchIntent { store in
+                try? await store.setOutputEQGain(gain, band: band, for: deviceUID)
+            }
+        }
+    }
+
+    @discardableResult
+    func beginOutputEQEditing(band: Int, for deviceUID: String) -> UUID {
+        let lookup = OutputEQEditLookup(deviceUID: deviceUID, band: band)
+        if let existing = activeOutputEQEditKeys[lookup] {
+            return existing.gestureToken
+        }
+        let key = OutputEQEditSessionKey(
+            deviceUID: deviceUID,
+            band: band,
+            gestureToken: UUID()
+        )
+        outputEQEditSessions[key] = settings
+        activeOutputEQEditKeys[lookup] = key
+        return key.gestureToken
+    }
+
+    func endOutputEQEditing(band: Int, for deviceUID: String) {
+        let lookup = OutputEQEditLookup(deviceUID: deviceUID, band: band)
+        guard let key = activeOutputEQEditKeys[lookup] else { return }
+        outputEQEditTasks[key]?.cancel()
+        outputEQEditTasks[key] = nil
+        launchIntent { store in
+            try? await store.flushOutputEQEditSession(key, isFinal: true)
+        }
+    }
+
+    func setOutputEQEditingIntent(_ editing: Bool, band: Int, for deviceUID: String) {
+        if editing {
+            beginOutputEQEditing(band: band, for: deviceUID)
+        } else {
+            endOutputEQEditing(band: band, for: deviceUID)
+        }
+    }
+
+    func resetOutputEQIntent(for deviceUID: String) {
+        launchIntent { store in
+            try? await store.resetOutputEQ(for: deviceUID)
+        }
+    }
+
+    func endContinuousOutputEQEdits(for deviceUID: String) {
+        let lookups = activeOutputEQEditKeys.keys.filter {
+            $0.deviceUID == deviceUID
+        }
+        for lookup in lookups {
+            endOutputEQEditing(band: lookup.band, for: lookup.deviceUID)
+        }
+    }
+
     func setVolumeIntent(_ volume: Double, for identity: AudioAppIdentity) {
         let lookup = EditLookup(app: identity, control: .volume)
         if let key = activeEditKeys[lookup] {
@@ -794,7 +876,8 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                 throw AudioControlStoreError.outputDeviceUnavailable(deviceUID)
             }
             var desired = settings
-            desired.deviceSettings[deviceUID] = DeviceAudioSettings(
+            desired.deviceSettings[deviceUID] = preservedDeviceSettings(
+                deviceUID: deviceUID,
                 displayName: device.name,
                 volume: clamped,
                 isMuted: state.isMuted
@@ -815,6 +898,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                 }
             )
             deviceVolumeStates[deviceUID]?.volume = clamped
+            rebuildDisplayRows()
             InternalDiagnostics.record(
                 "audio",
                 "device.volume id=\(deviceUID) applied=\(clamped)"
@@ -833,7 +917,8 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                 throw AudioControlStoreError.outputDeviceUnavailable(deviceUID)
             }
             var desired = settings
-            desired.deviceSettings[deviceUID] = DeviceAudioSettings(
+            desired.deviceSettings[deviceUID] = preservedDeviceSettings(
+                deviceUID: deviceUID,
                 displayName: device.name,
                 volume: state.volume,
                 isMuted: muted
@@ -854,6 +939,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                 }
             )
             deviceVolumeStates[deviceUID]?.isMuted = muted
+            rebuildDisplayRows()
             InternalDiagnostics.record(
                 "audio",
                 "device.mute id=\(deviceUID) applied=\(muted)"
@@ -990,7 +1076,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
     }
 
     /// Copies a reusable Global preset into an output's dedicated
-    /// configuration. Its per-app EQ and mixer settings then follow that
+    /// configuration. Its per-app Process EQ and per-device Output EQ then follow that
     /// output automatically, while the output keeps its own hardware state.
     @discardableResult
     func assignPreset(
@@ -1010,7 +1096,8 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                 throw AudioControlStoreError.outputDeviceUnavailable(deviceID)
             }
             let existing = outputConfiguration(for: normalizedID)
-            var capturedDevice = capturedDeviceSettings()[normalizedID]
+            let capturedDevices = capturedDeviceSettings()
+            var capturedDevice = capturedDevices[normalizedID]
                 ?? existing?.deviceSettings[normalizedID]
             let normalizedDeviceName = deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
             if !normalizedDeviceName.isEmpty {
@@ -1023,13 +1110,30 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             for (identity, appSettings) in preset.appSettings {
                 copiedAppSettings[identity] = appSettings
             }
+            var copiedDeviceSettings = preset.deviceSettings
+            if var presetDevice = copiedDeviceSettings[normalizedID] {
+                if !normalizedDeviceName.isEmpty {
+                    presetDevice.displayName = normalizedDeviceName
+                }
+                copiedDeviceSettings[normalizedID] = presetDevice
+            } else if let capturedDevice {
+                copiedDeviceSettings[normalizedID] = capturedDevice
+            }
+            let routedDeviceIDs = outputDeviceIDsReferenced(
+                in: copiedAppSettings,
+                followDefaultOutputID: normalizedID
+            )
+            for deviceID in routedDeviceIDs
+            where copiedDeviceSettings[deviceID] == nil {
+                copiedDeviceSettings[deviceID] = capturedDevices[deviceID]
+            }
             var configuration = AudioProfile(
                 id: existing?.id ?? UUID(),
                 name: preset.name,
                 scope: .outputDevice(normalizedID),
                 activatesAutomatically: true,
                 appSettings: copiedAppSettings,
-                deviceSettings: capturedDevice.map { [normalizedID: $0] } ?? [:],
+                deviceSettings: copiedDeviceSettings,
                 preferredOutputDeviceID: normalizedID
             )
             configuration.createdAt = existing?.createdAt ?? configuration.createdAt
@@ -1076,6 +1180,18 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             guard !configurationIDs.isEmpty else { return }
             var desired = settings
             desired.profiles.removeAll { configurationIDs.contains($0.id) }
+            if let device = devices.first(where: { $0.id == deviceID }) {
+                let hardware = deviceVolumeStates[deviceID]
+                let remembered = desired.deviceSettings[deviceID]
+                desired.deviceSettings[deviceID] = DeviceAudioSettings(
+                    displayName: device.name,
+                    volume: hardware?.volume ?? remembered?.volume ?? 1,
+                    isMuted: hardware?.isMuted ?? remembered?.isMuted ?? false,
+                    eq: EQCurve(range: desired.customization.eqGainRange)
+                )
+            } else {
+                desired.deviceSettings.removeValue(forKey: deviceID)
+            }
             let retainedLocalID = desired.activeLocalProfileID.flatMap {
                 configurationIDs.contains($0) ? nil : $0
             }
@@ -1257,7 +1373,6 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             for (identity, appSettings) in profile.appSettings {
                 effectiveAppSettings[identity] = appSettings.normalized
             }
-            guard !profile.scope.isGlobal else { continue }
             for (deviceUID, deviceSettings) in profile.deviceSettings {
                 effectiveDeviceSettings[deviceUID] = deviceSettings.normalized
             }
@@ -1316,6 +1431,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                     if let isMuted = application.isMuted {
                         try await engine.setOutputMuted(isMuted, forUID: application.deviceUID)
                     }
+                    try await engine.apply(.setOutputEQ(application.deviceUID, application.eq))
                 }
                 try await engine.apply(desiredAppCommands)
             },
@@ -1331,6 +1447,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                     if let isMuted = application.isMuted {
                         try await engine.setOutputMuted(isMuted, forUID: application.deviceUID)
                     }
+                    try await engine.apply(.setOutputEQ(application.deviceUID, application.eq))
                 }
                 try await engine.apply(previousAppCommands)
             }
@@ -1401,11 +1518,17 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         scope: AudioProfileScope
     ) -> AudioProfile {
         let normalizedScope = scope.normalized
-        let capturedDevices: [String: DeviceAudioSettings]
+        let fallbackOutputID = normalizedScope.outputDeviceID ?? currentOutput?.id
+        var capturedIDs = outputDeviceIDsReferenced(
+            in: settings.appSettings,
+            followDefaultOutputID: fallbackOutputID
+        )
         if let outputID = normalizedScope.outputDeviceID {
-            capturedDevices = capturedDeviceSettings()[outputID].map { [outputID: $0] } ?? [:]
-        } else {
-            capturedDevices = [:]
+            capturedIDs.insert(outputID)
+        }
+        let allCapturedDevices = capturedDeviceSettings()
+        let capturedDevices = allCapturedDevices.filter {
+            capturedIDs.contains($0.key)
         }
         return AudioProfile(
             id: id,
@@ -1423,13 +1546,51 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         var captured = settings.deviceSettings
         for device in devices {
             guard let state = deviceVolumeStates[device.id] else { continue }
-            captured[device.id] = DeviceAudioSettings(
+            captured[device.id] = preservedDeviceSettings(
+                deviceUID: device.id,
                 displayName: device.name,
                 volume: state.volume,
                 isMuted: state.isMuted
             )
         }
         return captured
+    }
+
+    private func preservedDeviceSettings(
+        deviceUID: String,
+        displayName: String,
+        volume: Double,
+        isMuted: Bool,
+        eq: EQCurve? = nil
+    ) -> DeviceAudioSettings {
+        DeviceAudioSettings(
+            displayName: displayName,
+            volume: volume,
+            isMuted: isMuted,
+            eq: eq
+                ?? settings.deviceSettings[deviceUID]?.eq
+                ?? EQCurve(range: settings.customization.eqGainRange)
+        )
+    }
+
+    private func outputDeviceIDsReferenced(
+        in appSettings: [AudioAppIdentity: AppAudioSettings],
+        followDefaultOutputID: String?
+    ) -> Set<String> {
+        var result = Set<String>()
+        for value in appSettings.values {
+            switch value.route.normalized {
+            case .followDefault:
+                if let followDefaultOutputID {
+                    result.insert(followDefaultOutputID)
+                }
+            case let .selectedDevice(deviceID):
+                result.insert(deviceID)
+            case let .multiOutput(deviceIDs):
+                result.formUnion(deviceIDs)
+            }
+        }
+        return result
     }
 
     private func upsertOutputConfiguration(
@@ -1466,12 +1627,13 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         from desired: [String: DeviceAudioSettings]
     ) -> [DeviceSettingsApplication] {
         desired.compactMap { deviceUID, settings in
-            guard devices.contains(where: { $0.id == deviceUID }),
-                  let state = deviceVolumeStates[deviceUID] else { return nil }
+            guard devices.contains(where: { $0.id == deviceUID }) else { return nil }
+            let state = deviceVolumeStates[deviceUID]
             return DeviceSettingsApplication(
                 deviceUID: deviceUID,
-                volume: state.capabilities.canSetVolume ? settings.volume : nil,
-                isMuted: state.capabilities.canSetMute ? settings.isMuted : nil
+                volume: state?.capabilities.canSetVolume == true ? settings.volume : nil,
+                isMuted: state?.capabilities.canSetMute == true ? settings.isMuted : nil,
+                eq: settings.eq
             )
         }
     }
@@ -1480,11 +1642,14 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         for deviceUIDs: Set<String>
     ) -> [DeviceSettingsApplication] {
         deviceUIDs.compactMap { deviceUID in
-            guard let state = deviceVolumeStates[deviceUID] else { return nil }
+            guard devices.contains(where: { $0.id == deviceUID }) else { return nil }
+            let state = deviceVolumeStates[deviceUID]
             return DeviceSettingsApplication(
                 deviceUID: deviceUID,
-                volume: state.capabilities.canSetVolume ? state.volume : nil,
-                isMuted: state.capabilities.canSetMute ? state.isMuted : nil
+                volume: state?.capabilities.canSetVolume == true ? state?.volume : nil,
+                isMuted: state?.capabilities.canSetMute == true ? state?.isMuted : nil,
+                eq: settings.deviceSettings[deviceUID]?.eq
+                    ?? EQCurve(range: settings.customization.eqGainRange)
             )
         }
     }
@@ -1604,8 +1769,102 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         try await mutateAppSetting(identity, kind: .eq) { $0.eq.setGain(gain, at: band) }
     }
 
+    func setEQ(_ curve: EQCurve, for identity: AudioAppIdentity) async throws {
+        try await mutateAppSetting(identity, kind: .eq) { settings in
+            for (band, gain) in curve.gains.enumerated() {
+                settings.eq.setGain(gain, at: band)
+            }
+        }
+    }
+
     func resetEQ(for identity: AudioAppIdentity) async throws {
         try await mutateAppSetting(identity, kind: .eq) { $0.eq.reset() }
+    }
+
+    func setOutputEQGain(
+        _ gain: Double,
+        band: Int,
+        for deviceUID: String
+    ) async throws {
+        try await mutateOutputEQ(deviceUID: deviceUID) {
+            $0.setGain(gain, at: band)
+        }
+    }
+
+    func setOutputEQ(_ curve: EQCurve, for deviceUID: String) async throws {
+        try await mutateOutputEQ(deviceUID: deviceUID) { outputEQ in
+            for (band, gain) in curve.gains.enumerated() {
+                outputEQ.setGain(gain, at: band)
+            }
+        }
+    }
+
+    func resetOutputEQ(for deviceUID: String) async throws {
+        try await mutateOutputEQ(deviceUID: deviceUID) { $0.reset() }
+    }
+
+    private func mutateOutputEQ(
+        deviceUID: String,
+        mutation: (inout EQCurve) -> Void
+    ) async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            guard let device = devices.first(where: { $0.id == deviceUID }) else {
+                throw AudioControlStoreError.outputDeviceUnavailable(deviceUID)
+            }
+            let previous = settings
+            var desired = previous
+            let state = deviceVolumeStates[deviceUID]
+                ?? OutputVolumeState(deviceName: device.name)
+            let baselineCurve = previous.deviceSettings[deviceUID]?.eq
+                ?? EQCurve(range: previous.customization.eqGainRange)
+            var curve = baselineCurve
+            mutation(&curve)
+            curve.applyRange(desired.customization.eqGainRange)
+            desired.deviceSettings[deviceUID] = preservedDeviceSettings(
+                deviceUID: deviceUID,
+                displayName: device.name,
+                volume: desired.deviceSettings[deviceUID]?.volume ?? state.volume,
+                isMuted: desired.deviceSettings[deviceUID]?.isMuted ?? state.isMuted,
+                eq: curve
+            )
+            updateActiveDeviceContext(in: &desired, deviceUID: deviceUID)
+            try await performSettingsTransaction(
+                previous: previous,
+                desired: desired,
+                issueID: "output-eq-\(deviceUID)",
+                engineDomain: .backend,
+                app: nil,
+                engineWork: { [engine] in
+                    try await engine.apply(.setOutputEQ(deviceUID, curve))
+                },
+                finalize: { _ in },
+                compensate: { [engine] _ in
+                    try await engine.apply(.setOutputEQ(deviceUID, baselineCurve))
+                }
+            )
+        }
+    }
+
+    private func mutateLiveOutputEQ(
+        deviceUID: String,
+        mutation: (inout EQCurve) -> Void
+    ) {
+        guard let device = devices.first(where: { $0.id == deviceUID }) else { return }
+        let state = deviceVolumeStates[deviceUID]
+            ?? OutputVolumeState(deviceName: device.name)
+        var curve = settings.deviceSettings[deviceUID]?.eq
+            ?? EQCurve(range: settings.customization.eqGainRange)
+        mutation(&curve)
+        settings.deviceSettings[deviceUID] = preservedDeviceSettings(
+            deviceUID: deviceUID,
+            displayName: device.name,
+            volume: settings.deviceSettings[deviceUID]?.volume ?? state.volume,
+            isMuted: settings.deviceSettings[deviceUID]?.isMuted ?? state.isMuted,
+            eq: curve
+        )
+        updateActiveDeviceContext(in: &settings, deviceUID: deviceUID)
+        rebuildDisplayRows()
     }
 
     func setRoute(_ route: DeviceRoute, for identity: AudioAppIdentity) async throws {
@@ -1727,9 +1986,17 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                 for identity in desired.appSettings.keys {
                     desired.appSettings[identity]?.eq.applyRange(normalized.eqGainRange)
                 }
+                for deviceUID in desired.deviceSettings.keys {
+                    desired.deviceSettings[deviceUID]?.eq.applyRange(normalized.eqGainRange)
+                }
                 for profileIndex in desired.profiles.indices {
                     for identity in desired.profiles[profileIndex].appSettings.keys {
                         desired.profiles[profileIndex].appSettings[identity]?.eq.applyRange(
+                            normalized.eqGainRange
+                        )
+                    }
+                    for deviceUID in desired.profiles[profileIndex].deviceSettings.keys {
+                        desired.profiles[profileIndex].deviceSettings[deviceUID]?.eq.applyRange(
                             normalized.eqGainRange
                         )
                     }
@@ -1737,9 +2004,15 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             }
             let desiredEQ = rangeChanged
                 ? desired.appSettings.compactMap { identity, value in AudioBackendCommand.setEQ(identity, value.eq) }
+                    + desired.deviceSettings.map { uid, value in
+                        AudioBackendCommand.setOutputEQ(uid, value.eq)
+                    }
                 : []
             let previousEQ = rangeChanged
                 ? previous.appSettings.compactMap { identity, value in AudioBackendCommand.setEQ(identity, value.eq) }
+                    + previous.deviceSettings.map { uid, value in
+                        AudioBackendCommand.setOutputEQ(uid, value.eq)
+                    }
                 : []
 
             try await performSettingsTransaction(
@@ -1957,7 +2230,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
 
     private func scheduleEditPreview(
         _ key: AudioEditSessionKey,
-        debounceNanoseconds: UInt64 = 100_000_000
+        debounceNanoseconds: UInt64 = 33_333_333
     ) {
         editTasks[key]?.cancel()
         editTasks[key] = Task { [weak self] in
@@ -2005,11 +2278,9 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             } else {
                 do {
                     try await engine.apply(desiredCommand)
-                    await persistence.schedule(settings)
                 } catch {
                     try? await engine.apply(compensation)
                     settings = baseline
-                    await persistence.schedule(baseline)
                     rebuildDisplayRows()
                     removeEditSession(key)
                     reportMutationFailure(error, id: "edit-\(key.app.rawValue)", domain: .backend, app: key.app)
@@ -2024,6 +2295,92 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         editTasks[key] = nil
         editSessions[key] = nil
         activeEditKeys[EditLookup(app: key.app, control: key.control)] = nil
+    }
+
+    private func scheduleOutputEQEditPreview(
+        _ key: OutputEQEditSessionKey,
+        debounceNanoseconds: UInt64 = 33_333_333
+    ) {
+        outputEQEditTasks[key]?.cancel()
+        outputEQEditTasks[key] = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: debounceNanoseconds)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let self else { return }
+            try? await flushOutputEQEditSession(key, isFinal: false)
+        }
+    }
+
+    private func flushOutputEQEditSession(
+        _ key: OutputEQEditSessionKey,
+        isFinal: Bool
+    ) async throws {
+        await waitUntilReady()
+        try await withMutationGate {
+            guard let baseline = outputEQEditSessions[key] else { return }
+            let currentEQ = settings.deviceSettings[key.deviceUID]?.eq
+                ?? EQCurve(range: settings.customization.eqGainRange)
+            let baselineEQ = baseline.deviceSettings[key.deviceUID]?.eq
+                ?? EQCurve(range: baseline.customization.eqGainRange)
+            let desiredCommand = AudioBackendCommand.setOutputEQ(
+                key.deviceUID,
+                currentEQ
+            )
+            let compensation = AudioBackendCommand.setOutputEQ(
+                key.deviceUID,
+                baselineEQ
+            )
+
+            if isFinal {
+                do {
+                    try await performSettingsTransaction(
+                        previous: baseline,
+                        desired: settings,
+                        issueID: "edit-output-eq-\(key.deviceUID)-\(key.gestureToken.uuidString)",
+                        engineDomain: .backend,
+                        app: nil,
+                        engineWork: { [engine] in
+                            try await engine.apply(desiredCommand)
+                        },
+                        finalize: { _ in },
+                        compensate: { [engine] _ in
+                            try await engine.apply(compensation)
+                        }
+                    )
+                } catch {
+                    removeOutputEQEditSession(key)
+                    throw error
+                }
+                removeOutputEQEditSession(key)
+            } else {
+                do {
+                    try await engine.apply(desiredCommand)
+                } catch {
+                    try? await engine.apply(compensation)
+                    settings = baseline
+                    rebuildDisplayRows()
+                    removeOutputEQEditSession(key)
+                    reportMutationFailure(
+                        error,
+                        id: "edit-output-eq-\(key.deviceUID)",
+                        domain: .backend,
+                        device: key.deviceUID
+                    )
+                    throw error
+                }
+            }
+        }
+    }
+
+    private func removeOutputEQEditSession(_ key: OutputEQEditSessionKey) {
+        outputEQEditTasks[key]?.cancel()
+        outputEQEditTasks[key] = nil
+        outputEQEditSessions[key] = nil
+        activeOutputEQEditKeys[
+            OutputEQEditLookup(deviceUID: key.deviceUID, band: key.band)
+        ] = nil
     }
 
     // MARK: - Shutdown
@@ -2067,6 +2424,15 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             editTasks[key]?.cancel()
             do { try await flushEditSession(key, isFinal: true) }
             catch { editErrors.append(error.localizedDescription) }
+        }
+        let outputEQKeys = Array(outputEQEditSessions.keys)
+        for key in outputEQKeys {
+            outputEQEditTasks[key]?.cancel()
+            do {
+                try await flushOutputEQEditSession(key, isFinal: true)
+            } catch {
+                editErrors.append(error.localizedDescription)
+            }
         }
         // Stop the main-actor consumers now; let engine.shutdown() stop and
         // report its owned HAL/output/meter observations as one operation.
@@ -2176,7 +2542,12 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                 rhsID: rhs.identity.rawValue
             )
         }
-        channels.reconcile(rows: displayRows, devices: devices, volumes: deviceVolumeStates)
+        channels.reconcile(
+            rows: displayRows,
+            devices: devices,
+            volumes: deviceVolumeStates,
+            deviceSettings: settings.deviceSettings
+        )
     }
 
     private static func deduplicatedSnapshots(_ snapshots: [AudioAppSnapshot]) -> [AudioAppSnapshot] {
@@ -2230,22 +2601,35 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         in desired: inout PersistedSettings,
         deviceUID: String? = nil
     ) {
-        guard let outputID = deviceUID ?? currentOutput?.id,
-              let index = desired.profiles.firstIndex(where: {
-                  $0.scope.outputDeviceID == outputID
-              }) else { return }
-        let isCurrentOutput = outputID == currentOutput?.id
-        if isCurrentOutput {
-            desired.profiles[index].appSettings = desired.appSettings
-        }
-        if let deviceSettings = desired.deviceSettings[outputID] {
-            desired.profiles[index].deviceSettings = [outputID: deviceSettings]
-        }
-        desired.profiles[index].updatedAt = Date()
-        if isCurrentOutput {
-            desired.activeGlobalProfileID = nil
-            desired.activeLocalProfileID = desired.profiles[index].id
-            desired.activeProfileID = desired.profiles[index].id
+        let currentOutputID = currentOutput?.id
+        var contextIDs = Set<String>()
+        if let deviceUID { contextIDs.insert(deviceUID) }
+        if let currentOutputID { contextIDs.insert(currentOutputID) }
+        guard !contextIDs.isEmpty else { return }
+
+        for index in desired.profiles.indices {
+            guard let contextOutputID = desired.profiles[index].scope.outputDeviceID,
+                  contextIDs.contains(contextOutputID) else { continue }
+            let isCurrentContext = contextOutputID == currentOutputID
+            if isCurrentContext {
+                desired.profiles[index].appSettings = desired.appSettings
+            }
+
+            var capturedIDs = outputDeviceIDsReferenced(
+                in: desired.profiles[index].appSettings,
+                followDefaultOutputID: contextOutputID
+            )
+            capturedIDs.insert(contextOutputID)
+            desired.profiles[index].deviceSettings = desired.deviceSettings.filter {
+                capturedIDs.contains($0.key)
+            }
+            desired.profiles[index].updatedAt = Date()
+
+            if isCurrentContext {
+                desired.activeGlobalProfileID = nil
+                desired.activeLocalProfileID = desired.profiles[index].id
+                desired.activeProfileID = desired.profiles[index].id
+            }
         }
         desired.profileHasOverrides = false
     }
@@ -2407,6 +2791,8 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             var projected = ControlProjectedState(
                 volume: state?.volume,
                 isMuted: state?.isMuted,
+                eq: settings.deviceSettings[deviceID]?.eq
+                    ?? EQCurve(range: settings.customization.eqGainRange),
                 displayName: device.name
             )
             switch command.mutation {
@@ -2419,7 +2805,14 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                 projected.isMuted = !(projected.isMuted ?? false)
             case let .setMuted(muted):
                 projected.isMuted = muted
-            default:
+            case let .setEQ(eq):
+                projected.eq = eq
+            case let .setEQBand(band, gain):
+                var eq = projected.eq
+                    ?? EQCurve(range: settings.customization.eqGainRange)
+                eq.setGain(gain, at: band)
+                projected.eq = eq
+            case .setBoost, .setRoute:
                 throw AudioControlStoreError.outputVolumeUnsupported(device.name)
             }
             return projected
@@ -2483,9 +2876,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             case let (.app(identity), .setBoost(boost)):
                 try await setBoost(boost, for: identity)
             case let (.app(identity), .setEQ(eq)):
-                for (band, gain) in eq.gains.enumerated() {
-                    try await setEQGain(gain, band: band, for: identity)
-                }
+                try await setEQ(eq, for: identity)
             case let (.app(identity), .setEQBand(band, gain)):
                 try await setEQGain(gain, band: band, for: identity)
             case let (.app(identity), .setRoute(route)):
@@ -2500,6 +2891,10 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                     return .rejected(UserFacingFailure(title: "Unavailable", message: "Output mute is unavailable."))
                 }
                 try await setDeviceMuted(muted, for: deviceID)
+            case let (.outputDevice(deviceID), .setEQ(eq)):
+                try await setOutputEQ(eq, for: deviceID)
+            case let (.outputDevice(deviceID), .setEQBand(band, gain)):
+                try await setOutputEQGain(gain, band: band, for: deviceID)
             case (.activeApps, .setMuted(let muted)):
                 try await setAllActiveAppsMuted(muted)
             case (.activeApps, .setVolume(let volume)):

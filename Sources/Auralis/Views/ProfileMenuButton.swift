@@ -7,6 +7,7 @@ struct ProfileMenuButton: View {
     @State private var isCreatingGlobalProfile = false
     @State private var isShowingProfilePanel = false
     @State private var profileName = ""
+    @State private var pendingResetOutputID: String?
 
     @ViewBuilder
     var body: some View {
@@ -30,7 +31,7 @@ struct ProfileMenuButton: View {
                     Label("Device context · autosaved", systemImage: "checkmark.icloud.fill")
                     presetAssignmentMenu(for: currentOutput)
                     Button(role: .destructive) {
-                        store.removeOutputConfigurationIntent(deviceID: currentOutput.id)
+                        pendingResetOutputID = currentOutput.id
                     } label: {
                         Label("Reset to Neutral", systemImage: "arrow.counterclockwise")
                     }
@@ -63,7 +64,24 @@ struct ProfileMenuButton: View {
             .disabled(profileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The preset is a reusable copy. Later changes remain local to each output.")
+            Text("Saves app volume, Process EQ, routes, and Output EQ for every routed device. Later edits remain local.")
+        }
+        .confirmationDialog(
+            "Reset \(currentOutput?.name ?? "this output") to neutral?",
+            isPresented: Binding(
+                get: { pendingResetOutputID != nil },
+                set: { if !$0 { pendingResetOutputID = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Reset to Neutral", role: .destructive) {
+                guard let pendingResetOutputID else { return }
+                store.removeOutputConfigurationIntent(deviceID: pendingResetOutputID)
+                self.pendingResetOutputID = nil
+            }
+            Button("Cancel", role: .cancel) { pendingResetOutputID = nil }
+        } message: {
+            Text("Routing, app volume, boost, Process EQ, and Output EQ will return to neutral values.")
         }
     }
 

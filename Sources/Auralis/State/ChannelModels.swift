@@ -52,23 +52,40 @@ final class OutputChannelModel: ObservableObject, Identifiable {
     @Published private(set) var isDefault: Bool
     @Published private(set) var volume: Double?
     @Published private(set) var isMuted: Bool?
+    @Published private(set) var capabilities: OutputControlCapabilities
+    @Published private(set) var eq: EQCurve
     @Published private(set) var actionState: ControlActionState = .idle
     @Published private(set) var projectedVolume: Double?
     @Published private(set) var projectedMuted: Bool?
+    @Published private(set) var projectedEQ: EQCurve?
 
-    init(device: AudioDeviceSnapshot, state: OutputVolumeState?) {
+    init(
+        device: AudioDeviceSnapshot,
+        state: OutputVolumeState?,
+        settings: DeviceAudioSettings?
+    ) {
         id = device.id
         name = device.name
         isDefault = device.isDefault
         volume = state?.volume
         isMuted = state?.isMuted
+        capabilities = state?.capabilities ?? .unavailable
+        eq = settings?.eq ?? EQCurve()
     }
 
-    func apply(device: AudioDeviceSnapshot, state: OutputVolumeState?) {
+    func apply(
+        device: AudioDeviceSnapshot,
+        state: OutputVolumeState?,
+        settings: DeviceAudioSettings?
+    ) {
         if name != device.name { name = device.name }
         if isDefault != device.isDefault { isDefault = device.isDefault }
         if volume != state?.volume { volume = state?.volume }
         if isMuted != state?.isMuted { isMuted = state?.isMuted }
+        let nextCapabilities = state?.capabilities ?? .unavailable
+        if capabilities != nextCapabilities { capabilities = nextCapabilities }
+        let nextEQ = settings?.eq ?? EQCurve()
+        if eq != nextEQ { eq = nextEQ }
     }
 
     func apply(actionState: ControlActionState) {
@@ -77,14 +94,17 @@ final class OutputChannelModel: ObservableObject, Identifiable {
         case let .pending(projected), let .applied(projected):
             projectedVolume = projected.volume
             projectedMuted = projected.isMuted
+            projectedEQ = projected.eq
         case .idle, .failed:
             projectedVolume = nil
             projectedMuted = nil
+            projectedEQ = nil
         }
     }
 
     var visibleVolume: Double { projectedVolume ?? volume ?? 1 }
     var visibleMuted: Bool { projectedMuted ?? isMuted ?? false }
+    var visibleEQ: EQCurve { projectedEQ ?? eq }
 }
 
 /// Owns channel identity maps and publishes membership/order separately from
@@ -105,7 +125,12 @@ final class ChannelModelDirectory: ObservableObject {
         outputs[deviceID]
     }
 
-    func reconcile(rows: [DisplayableAppRow], devices: [AudioDeviceSnapshot], volumes: [String: OutputVolumeState]) {
+    func reconcile(
+        rows: [DisplayableAppRow],
+        devices: [AudioDeviceSnapshot],
+        volumes: [String: OutputVolumeState],
+        deviceSettings: [String: DeviceAudioSettings]
+    ) {
         let rowIDs = rows.map(\.identity)
         if appOrder != rowIDs { appOrder = rowIDs }
 
@@ -126,10 +151,18 @@ final class ChannelModelDirectory: ObservableObject {
         var nextOutputs: [String: OutputChannelModel] = [:]
         for device in devices {
             if let existing = outputs[device.id] {
-                existing.apply(device: device, state: volumes[device.id])
+                existing.apply(
+                    device: device,
+                    state: volumes[device.id],
+                    settings: deviceSettings[device.id]
+                )
                 nextOutputs[device.id] = existing
             } else {
-                nextOutputs[device.id] = OutputChannelModel(device: device, state: volumes[device.id])
+                nextOutputs[device.id] = OutputChannelModel(
+                    device: device,
+                    state: volumes[device.id],
+                    settings: deviceSettings[device.id]
+                )
             }
         }
         outputs = nextOutputs

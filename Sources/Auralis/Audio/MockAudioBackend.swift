@@ -27,6 +27,10 @@ final class MockAudioBackend: AudioBackend {
         commands.append(command)
     }
 
+    func clearCommands() {
+        commands.removeAll()
+    }
+
     static let defaultApps: [AudioAppSnapshot] = [
         AudioAppSnapshot(
             identity: AudioAppIdentity(rawValue: "com.apple.Music"),

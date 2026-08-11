@@ -14,7 +14,10 @@ enum AudioBackendCommand: Equatable, Sendable {
     case setVolume(AudioAppIdentity, Double)
     case setMuted(AudioAppIdentity, Bool)
     case setBoost(AudioAppIdentity, BoostLevel)
+    /// Per-app Process EQ.
     case setEQ(AudioAppIdentity, EQCurve)
+    /// Per-device Output EQ.
+    case setOutputEQ(String, EQCurve)
     case setRoute(AudioAppIdentity, DeviceRoute)
 }
 

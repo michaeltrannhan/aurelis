@@ -24,6 +24,34 @@ enum AuralisColor {
                 : NSColor.white
         })
     }
+
+    static var mutedPanel: Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                ? NSColor(calibratedRed: 0x0D / 255, green: 0x19 / 255, blue: 0x2A / 255, alpha: 1)
+                : NSColor(calibratedRed: 0xEA / 255, green: 0xEF / 255, blue: 0xF6 / 255, alpha: 1)
+        })
+    }
+
+    static var hairline: Color {
+        Color(nsColor: .separatorColor).opacity(0.55)
+    }
+
+    static func stageAccent(_ stage: EQStage) -> Color {
+        let light: NSColor
+        let dark: NSColor
+        switch stage {
+        case .process:
+            light = NSColor(calibratedRed: 0x08 / 255, green: 0x78 / 255, blue: 0x86 / 255, alpha: 1)
+            dark = NSColor(calibratedRed: 0x22 / 255, green: 0xD3 / 255, blue: 0xEE / 255, alpha: 1)
+        case .output:
+            light = NSColor(calibratedRed: 0xA6 / 255, green: 0x1E / 255, blue: 0x5C / 255, alpha: 1)
+            dark = NSColor(calibratedRed: 0xF4 / 255, green: 0x72 / 255, blue: 0xB6 / 255, alpha: 1)
+        }
+        return Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+        })
+    }
 }
 
 enum AuralisTypography {
@@ -42,7 +70,9 @@ enum AuralisTypography {
 
 enum AuralisSpacing {
     static let controlMinHit: CGFloat = 28
+    static let comfortableControlHit: CGFloat = 32
     static let inspectorBreakpoint: CGFloat = 960
+    static let panelRadius: CGFloat = 12
 }
 
 enum MixerEmptyState: Equatable {

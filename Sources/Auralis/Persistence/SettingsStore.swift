@@ -91,7 +91,7 @@ private struct TolerantDeviceSettings: Decodable {
 }
 
 struct PersistedSettings: Codable, Equatable, Sendable {
-    static let currentVersion = 8
+    static let currentVersion = 9
 
     var version: Int
     var customization: AppCustomization
@@ -203,7 +203,7 @@ struct PersistedSettings: Codable, Equatable, Sendable {
             }
     }
 
-    /// Version 8 treats output-scoped records as automatically saved device
+    /// Version 9 treats output-scoped records as automatically saved device
     /// contexts. Global records are detached, copyable preset templates.
     var deviceContextsForDisplay: [AudioProfile] {
         profiles

@@ -109,4 +109,16 @@ struct ControlCommand: Equatable, Hashable, Sendable {
         self.mutation = mutation
         self.source = source
     }
+
+    /// EQ mutation payloads are shared; their target identifies the stage.
+    var eqStage: EQStage? {
+        switch (target, mutation) {
+        case (.app, .setEQ), (.app, .setEQBand):
+            return .process
+        case (.outputDevice, .setEQ), (.outputDevice, .setEQBand):
+            return .output
+        default:
+            return nil
+        }
+    }
 }

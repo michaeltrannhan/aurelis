@@ -2,6 +2,23 @@ import Foundation
 import XCTest
 @testable import Auralis
 
+final class LockedTestValue<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: Value
+
+    init(_ value: Value) {
+        storage = value
+    }
+
+    var value: Value {
+        lock.withLock { storage }
+    }
+
+    func withValue<Result>(_ body: (inout Value) throws -> Result) rethrows -> Result {
+        try lock.withLock { try body(&storage) }
+    }
+}
+
 extension XCTestCase {
     /// Returns a unique file URL and registers cleanup for its entire parent
     /// directory, including quarantine files and atomic-write leftovers.

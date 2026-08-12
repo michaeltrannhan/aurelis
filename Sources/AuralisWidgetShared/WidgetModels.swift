@@ -7,7 +7,7 @@ public enum WidgetHostState: String, Codable, Equatable, Sendable {
 }
 
 /// Compact mixer state shared across the host app, widget extension, and tests.
-/// Only fields rendered by the widget or needed to construct an absolute command
+/// Only fields rendered by the widget or needed to construct a validated command
 /// are included in the wire model.
 public struct WidgetSnapshot: Codable, Equatable, Sendable {
     public static let hostLeaseDuration: TimeInterval = 15
@@ -305,9 +305,9 @@ public enum WidgetCommandTargetType: String, Codable, Equatable, Sendable {
     case host
 }
 
-/// Absolute actions make duplicate delivery and replay after a host crash
-/// harmless. Relative UI gestures are converted to these values in the widget
-/// from the snapshot that rendered the control.
+/// Commands support idempotent absolute values and bounded relative gestures.
+/// Schema validation rejects relative actions from older clients that did not
+/// provide the ordering guarantees required for safe replay.
 public enum WidgetCommandAction: Codable, Equatable, Sendable {
     case setMuted(Bool)
     case setVolume(Double)

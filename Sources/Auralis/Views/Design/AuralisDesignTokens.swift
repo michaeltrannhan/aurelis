@@ -2,9 +2,6 @@ import AppKit
 import SwiftUI
 
 enum AuralisColor {
-    static let workbench = Color(red: 0xF4 / 255, green: 0xF7 / 255, blue: 0xFB / 255)
-    static let nightDeck = Color(red: 0x07 / 255, green: 0x14 / 255, blue: 0x26 / 255)
-    static let graphite = Color(red: 0x17 / 255, green: 0x20 / 255, blue: 0x33 / 255)
     static let signalCyan = Color(red: 0x22 / 255, green: 0xD3 / 255, blue: 0xEE / 255)
     static let harmonicViolet = Color(red: 0x8B / 255, green: 0x5C / 255, blue: 0xF6 / 255)
     static let peakRose = Color(red: 0xF4 / 255, green: 0x72 / 255, blue: 0xB6 / 255)
@@ -88,7 +85,6 @@ enum AuralisSpacing {
 
 enum MixerEmptyState: Equatable {
     case starting
-    case refreshing
     case readyEmpty
     case permissionLimited
     case degraded
@@ -97,7 +93,6 @@ enum MixerEmptyState: Equatable {
     init(phase: MixerPhase) {
         switch phase {
         case .starting: self = .starting
-        case .refreshing: self = .refreshing
         case .empty, .ready: self = .readyEmpty
         case .permissionLimited: self = .permissionLimited
         case .degraded: self = .degraded
@@ -108,7 +103,6 @@ enum MixerEmptyState: Equatable {
     var title: String {
         switch self {
         case .starting: "Starting mixer"
-        case .refreshing: "Refreshing apps"
         case .readyEmpty: "No audible apps yet"
         case .permissionLimited: "Audio permission required"
         case .degraded: "Mixer is degraded"
@@ -119,7 +113,6 @@ enum MixerEmptyState: Equatable {
     var message: String {
         switch self {
         case .starting: "Auralis is preparing discovery."
-        case .refreshing: "Looking for apps that are playing audio."
         case .readyEmpty: "Play something, then refresh — or show inactive apps."
         case .permissionLimited: "Grant Screen & System Audio Recording to control per-app audio."
         case .degraded: "Some controls need attention. Refresh or review issues above."

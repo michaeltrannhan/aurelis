@@ -109,7 +109,7 @@ Auralis ships two macOS WidgetKit configurations:
 - **Auralis Mixer / systemLarge** — a control-center layout with Global/output configuration status, direct output selection, a roomy master volume/mute panel, batch mute/unmute/50% actions, and two full app mixer rows.
 - **Auralis EQ / systemLarge** — a focused per-app Process EQ chart with ±0.5 dB buttons per band. Output EQ remains in the host app.
 
-Interactive controls are backed by `AppIntent`s that queue absolute commands into a shared App Group container. This includes output selection, device and app volume/mute, profile application, batch active-app controls, boost, EQ, and refresh. The app drains the queue via a `DispatchSource` file watcher and applies changes to its `AudioControlStore`. The app writes a `WidgetSnapshot` (compact Codable summary) to the same container on every store change so the widget always renders fresh state.
+Interactive controls are backed by `AppIntent`s that queue validated, ordered commands into a shared App Group container. Commands support both absolute values and bounded relative gestures. This includes output selection, device and app volume/mute, profile application, batch active-app controls, boost, EQ, and refresh. The app drains the queue via a `DispatchSource` file watcher and applies changes to its `AudioControlStore`. The app writes a `WidgetSnapshot` (compact Codable summary) to the same container on every store change so the widget always renders fresh state.
 
 ## Profiles and device reconnects
 

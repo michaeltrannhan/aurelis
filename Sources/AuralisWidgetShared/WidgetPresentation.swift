@@ -34,7 +34,7 @@ public struct WidgetMixerPresentation: Equatable, Sendable {
         }
         activeGlobalProfile = globalProfiles.first { $0.id == snapshot.activeGlobalProfileID }
         activeLocalProfile = localProfiles.first { $0.id == snapshot.activeLocalProfileID }
-        // Version-8 device contexts autosave; legacy override flags are ignored.
+        // Device contexts autosave, so the widget has no unsaved override state.
         profileHasOverrides = false
         hasActiveApps = snapshot.activeAppCount > 0
         activeCountText = "\(snapshot.activeAppCount) active"

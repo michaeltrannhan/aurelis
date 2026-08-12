@@ -232,7 +232,10 @@ final class CoreAudioTapLifecycleTests: XCTestCase {
         manager.setBoost(.x4, for: music)
         manager.setEQ(curve, for: music)
 
-        XCTAssertEqual(manager.gainState(for: music), CoreAudioRealtimeGainState(volume: 0.25, boost: .x4, isMuted: true, eq: curve))
+        XCTAssertEqual(
+            manager.gainState(for: music),
+            CoreAudioRealtimeGainState(volume: 0.25, boost: .x4, isMuted: true, processEQ: curve)
+        )
     }
 
     func testOutputEQRefreshesOnlyTapStatesRoutedThroughThatDevice() throws {
@@ -866,7 +869,7 @@ final class CoreAudioTapLifecycleTests: XCTestCase {
         XCTAssertEqual(factory.stoppedOutputUIDSets, [["built-in-output"]])
     }
 
-    func testStopAllStopsEveryController() throws {
+    func testTearDownAllStopsEveryController() throws {
         let factory = FakeControllerFactory()
         let manager = CoreAudioProcessTapManager(
             operations: FakeTapOperations(),
@@ -878,7 +881,7 @@ final class CoreAudioTapLifecycleTests: XCTestCase {
             CoreAudioTapTarget(identity: AudioAppIdentity(rawValue: "b"), displayName: "B", processObjectIDs: [2])
         ])
 
-        manager.stopAll()
+        try manager.tearDownAll()
 
         XCTAssertEqual(factory.stoppedOutputUIDSets.count, 2)
         XCTAssertTrue(manager.activeSessions.isEmpty)

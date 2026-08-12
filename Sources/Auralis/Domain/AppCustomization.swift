@@ -39,17 +39,6 @@ enum PopupDensity: String, CaseIterable, Codable, Identifiable, Sendable {
         }
     }
 
-    /// The resting popup only needs enough room for one compact mixer row.
-    /// Keep the wider dimensions below for the 10-band EQ, where horizontal
-    /// space materially improves usability.
-    var collapsedWidth: Double {
-        switch self {
-        case .compact: return 300
-        case .comfortable: return 320
-        case .spacious: return 340
-        }
-    }
-
     var dimensions: PopupDimensions {
         switch self {
         case .compact:

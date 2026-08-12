@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// Tabbed settings root. Updates returns only when a real updater exists.
 struct SettingsRootView: View {
     @ObservedObject var store: AudioControlStore
     @State private var selection: SettingsTab = .general

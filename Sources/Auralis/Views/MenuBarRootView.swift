@@ -94,6 +94,12 @@ struct MenuBarRootView: View {
     }
 
     var body: some View {
+        keyboardEnabledPopup
+            .accessibilityHint(PopupKeyboardNavModel.accessibilityHint)
+            .accessibilityIdentifier("auralis.popup.mixer")
+    }
+
+    private var popupPages: some View {
         Group {
             if destination == nil {
                 mixerPage
@@ -103,89 +109,107 @@ struct MenuBarRootView: View {
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
-        .padding(dimensions.contentPadding)
-        .frame(width: dimensions.width, height: popupHeight)
-        .background(AuralisColor.canvas)
-        .preferredColorScheme(store.settings.customization.appearance.colorScheme)
-        .focusable()
-        .focused($popupFocused)
-        .focusEffectDisabled()
-        .onAppear {
-            controls.isPopupVisible = true
-            updateAvailableScreenHeight()
-            syncKeyboardNavigation()
-            popupFocused = true
-            showsFirstRun = !store.settings.hasCompletedOnboarding
-        }
-        .onDisappear {
-            controls.isPopupVisible = false
-            endInspectorEdits()
-        }
-        .sheet(isPresented: $showsFirstRun) { FirstRunView(store: store) }
-        .alert("Save Mix Preset", isPresented: $showsSavePreset) {
-            TextField("Preset name", text: $presetName)
-            Button("Save") { store.createProfileIntent(named: presetName, scope: .global) }
-                .disabled(presetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Saves app volume, Process EQ, routes, and Output EQ for every routed device.")
-        }
-        .onChange(of: filteredRows) { _, _ in
-            syncKeyboardNavigation()
-            validateSelection()
-        }
-        .onChange(of: store.devices) { _, _ in validateSelection() }
-        .onChange(of: destination) { _, _ in
-            showsRoutePicker = false
-            syncKeyboardNavigation()
-        }
-        .onKeyPress(.downArrow) {
-            guard destination == nil else { return .ignored }
-            if let next = nav.next(after: keyboardSelectionID) { keyboardSelectionID = next }
-            return .handled
-        }
-        .onKeyPress(.upArrow) {
-            guard destination == nil else { return .ignored }
-            if let previous = nav.previous(before: keyboardSelectionID) { keyboardSelectionID = previous }
-            return .handled
-        }
-        .onKeyPress(.space) {
-            guard destination == nil else { return .ignored }
-            toggleSelectedMute()
-            return .handled
-        }
-        .onKeyPress(.return) {
-            guard destination == nil else { return .ignored }
-            openSelectedProcessEQ()
-            return .handled
-        }
-        .onKeyPress(.leftArrow) {
-            guard destination == nil else { return .ignored }
-            adjustSelectedVolume(by: -store.settings.customization.volumeStep.fraction)
-            return .handled
-        }
-        .onKeyPress(.rightArrow) {
-            guard destination == nil else { return .ignored }
-            adjustSelectedVolume(by: store.settings.customization.volumeStep.fraction)
-            return .handled
-        }
-        .onKeyPress(.escape) {
-            if destination != nil {
-                closeInspector()
+    }
+
+    private var framedPopup: some View {
+        popupPages
+            .padding(dimensions.contentPadding)
+            .frame(width: dimensions.width, height: popupHeight)
+            .background(AuralisColor.canvas)
+            .preferredColorScheme(store.settings.customization.appearance.colorScheme)
+            .focusable()
+            .focused($popupFocused)
+            .focusEffectDisabled()
+    }
+
+    private var presentedPopup: some View {
+        framedPopup
+            .onAppear {
+                controls.isPopupVisible = true
+                updateAvailableScreenHeight()
+                syncKeyboardNavigation()
+                popupFocused = true
+                showsFirstRun = !store.settings.hasCompletedOnboarding
+            }
+            .onDisappear {
+                controls.isPopupVisible = false
+                endInspectorEdits()
+            }
+            .sheet(isPresented: $showsFirstRun) { FirstRunView(store: store) }
+            .alert("Save Mix Preset", isPresented: $showsSavePreset) {
+                TextField("Preset name", text: $presetName)
+                Button("Save") { store.createProfileIntent(named: presetName, scope: .global) }
+                    .disabled(presetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Saves app volume, Process EQ, routes, and Output EQ for every routed device.")
+            }
+    }
+
+    private var observedPopup: some View {
+        presentedPopup
+            .onChange(of: filteredRows) { _, _ in
+                syncKeyboardNavigation()
+                validateSelection()
+            }
+            .onChange(of: store.devices) { _, _ in validateSelection() }
+            .onChange(of: destination) { _, _ in
+                showsRoutePicker = false
+                syncKeyboardNavigation()
+            }
+    }
+
+    private var navigationKeyEnabledPopup: some View {
+        observedPopup
+            .onKeyPress(.downArrow) {
+                guard destination == nil else { return .ignored }
+                if let next = nav.next(after: keyboardSelectionID) { keyboardSelectionID = next }
                 return .handled
             }
-            if !searchText.isEmpty {
-                searchText = ""
+            .onKeyPress(.upArrow) {
+                guard destination == nil else { return .ignored }
+                if let previous = nav.previous(before: keyboardSelectionID) { keyboardSelectionID = previous }
                 return .handled
             }
-            if keyboardSelectionID != nil {
-                keyboardSelectionID = nil
+    }
+
+    private var keyboardEnabledPopup: some View {
+        navigationKeyEnabledPopup
+            .onKeyPress(.space) {
+                guard destination == nil else { return .ignored }
+                toggleSelectedMute()
                 return .handled
             }
-            return .ignored
-        }
-        .accessibilityHint(PopupKeyboardNavModel.accessibilityHint)
-        .accessibilityIdentifier("auralis.popup.mixer")
+            .onKeyPress(.return) {
+                guard destination == nil else { return .ignored }
+                openSelectedProcessEQ()
+                return .handled
+            }
+            .onKeyPress(.leftArrow) {
+                guard destination == nil else { return .ignored }
+                adjustSelectedVolume(by: -store.settings.customization.volumeStep.fraction)
+                return .handled
+            }
+            .onKeyPress(.rightArrow) {
+                guard destination == nil else { return .ignored }
+                adjustSelectedVolume(by: store.settings.customization.volumeStep.fraction)
+                return .handled
+            }
+            .onKeyPress(.escape) {
+                if destination != nil {
+                    closeInspector()
+                    return .handled
+                }
+                if !searchText.isEmpty {
+                    searchText = ""
+                    return .handled
+                }
+                if keyboardSelectionID != nil {
+                    keyboardSelectionID = nil
+                    return .handled
+                }
+                return .ignored
+            }
     }
 
     private var mixerPage: some View {
@@ -432,7 +456,7 @@ struct MenuBarRootView: View {
         }
 
         PopupInspectorSection(title: "ROUTED OUTPUTS", accent: AuralisColor.peakRose) {
-            let outputs = popupResolvedDevices(route: row.settings.route, devices: store.devices)
+            let outputs = row.settings.route.resolvedDevices(in: store.devices)
             if outputs.isEmpty {
                 Text("No connected destination")
                     .font(.caption)
@@ -480,7 +504,7 @@ struct MenuBarRootView: View {
 
         PopupInspectorSection(title: "APPS USING THIS OUTPUT", accent: AuralisColor.signalCyan) {
             let apps = store.displayRows.filter {
-                popupRoute($0.settings.route, contains: device.id, devices: store.devices)
+                $0.settings.route.routes(to: device.id, in: store.devices)
             }
             if apps.isEmpty {
                 Text("No visible apps are routed here")
@@ -647,8 +671,7 @@ struct MenuBarRootView: View {
     }
 
     private func popupOutputEQSummary(_ deviceID: String) -> String {
-        let gains = store.settings.deviceSettings[deviceID]?.eq.gains ?? []
-        let count = gains.filter { abs($0) >= 0.05 }.count
+        let count = store.settings.deviceSettings[deviceID]?.eq.adjustedBandCount ?? 0
         return count == 0 ? "Output EQ flat" : "Output EQ · \(count) bands"
     }
 
@@ -915,27 +938,4 @@ private struct PopupInspectorSection<Content: View>: View {
         .background(AuralisColor.panel, in: RoundedRectangle(cornerRadius: 10))
         .overlay { RoundedRectangle(cornerRadius: 10).stroke(AuralisColor.hairline) }
     }
-}
-
-private func popupResolvedDevices(
-    route: DeviceRoute,
-    devices: [AudioDeviceSnapshot]
-) -> [AudioDeviceSnapshot] {
-    switch route.normalized {
-    case .followDefault:
-        return devices.filter(\.isDefault)
-    case let .selectedDevice(deviceID):
-        return devices.filter { $0.id == deviceID }
-    case let .multiOutput(deviceIDs):
-        let byID = Dictionary(uniqueKeysWithValues: devices.map { ($0.id, $0) })
-        return deviceIDs.compactMap { byID[$0] }
-    }
-}
-
-private func popupRoute(
-    _ route: DeviceRoute,
-    contains deviceID: String,
-    devices: [AudioDeviceSnapshot]
-) -> Bool {
-    popupResolvedDevices(route: route, devices: devices).contains { $0.id == deviceID }
 }

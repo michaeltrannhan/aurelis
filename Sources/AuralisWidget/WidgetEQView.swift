@@ -66,7 +66,7 @@ struct AuralisEQWidgetView: View {
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
             Spacer(minLength: 0)
-            Link(destination: URL(string: "auralis://open")!) {
+            Link(destination: AuralisDeepLink.openMixer) {
                 Label("Open", systemImage: "arrow.up.right.square")
                     .font(.caption2.weight(.semibold))
             }

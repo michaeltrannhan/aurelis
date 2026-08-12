@@ -179,6 +179,28 @@ enum DeviceRoute: Codable, Equatable, Hashable, Sendable {
         }
     }
 
+    func resolvedDevices(in devices: [AudioDeviceSnapshot]) -> [AudioDeviceSnapshot] {
+        var devicesByID: [String: AudioDeviceSnapshot] = [:]
+        let uniqueDevices = devices.filter { device in
+            guard devicesByID[device.id] == nil else { return false }
+            devicesByID[device.id] = device
+            return true
+        }
+
+        switch normalized {
+        case .followDefault:
+            return uniqueDevices.filter(\.isDefault)
+        case let .selectedDevice(deviceID):
+            return devicesByID[deviceID].map { [$0] } ?? []
+        case let .multiOutput(deviceIDs):
+            return deviceIDs.compactMap { devicesByID[$0] }
+        }
+    }
+
+    func routes(to deviceID: String, in devices: [AudioDeviceSnapshot]) -> Bool {
+        resolvedDevices(in: devices).contains { $0.id == deviceID }
+    }
+
     private enum CodingKeys: String, CodingKey {
         case followDefault
         case selectedDevice

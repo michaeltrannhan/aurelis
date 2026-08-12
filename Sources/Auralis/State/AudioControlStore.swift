@@ -30,6 +30,7 @@ private enum SettingsEngineReceipt: Sendable {
 
 private enum AppSettingMutationKind: String {
     case volume
+    case volumeAndMute
     case mute
     case boost
     case eq
@@ -39,16 +40,24 @@ private enum AppSettingMutationKind: String {
         self == .route ? .tap : .backend
     }
 
-    func command(
+    var issueName: String {
+        self == .volumeAndMute ? "volume" : rawValue
+    }
+
+    func commands(
         for identity: AudioAppIdentity,
         settings: AppAudioSettings
-    ) -> AudioBackendCommand {
+    ) -> [AudioBackendCommand] {
         switch self {
-        case .volume: .setVolume(identity, settings.volume)
-        case .mute: .setMuted(identity, settings.isMuted)
-        case .boost: .setBoost(identity, settings.boost)
-        case .eq: .setEQ(identity, settings.eq)
-        case .route: .setRoute(identity, settings.route.normalized)
+        case .volume: [.setVolume(identity, settings.volume)]
+        case .volumeAndMute: [
+            .setVolume(identity, settings.volume),
+            .setMuted(identity, settings.isMuted),
+        ]
+        case .mute: [.setMuted(identity, settings.isMuted)]
+        case .boost: [.setBoost(identity, settings.boost)]
+        case .eq: [.setEQ(identity, settings.eq)]
+        case .route: [.setRoute(identity, settings.route.normalized)]
         }
     }
 }
@@ -84,10 +93,9 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
     let channels = ChannelModelDirectory()
     private var healthInputs = AudioHealthInputs(isBootstrapping: true)
     private var coordinatorCancellable: AnyCancellable?
-    private var hostLease: AppGroupHostLease?
 
     /// Live meter levels live on their own object so the ~10 Hz stream does not
-    /// invalidate views bound to this store. See [[AppLevelStore]].
+    /// invalidate views bound to this store. See `AppLevelStore`.
     let appLevels = AppLevelStore()
 
     private var bootstrapTask: Task<Void, Never>?
@@ -363,7 +371,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         let currentOutputDeviceIDs = Set(devices.map(\.id))
         let beforeDiscoveryMerge = settings
         for app in appSnapshots { ensureSettings(for: app, in: &settings) }
-        ensureAutomaticDeviceContexts(in: &settings)
+        AudioProfileContextPlanner.ensureAutomaticDeviceContexts(in: &settings, devices: devices)
         mergeAppDisplayOrder()
 
         var persistenceIssue: String?
@@ -714,7 +722,10 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         if let key = activeEditKeys[lookup] {
             ensureSettings(for: identity, in: &settings)
             settings.appSettings[identity]?.setVolume(volume)
-            updateActiveDeviceContext(in: &settings)
+            AudioProfileContextPlanner.updateActiveDeviceContext(
+                in: &settings,
+                currentOutputID: currentOutput?.id
+            )
             rebuildDisplayRows()
             scheduleEditPreview(key)
         } else {
@@ -735,7 +746,10 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         if let key = activeEditKeys[lookup] {
             ensureSettings(for: identity, in: &settings)
             settings.appSettings[identity]?.eq.setGain(gain, at: band)
-            updateActiveDeviceContext(in: &settings)
+            AudioProfileContextPlanner.updateActiveDeviceContext(
+                in: &settings,
+                currentOutputID: currentOutput?.id
+            )
             rebuildDisplayRows()
             scheduleEditPreview(key)
         } else {
@@ -829,15 +843,6 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         launchIntent { store in try? await store.deleteProfile(profileID) }
     }
 
-    func saveOutputConfigurationIntent(deviceID: String, deviceName: String) {
-        launchIntent {
-            _ = try? await $0.saveOutputConfiguration(
-                for: deviceID,
-                deviceName: deviceName
-            )
-        }
-    }
-
     func assignPresetToOutputIntent(
         profileID: UUID,
         deviceID: String,
@@ -856,10 +861,6 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         launchIntent {
             try? await $0.removeOutputConfiguration(for: deviceID)
         }
-    }
-
-    func revertProfileChangesIntent() {
-        launchIntent { try? await $0.revertProfileChanges() }
     }
 
     // MARK: - Output mutations
@@ -882,7 +883,11 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                 volume: clamped,
                 isMuted: state.isMuted
             )
-            updateActiveDeviceContext(in: &desired, deviceUID: deviceUID)
+            AudioProfileContextPlanner.updateActiveDeviceContext(
+                in: &desired,
+                currentOutputID: currentOutput?.id,
+                changedDeviceID: deviceUID
+            )
             try await performSettingsTransaction(
                 previous: settings,
                 desired: desired,
@@ -923,7 +928,11 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                 volume: state.volume,
                 isMuted: muted
             )
-            updateActiveDeviceContext(in: &desired, deviceUID: deviceUID)
+            AudioProfileContextPlanner.updateActiveDeviceContext(
+                in: &desired,
+                currentOutputID: currentOutput?.id,
+                changedDeviceID: deviceUID
+            )
             try await performSettingsTransaction(
                 previous: settings,
                 desired: desired,
@@ -956,7 +965,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             let previousDefault = devices.first(where: \.isDefault)?.id
             var desired = settings
             desired.preferredOutputDeviceID = deviceUID
-            Self.setActiveProfiles(
+            AudioProfileContextPlanner.setActiveProfiles(
                 globalID: desired.activeGlobalProfileID,
                 localID: nil,
                 in: &desired
@@ -1014,21 +1023,12 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                 scope: scope
             )
             var desired = settings
-            let globalID = profile.id
             desired.profiles.append(profile)
-            if profile.scope.isGlobal {
-                Self.setActiveProfiles(
-                    globalID: nil,
-                    localID: desired.activeLocalProfileID,
-                    in: &desired
-                )
-            } else {
-                Self.setActiveProfiles(
-                    globalID: globalID,
-                    localID: profile.id,
-                    in: &desired
-                )
-            }
+            AudioProfileContextPlanner.setActiveProfiles(
+                globalID: nil,
+                localID: desired.activeLocalProfileID,
+                in: &desired
+            )
             try await commitSettings(
                 desired,
                 previous: settings,
@@ -1038,8 +1038,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         }
     }
 
-    /// Captures the current mixer state as the sole dedicated configuration
-    /// for an output. Global remains the fallback for every other output.
+    /// Captures the current mixer state in the automatic context for one output.
     @discardableResult
     func saveOutputConfiguration(
         for deviceID: String,
@@ -1061,9 +1060,10 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             configuration.createdAt = existing?.createdAt ?? configuration.createdAt
 
             var desired = settings
-            upsertOutputConfiguration(
+            AudioProfileContextPlanner.upsertOutputConfiguration(
                 configuration,
                 for: normalizedID,
+                currentOutputID: currentOutput?.id,
                 in: &desired
             )
             try await commitSettings(
@@ -1119,7 +1119,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             } else if let capturedDevice {
                 copiedDeviceSettings[normalizedID] = capturedDevice
             }
-            let routedDeviceIDs = outputDeviceIDsReferenced(
+            let routedDeviceIDs = AudioProfileContextPlanner.referencedOutputDeviceIDs(
                 in: copiedAppSettings,
                 followDefaultOutputID: normalizedID
             )
@@ -1140,9 +1140,10 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
 
             var desired = settings
             let currentOutputID = devices.first(where: \.isDefault)?.id
-            upsertOutputConfiguration(
+            AudioProfileContextPlanner.upsertOutputConfiguration(
                 configuration,
                 for: normalizedID,
+                currentOutputID: currentOutputID,
                 in: &desired
             )
             try await commitSettings(
@@ -1195,7 +1196,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             let retainedLocalID = desired.activeLocalProfileID.flatMap {
                 configurationIDs.contains($0) ? nil : $0
             }
-            Self.setActiveProfiles(
+            AudioProfileContextPlanner.setActiveProfiles(
                 globalID: desired.activeGlobalProfileID,
                 localID: retainedLocalID,
                 in: &desired
@@ -1203,7 +1204,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             // Connected outputs always own a context. Removing the current
             // context therefore means reset-to-neutral; disconnected outputs
             // are genuinely forgotten.
-            ensureAutomaticDeviceContexts(in: &desired)
+            AudioProfileContextPlanner.ensureAutomaticDeviceContexts(in: &desired, devices: devices)
             try await commitSettings(
                 desired,
                 previous: settings,
@@ -1232,13 +1233,13 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             var desired = settings
             desired.profiles[index] = updated.normalized
             if updated.scope.isGlobal {
-                Self.setActiveProfiles(
+                AudioProfileContextPlanner.setActiveProfiles(
                     globalID: nil,
                     localID: desired.activeLocalProfileID,
                     in: &desired
                 )
             } else {
-                Self.setActiveProfiles(
+                AudioProfileContextPlanner.setActiveProfiles(
                     globalID: desired.activeGlobalProfileID,
                     localID: profileID,
                     in: &desired
@@ -1266,7 +1267,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             if desired.activeLocalProfileID == profileID {
                 desired.activeLocalProfileID = nil
             }
-            Self.setActiveProfiles(
+            AudioProfileContextPlanner.setActiveProfiles(
                 globalID: desired.activeGlobalProfileID,
                 localID: desired.activeLocalProfileID,
                 in: &desired
@@ -1328,8 +1329,8 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         let localID = automaticLocalProfile(for: outputDeviceID)?.id
         do {
             try await applyProfileLayersUnlocked(
-                // Global profiles are version-8 preset templates, never a
-                // live layer shared by multiple physical outputs.
+                // Presets are copied into a device context, never retained as
+                // a live layer shared by multiple physical outputs.
                 globalProfileID: nil,
                 localProfileID: localID,
                 selectLocalOutput: false,
@@ -1386,7 +1387,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         if let observedOutputDeviceID {
             desired.preferredOutputDeviceID = observedOutputDeviceID
         }
-        Self.setActiveProfiles(
+        AudioProfileContextPlanner.setActiveProfiles(
             globalID: globalProfile?.id,
             localID: localProfile?.id,
             in: &desired
@@ -1480,38 +1481,6 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         return outputConfiguration(for: outputDeviceID)
     }
 
-    /// Ensures every remembered and currently connected output owns a complete
-    /// neutral-by-default context. New app identities are initialized inside
-    /// every context so switching cannot leave values from the outgoing device
-    /// behind in the realtime engine.
-    private func ensureAutomaticDeviceContexts(in desired: inout PersistedSettings) {
-        let neutralSettings = AudioProfile.flatAppSettings(
-            from: desired.appSettings,
-            customization: desired.customization
-        )
-
-        for index in desired.profiles.indices where !desired.profiles[index].scope.isGlobal {
-            for (identity, neutral) in neutralSettings
-            where desired.profiles[index].appSettings[identity] == nil {
-                desired.profiles[index].appSettings[identity] = neutral
-            }
-            desired.profiles[index].activatesAutomatically = true
-        }
-
-        var configuredIDs = Set(desired.profiles.compactMap(\.scope.outputDeviceID))
-        for device in devices where configuredIDs.insert(device.id).inserted {
-            let capturedDevice = desired.deviceSettings[device.id].map { [device.id: $0] } ?? [:]
-            desired.profiles.append(AudioProfile(
-                name: device.name,
-                scope: .outputDevice(device.id),
-                activatesAutomatically: true,
-                appSettings: neutralSettings,
-                deviceSettings: capturedDevice,
-                preferredOutputDeviceID: device.id
-            ))
-        }
-    }
-
     private func makeCurrentProfile(
         name: String,
         id: UUID = UUID(),
@@ -1519,7 +1488,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
     ) -> AudioProfile {
         let normalizedScope = scope.normalized
         let fallbackOutputID = normalizedScope.outputDeviceID ?? currentOutput?.id
-        var capturedIDs = outputDeviceIDsReferenced(
+        var capturedIDs = AudioProfileContextPlanner.referencedOutputDeviceIDs(
             in: settings.appSettings,
             followDefaultOutputID: fallbackOutputID
         )
@@ -1570,56 +1539,6 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             eq: eq
                 ?? settings.deviceSettings[deviceUID]?.eq
                 ?? EQCurve(range: settings.customization.eqGainRange)
-        )
-    }
-
-    private func outputDeviceIDsReferenced(
-        in appSettings: [AudioAppIdentity: AppAudioSettings],
-        followDefaultOutputID: String?
-    ) -> Set<String> {
-        var result = Set<String>()
-        for value in appSettings.values {
-            switch value.route.normalized {
-            case .followDefault:
-                if let followDefaultOutputID {
-                    result.insert(followDefaultOutputID)
-                }
-            case let .selectedDevice(deviceID):
-                result.insert(deviceID)
-            case let .multiOutput(deviceIDs):
-                result.formUnion(deviceIDs)
-            }
-        }
-        return result
-    }
-
-    private func upsertOutputConfiguration(
-        _ configuration: AudioProfile,
-        for outputID: String,
-        in desired: inout PersistedSettings
-    ) {
-        let globalID = desired.activeGlobalProfileID
-        Self.convertOutputConfigurationsToGlobalPresets(
-            for: outputID,
-            except: configuration.id,
-            in: &desired
-        )
-        if let index = desired.profiles.firstIndex(where: { $0.id == configuration.id }) {
-            desired.profiles[index] = configuration.normalized
-        } else {
-            desired.profiles.append(configuration.normalized)
-        }
-
-        let currentOutputID = devices.first(where: \.isDefault)?.id
-        let retainedLocalID = desired.activeLocalProfileID.flatMap { activeID in
-            desired.profiles.first {
-                $0.id == activeID && $0.scope.outputDeviceID == currentOutputID
-            }?.id
-        }
-        Self.setActiveProfiles(
-            globalID: globalID,
-            localID: currentOutputID == outputID ? configuration.id : retainedLocalID,
-            in: &desired
         )
     }
 
@@ -1828,7 +1747,11 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                 isMuted: desired.deviceSettings[deviceUID]?.isMuted ?? state.isMuted,
                 eq: curve
             )
-            updateActiveDeviceContext(in: &desired, deviceUID: deviceUID)
+            AudioProfileContextPlanner.updateActiveDeviceContext(
+                in: &desired,
+                currentOutputID: currentOutput?.id,
+                changedDeviceID: deviceUID
+            )
             try await performSettingsTransaction(
                 previous: previous,
                 desired: desired,
@@ -1863,7 +1786,11 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             isMuted: settings.deviceSettings[deviceUID]?.isMuted ?? state.isMuted,
             eq: curve
         )
-        updateActiveDeviceContext(in: &settings, deviceUID: deviceUID)
+        AudioProfileContextPlanner.updateActiveDeviceContext(
+            in: &settings,
+            currentOutputID: currentOutput?.id,
+            changedDeviceID: deviceUID
+        )
         rebuildDisplayRows()
     }
 
@@ -1900,7 +1827,10 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                 mutation(&appSettings)
                 desired.appSettings[identity] = appSettings.normalized
             }
-            updateActiveDeviceContext(in: &desired)
+            AudioProfileContextPlanner.updateActiveDeviceContext(
+                in: &desired,
+                currentOutputID: currentOutput?.id
+            )
             let desiredCommands = activeIDs.compactMap { identity in
                 desired.appSettings[identity].map { (identity, $0) }
             }.flatMap { Self.profileCommands(for: $0.0, settings: $0.1) }
@@ -1937,16 +1867,19 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             mutation(&desiredApp)
             desiredApp = desiredApp.normalized
             desired.appSettings[identity] = desiredApp
-            updateActiveDeviceContext(in: &desired)
-            let command = kind.command(for: identity, settings: desiredApp)
-            let compensation = kind.command(for: identity, settings: previousApp)
+            AudioProfileContextPlanner.updateActiveDeviceContext(
+                in: &desired,
+                currentOutputID: currentOutput?.id
+            )
+            let commands = kind.commands(for: identity, settings: desiredApp)
+            let compensation = kind.commands(for: identity, settings: previousApp)
             try await performSettingsTransaction(
                 previous: settings,
                 desired: desired,
-                issueID: "\(kind.rawValue)-\(identity.rawValue)",
+                issueID: "\(kind.issueName)-\(identity.rawValue)",
                 engineDomain: kind.issueDomain,
                 app: identity,
-                engineWork: { [engine] in try await engine.apply(command) },
+                engineWork: { [engine] in try await engine.apply(commands) },
                 finalize: { _ in },
                 compensate: { [engine] _ in try await engine.apply(compensation) }
             )
@@ -2462,7 +2395,6 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                 recovery: .refreshAudio
             )
         }
-        hostLease = nil
         storePhase = .stopped
         return AudioShutdownReport(
             editSessionErrorDescriptions: editErrors,
@@ -2583,92 +2515,6 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         ]
     }
 
-    private static func setActiveProfiles(
-        globalID: UUID?,
-        localID: UUID?,
-        in settings: inout PersistedSettings
-    ) {
-        settings.activeGlobalProfileID = globalID
-        settings.activeLocalProfileID = localID
-        settings.activeProfileID = localID ?? globalID
-        settings.profileHasOverrides = false
-    }
-
-    /// Writes live mixer state through to the current physical output context.
-    /// This replaces the old "profile has overrides" state: there is no shared
-    /// mutable layer to revert, and every Auralis edit is durable immediately.
-    private func updateActiveDeviceContext(
-        in desired: inout PersistedSettings,
-        deviceUID: String? = nil
-    ) {
-        let currentOutputID = currentOutput?.id
-        var contextIDs = Set<String>()
-        if let deviceUID { contextIDs.insert(deviceUID) }
-        if let currentOutputID { contextIDs.insert(currentOutputID) }
-        guard !contextIDs.isEmpty else { return }
-
-        for index in desired.profiles.indices {
-            guard let contextOutputID = desired.profiles[index].scope.outputDeviceID,
-                  contextIDs.contains(contextOutputID) else { continue }
-            let isCurrentContext = contextOutputID == currentOutputID
-            if isCurrentContext {
-                desired.profiles[index].appSettings = desired.appSettings
-            }
-
-            var capturedIDs = outputDeviceIDsReferenced(
-                in: desired.profiles[index].appSettings,
-                followDefaultOutputID: contextOutputID
-            )
-            capturedIDs.insert(contextOutputID)
-            desired.profiles[index].deviceSettings = desired.deviceSettings.filter {
-                capturedIDs.contains($0.key)
-            }
-            desired.profiles[index].updatedAt = Date()
-
-            if isCurrentContext {
-                desired.activeGlobalProfileID = nil
-                desired.activeLocalProfileID = desired.profiles[index].id
-                desired.activeProfileID = desired.profiles[index].id
-            }
-        }
-        desired.profileHasOverrides = false
-    }
-
-    private func ensureGlobalFallback(in desired: inout PersistedSettings) -> UUID {
-        if let activeID = desired.activeGlobalProfileID,
-           desired.profiles.contains(where: { $0.id == activeID && $0.scope.isGlobal }) {
-            return activeID
-        }
-        let fallback = AudioProfile(
-            name: "Global Default",
-            scope: .global,
-            appSettings: AudioProfile.flatAppSettings(
-                from: desired.appSettings,
-                customization: desired.customization
-            ),
-            deviceSettings: [:],
-            preferredOutputDeviceID: nil
-        )
-        desired.profiles.append(fallback)
-        desired.activeGlobalProfileID = fallback.id
-        return fallback.id
-    }
-
-    private static func convertOutputConfigurationsToGlobalPresets(
-        for outputID: String,
-        except retainedID: UUID,
-        in settings: inout PersistedSettings
-    ) {
-        for index in settings.profiles.indices
-        where settings.profiles[index].id != retainedID
-            && settings.profiles[index].scope.outputDeviceID == outputID {
-            settings.profiles[index].scope = .global
-            settings.profiles[index].activatesAutomatically = false
-            settings.profiles[index].deviceSettings = [:]
-            settings.profiles[index].preferredOutputDeviceID = nil
-        }
-    }
-
     // MARK: - Coordination helpers and issues
 
     private func withMutationGate<Value>(_ operation: () async throws -> Value) async throws -> Value {
@@ -2753,7 +2599,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         let reduced = AudioHealthReducer.reduce(healthInputs)
         healthSnapshot = reduced
         mixerPhase = reduced.phase
-        // Compatibility projection only — never assigned by refresh as a source of truth.
+        // Operation state is a view projection; health inputs remain authoritative.
         operationState = reduced.operationState
         // Merge reducer issues with ad-hoc operational issues (keep non-overlapping ids).
         let reducedIDs = Set(reduced.issues.map(\.id))
@@ -2769,92 +2615,18 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
     ]
 
     private func project(_ command: ControlCommand) throws -> ControlProjectedState {
-        switch command.target {
-        case let .app(identity):
-            let appSettings: AppAudioSettings
-            let displayName: String
-            if let row = displayRows.first(where: { $0.identity == identity }) {
-                appSettings = row.settings
-                displayName = row.displayName
-            } else if let stored = settings.appSettings[identity] {
-                appSettings = stored
-                displayName = stored.displayName
-            } else {
-                throw AudioControlStoreError.appUnavailable(identity.rawValue)
-            }
-            return projectedState(from: appSettings, displayName: displayName, applying: command.mutation)
-        case let .outputDevice(deviceID):
-            guard let device = devices.first(where: { $0.id == deviceID }) else {
-                throw AudioControlStoreError.outputDeviceUnavailable(deviceID)
-            }
-            let state = deviceVolumeStates[deviceID]
-            var projected = ControlProjectedState(
-                volume: state?.volume,
-                isMuted: state?.isMuted,
-                eq: settings.deviceSettings[deviceID]?.eq
-                    ?? EQCurve(range: settings.customization.eqGainRange),
-                displayName: device.name
-            )
-            switch command.mutation {
-            case let .adjustVolume(delta):
-                let current = projected.volume ?? 1
-                projected.volume = min(max(current + delta, 0), 1)
-            case let .setVolume(volume):
-                projected.volume = min(max(volume, 0), 1)
-            case .toggleMute:
-                projected.isMuted = !(projected.isMuted ?? false)
-            case let .setMuted(muted):
-                projected.isMuted = muted
-            case let .setEQ(eq):
-                projected.eq = eq
-            case let .setEQBand(band, gain):
-                var eq = projected.eq
-                    ?? EQCurve(range: settings.customization.eqGainRange)
-                eq.setGain(gain, at: band)
-                projected.eq = eq
-            case .setBoost, .setRoute:
-                throw AudioControlStoreError.outputVolumeUnsupported(device.name)
-            }
-            return projected
-        case .activeApps:
-            return ControlProjectedState(displayName: "Active apps")
-        }
-    }
-
-    private func projectedState(
-        from settings: AppAudioSettings,
-        displayName: String,
-        applying mutation: ControlMutation
-    ) -> ControlProjectedState {
-        var projected = ControlProjectedState(
-            volume: settings.volume,
-            isMuted: settings.isMuted,
-            boost: settings.boost,
-            eq: settings.eq,
-            route: settings.route,
-            displayName: displayName
+        let committed = try ControlProjection.committed(
+            for: command.target,
+            displayRows: displayRows,
+            settings: settings,
+            devices: devices,
+            deviceVolumeStates: deviceVolumeStates
         )
-        switch mutation {
-        case let .adjustVolume(delta):
-            projected.volume = min(max((projected.volume ?? 1) + delta, 0), 1)
-        case let .setVolume(volume):
-            projected.volume = min(max(volume, 0), 1)
-        case .toggleMute:
-            projected.isMuted = !(projected.isMuted ?? false)
-        case let .setMuted(muted):
-            projected.isMuted = muted
-        case let .setBoost(boost):
-            projected.boost = boost
-        case let .setEQ(eq):
-            projected.eq = eq
-        case let .setEQBand(band, gain):
-            var eq = projected.eq ?? EQCurve()
-            eq.setGain(gain, at: band)
-            projected.eq = eq
-        case let .setRoute(route):
-            projected.route = route
-        }
-        return projected
+        return try ControlProjection.applying(
+            command.mutation,
+            to: committed,
+            target: command.target
+        )
     }
 
     private func executeControl(
@@ -2863,7 +2635,16 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
     ) async -> ControlResult {
         do {
             switch (command.target, command.mutation) {
-            case let (.app(identity), .adjustVolume), let (.app(identity), .setVolume):
+            case let (.app(identity), .adjustVolume):
+                guard let volume = projected.volume,
+                      let muted = projected.isMuted else {
+                    return .rejected(UserFacingFailure(title: "Unavailable", message: "Volume is unavailable."))
+                }
+                try await mutateAppSetting(identity, kind: .volumeAndMute) {
+                    $0.setVolume(volume)
+                    $0.isMuted = muted
+                }
+            case let (.app(identity), .setVolume):
                 guard let volume = projected.volume else {
                     return .rejected(UserFacingFailure(title: "Unavailable", message: "Volume is unavailable."))
                 }

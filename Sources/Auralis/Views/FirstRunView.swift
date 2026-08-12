@@ -2,7 +2,6 @@ import SwiftUI
 
 struct FirstRunView: View {
     @ObservedObject var store: AudioControlStore
-    @EnvironmentObject private var controls: ExternalControlsCoordinator
     @Environment(\.dismiss) private var dismiss
     @State private var isCommitting = false
     @State private var commitErrorMessage: String?

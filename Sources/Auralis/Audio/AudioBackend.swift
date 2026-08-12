@@ -49,9 +49,7 @@ protocol AudioBackendUpdatePublishing {
 }
 
 /// Backends that can read and control the system default output device's
-/// hardware volume and mute state. The store surfaces this as a top-level
-/// output volume section so the user can adjust the sound output without
-/// touching per-app mixers.
+/// hardware volume and mute state without touching per-app mixers.
 struct OutputControlCapabilities: Equatable, Sendable {
     var canReadVolume: Bool
     var canSetVolume: Bool

@@ -181,14 +181,14 @@ final class AudioControlStoreTests: XCTestCase {
         let initialBackend = MockAudioBackend(apps: [
             AudioAppSnapshot(identity: mockIdentity, displayName: "Mock App")
         ])
-        let replacementBackend = LockedValue(MockAudioBackend(apps: [
+        let replacementBackend = LockedTestValue(MockAudioBackend(apps: [
             AudioAppSnapshot(identity: realIdentity, displayName: "Real App")
         ]))
         let settingsStore = SettingsStore(settingsURL: uniqueSettingsURL())
         var settings = PersistedSettings()
         settings.customization.backendMode = .mock
         try settingsStore.save(settings)
-        let requestedModes = LockedValue<[BackendMode]>([])
+        let requestedModes = LockedTestValue<[BackendMode]>([])
         let store = AudioControlStore(
             settingsStore: settingsStore,
             backend: initialBackend,
@@ -433,7 +433,7 @@ final class AudioControlStoreTests: XCTestCase {
         let firstBackend = RestoreOrderingBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music")
         ])
-        let replacementBackend = LockedValue(RestoreOrderingBackend(apps: [
+        let replacementBackend = LockedTestValue(RestoreOrderingBackend(apps: [
             AudioAppSnapshot(identity: music, displayName: "Music")
         ]))
         let store = AudioControlStore(
@@ -825,7 +825,7 @@ final class AudioControlStoreTests: XCTestCase {
         try settingsStore.save(persisted)
         let backend = TapSynchronizingMockBackend(apps: [])
         backend.tearDownAllError = NSError(domain: "Teardown", code: 23)
-        let requestedModes = LockedValue<[BackendMode]>([])
+        let requestedModes = LockedTestValue<[BackendMode]>([])
         let store = AudioControlStore(
             settingsStore: settingsStore,
             backend: backend,
@@ -1384,19 +1384,6 @@ final class AudioControlStoreTests: XCTestCase {
             try await operation()
             XCTFail("Expected operation to throw", file: file, line: line)
         } catch {}
-    }
-}
-
-private final class LockedValue<Value>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var storage: Value
-
-    init(_ value: Value) { storage = value }
-
-    var value: Value { lock.withLock { storage } }
-
-    func withValue(_ body: (inout Value) -> Void) {
-        lock.withLock { body(&storage) }
     }
 }
 

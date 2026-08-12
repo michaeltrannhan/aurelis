@@ -38,7 +38,7 @@ final class AudioHealthReducerTests: XCTestCase {
         if case let .ready(message) = snapshot.operationState {
             XCTAssertEqual(message, "No active apps")
         } else {
-            XCTFail("expected ready compatibility projection for empty healthy mixer")
+            XCTFail("expected ready activity projection for empty healthy mixer")
         }
     }
 }
@@ -53,4 +53,3 @@ final class UserFacingFailureTests: XCTestCase {
         XCTAssertFalse(failure.message.contains("/Users/"))
     }
 }
-

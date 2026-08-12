@@ -1,4 +1,5 @@
 import Foundation
+import AuralisWidgetShared
 import XCTest
 @testable import Auralis
 
@@ -15,6 +16,17 @@ final class AppLifecycleCoordinatorTests: XCTestCase {
         XCTAssertFalse(AuralisRuntimeEnvironment.isRunningTests(in: [
             "XCODE_RUNNING_FOR_PREVIEWS": "1"
         ]))
+    }
+
+    func testTerminationReplyGateRepliesExactlyOnce() {
+        let gate = ApplicationTerminationReplyGate()
+        var replyCount = 0
+
+        gate.reply { replyCount += 1 }
+        gate.reply { replyCount += 1 }
+
+        XCTAssertTrue(gate.hasReplied)
+        XCTAssertEqual(replyCount, 1)
     }
 
     func testStartupIsSceneIndependentOrderedAndIdempotent() async throws {
@@ -144,7 +156,7 @@ final class AppLifecycleCoordinatorTests: XCTestCase {
 
 final class AppURLRouteTests: XCTestCase {
     func testAcceptsOnlyExactOpenRoute() throws {
-        XCTAssertEqual(AppURLRoute(try XCTUnwrap(URL(string: "auralis://open"))), .openMainWindow)
+        XCTAssertEqual(AppURLRoute(AuralisDeepLink.openMixer), .openMainWindow)
         XCTAssertEqual(AppURLRoute(try XCTUnwrap(URL(string: "AURALIS://OPEN"))), .openMainWindow)
     }
 

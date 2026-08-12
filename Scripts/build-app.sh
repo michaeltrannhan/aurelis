@@ -25,6 +25,21 @@ require_file() {
     [ -e "$1" ] || fail "required path not found: $1"
 }
 
+validate_output_app_path() {
+    output_path=$1
+    case "$output_path" in
+        /*.app) ;;
+        *) fail "output app must resolve to an absolute .app path: $output_path" ;;
+    esac
+    case "$output_path" in
+        */../*|*/..|*/./*|*/.)
+            fail "output app path must not contain unresolved dot components: $output_path"
+            ;;
+    esac
+    [ "$(/usr/bin/basename -- "$output_path")" != .app ] ||
+        fail "output app path must include a concrete bundle name"
+}
+
 signing_identity_records_matching() {
     selector=$1
     /usr/bin/security find-identity -v -p codesigning 2>/dev/null |
@@ -476,6 +491,7 @@ if [ -n "$OUTPUT_APP_OVERRIDE" ]; then
 else
     OUTPUT_APP=$REPOSITORY_ROOT/.build/$APP_PRODUCT_NAME.app
 fi
+validate_output_app_path "$OUTPUT_APP"
 STAGED_OUTPUT_APP=$OUTPUT_APP.auralis-staging
 LEGACY_UNSCOPED_OUTPUT_APP=$REPOSITORY_ROOT/.build/$APP_PRODUCT_NAME.app
 LEGACY_DEBUG_OUTPUT_APP=$REPOSITORY_ROOT/.build/debug/$APP_PRODUCT_NAME.app

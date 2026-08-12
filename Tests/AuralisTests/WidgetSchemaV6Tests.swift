@@ -5,16 +5,13 @@ import AuralisWidgetShared
 final class WidgetSchemaV6Tests: XCTestCase {
     func testConcurrentSequenceAllocationIsUniqueAndOrdered() {
         WidgetCommandSequence.resetForTests(startingAt: 1)
-        let lock = NSLock()
-        var values: [UInt64] = []
+        let values = LockedTestValue<[UInt64]>([])
         DispatchQueue.concurrentPerform(iterations: 100) { _ in
             let value = WidgetCommandSequence.next()
-            lock.lock()
-            values.append(value)
-            lock.unlock()
+            values.withValue { $0.append(value) }
         }
-        XCTAssertEqual(Set(values).count, 100)
-        XCTAssertEqual(values.sorted(), Array(1...100).map(UInt64.init))
+        XCTAssertEqual(Set(values.value).count, 100)
+        XCTAssertEqual(values.value.sorted(), Array(1...100).map(UInt64.init))
     }
 
     func testRelativeActionsRequireSchemaV6() throws {

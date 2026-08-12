@@ -15,9 +15,12 @@ final class ControlCommandCoordinator: ObservableObject {
     private var commandQueue: [(receiptID: UUID, command: ControlCommand)] = []
     private var previewTasks: [ControlTarget: Task<Void, Never>] = [:]
     private var previewInFlight: Set<ControlTarget> = []
-    private var latestPreviewCommand: [ControlTarget: ControlCommand] = [:]
+    private var latestPreview: [ControlTarget: (receiptID: UUID, command: ControlCommand)] = [:]
+    private var pendingReceiptIDs: Set<UUID> = []
     private var results: [UUID: ControlResult] = [:]
+    private var retainedResultOrder: [UUID] = []
     private var resultWaiters: [UUID: [CheckedContinuation<ControlResult, Never>]] = [:]
+    private let retainedResultLimit = 512
     private let previewMinIntervalNanoseconds: UInt64 = 33_333_333 // 30 Hz
     private let gestureIdleNanoseconds: UInt64 = 200_000_000
 
@@ -36,11 +39,22 @@ final class ControlCommandCoordinator: ObservableObject {
             )
         }
 
-        let committed = committedProjection(for: command.target, store: store)
-        let baseline = pendingProjection[command.target] ?? committed
+        var committed: ControlProjectedState?
         let projected: ControlProjectedState
         do {
-            projected = try Self.apply(command.mutation, to: baseline, target: command.target)
+            let current = try ControlProjection.committed(
+                for: command.target,
+                displayRows: store.displayRows,
+                settings: store.settings,
+                devices: store.devices,
+                deviceVolumeStates: store.deviceVolumeStates
+            )
+            committed = current
+            projected = try ControlProjection.applying(
+                command.mutation,
+                to: pendingProjection[command.target] ?? current,
+                target: command.target
+            )
         } catch {
             let failure = UserFacingFailure.from(error)
             let receipt = ControlReceipt.rejected(
@@ -63,6 +77,7 @@ final class ControlCommandCoordinator: ObservableObject {
             source: command.source,
             projected: projected
         )
+        pendingReceiptIDs.insert(receipt.id)
         lastReceipt = receipt
 
         switch command.source {
@@ -77,6 +92,7 @@ final class ControlCommandCoordinator: ObservableObject {
 
     func result(for receiptID: UUID) async -> ControlResult {
         if let existing = results[receiptID] { return existing }
+        guard pendingReceiptIDs.contains(receiptID) else { return .timedOut }
         return await withCheckedContinuation { continuation in
             resultWaiters[receiptID, default: []].append(continuation)
         }
@@ -85,15 +101,9 @@ final class ControlCommandCoordinator: ObservableObject {
     func flushContinuous(for target: ControlTarget) {
         previewTasks[target]?.cancel()
         previewTasks[target] = nil
-        guard let command = latestPreviewCommand[target] else { return }
-        latestPreviewCommand[target] = nil
-        let receiptID = UUID()
-        commandQueue.append((receiptID, command))
+        guard let pending = latestPreview.removeValue(forKey: target) else { return }
+        commandQueue.append(pending)
         kickWorker()
-    }
-
-    func projected(for target: ControlTarget) -> ControlProjectedState? {
-        pendingProjection[target]
     }
 
     private func isContinuous(_ mutation: ControlMutation) -> Bool {
@@ -106,7 +116,10 @@ final class ControlCommandCoordinator: ObservableObject {
     }
 
     private func enqueuePreview(_ command: ControlCommand, receiptID: UUID) {
-        latestPreviewCommand[command.target] = command
+        if let superseded = latestPreview[command.target] {
+            complete(receiptID: superseded.receiptID, result: .cancelled)
+        }
+        latestPreview[command.target] = (receiptID, command)
         previewTasks[command.target]?.cancel()
         previewTasks[command.target] = Task { [weak self] in
             guard let self else { return }
@@ -115,15 +128,18 @@ final class ControlCommandCoordinator: ObservableObject {
             await self.runPreviewIfNeeded(for: command.target)
             try? await Task.sleep(nanoseconds: self.gestureIdleNanoseconds)
             guard !Task.isCancelled else { return }
-            self.commandQueue.append((receiptID, command))
-            self.latestPreviewCommand[command.target] = nil
+            guard let pending = self.latestPreview[command.target],
+                  pending.receiptID == receiptID else { return }
+            self.latestPreview[command.target] = nil
+            self.previewTasks[command.target] = nil
+            self.commandQueue.append(pending)
             self.kickWorker()
         }
     }
 
     private func runPreviewIfNeeded(for target: ControlTarget) async {
         guard let store,
-              let command = latestPreviewCommand[target],
+              let command = latestPreview[target]?.command,
               !previewInFlight.contains(target) else { return }
         previewInFlight.insert(target)
         defer { previewInFlight.remove(target) }
@@ -137,100 +153,70 @@ final class ControlCommandCoordinator: ObservableObject {
             guard let self else { return }
             while let item = self.commandQueue.first {
                 self.commandQueue.removeFirst()
-                guard let store = self.store else { continue }
-                let result = await store.executeProjectedControl(item.command)
-                switch result {
-                case let .applied(actual):
-                    self.pendingProjection[item.command.target] = actual
-                    self.actionStates[item.command.target] = .applied(actual: actual)
-                case let .rejected(failure):
-                    self.pendingProjection[item.command.target] = nil
-                    self.actionStates[item.command.target] = .failed(
-                        previous: self.committedProjection(for: item.command.target, store: store),
-                        failure: failure
-                    )
-                case .timedOut, .cancelled:
-                    self.pendingProjection[item.command.target] = nil
-                    self.actionStates[item.command.target] = .idle
+                guard let store = self.store else {
+                    self.complete(receiptID: item.receiptID, result: .cancelled)
+                    continue
                 }
+                let result = await store.executeProjectedControl(item.command)
+                self.settle(item: item, result: result, store: store)
                 self.complete(receiptID: item.receiptID, result: result)
             }
             self.workerQueued = false
         }
     }
 
+    private func settle(
+        item: (receiptID: UUID, command: ControlCommand),
+        result: ControlResult,
+        store: AudioControlStore
+    ) {
+        let target = item.command.target
+        if hasNewerWork(for: target) {
+            if let projected = pendingProjection[target] {
+                actionStates[target] = .pending(projected: projected)
+            }
+            return
+        }
+
+        switch result {
+        case let .applied(actual):
+            pendingProjection[target] = nil
+            actionStates[target] = .applied(actual: actual)
+        case let .rejected(failure):
+            pendingProjection[target] = nil
+            actionStates[target] = .failed(
+                previous: try? ControlProjection.committed(
+                    for: target,
+                    displayRows: store.displayRows,
+                    settings: store.settings,
+                    devices: store.devices,
+                    deviceVolumeStates: store.deviceVolumeStates
+                ),
+                failure: failure
+            )
+        case .timedOut, .cancelled:
+            pendingProjection[target] = nil
+            actionStates[target] = .idle
+        }
+    }
+
+    private func hasNewerWork(for target: ControlTarget) -> Bool {
+        latestPreview[target] != nil
+            || commandQueue.contains { $0.command.target == target }
+    }
+
     private func complete(receiptID: UUID, result: ControlResult) {
+        pendingReceiptIDs.remove(receiptID)
+        if results[receiptID] == nil {
+            retainedResultOrder.append(receiptID)
+        }
         results[receiptID] = result
+        while retainedResultOrder.count > retainedResultLimit {
+            results[retainedResultOrder.removeFirst()] = nil
+        }
         let waiters = resultWaiters.removeValue(forKey: receiptID) ?? []
         for waiter in waiters {
             waiter.resume(returning: result)
         }
-    }
-
-    private func committedProjection(for target: ControlTarget, store: AudioControlStore) -> ControlProjectedState {
-        switch target {
-        case let .app(identity):
-            if let row = store.displayRows.first(where: { $0.identity == identity }) {
-                return ControlProjectedState(
-                    volume: row.settings.volume,
-                    isMuted: row.settings.isMuted,
-                    boost: row.settings.boost,
-                    eq: row.settings.eq,
-                    route: row.settings.route,
-                    displayName: row.displayName
-                )
-            }
-            return ControlProjectedState(displayName: identity.rawValue)
-        case let .outputDevice(deviceID):
-            let device = store.devices.first(where: { $0.id == deviceID })
-            let state = store.deviceVolumeStates[deviceID]
-            return ControlProjectedState(
-                volume: state?.volume,
-                isMuted: state?.isMuted,
-                eq: store.settings.deviceSettings[deviceID]?.eq
-                    ?? EQCurve(range: store.settings.customization.eqGainRange),
-                displayName: device?.name ?? deviceID
-            )
-        case .activeApps:
-            return ControlProjectedState(displayName: "Active apps")
-        }
-    }
-
-    static func apply(
-        _ mutation: ControlMutation,
-        to baseline: ControlProjectedState,
-        target: ControlTarget
-    ) throws -> ControlProjectedState {
-        var next = baseline
-        switch mutation {
-        case let .adjustVolume(delta):
-            next.volume = min(max((next.volume ?? 1) + delta, 0), 1)
-            if (next.volume ?? 0) > 0.001, next.isMuted == true, delta > 0 {
-                next.isMuted = false
-            }
-            if (next.volume ?? 0) <= 0.001 {
-                next.isMuted = true
-            }
-        case let .setVolume(volume):
-            next.volume = min(max(volume, 0), 1)
-        case .toggleMute:
-            next.isMuted = !(next.isMuted ?? false)
-        case let .setMuted(muted):
-            next.isMuted = muted
-        case let .setBoost(boost):
-            next.boost = boost
-        case let .setEQ(eq):
-            next.eq = eq
-        case let .setEQBand(band, gain):
-            var eq = next.eq ?? EQCurve()
-            eq.setGain(gain, at: band)
-            next.eq = eq
-        case let .setRoute(route):
-            guard case .app = target else {
-                throw UserFacingFailure(title: "Unsupported", message: "Routing applies to apps only.")
-            }
-            next.route = route
-        }
-        return next
     }
 }

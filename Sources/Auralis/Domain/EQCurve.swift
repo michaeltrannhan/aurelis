@@ -41,9 +41,16 @@ enum EQStage: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {
 struct EQCurve: Codable, Equatable, Hashable, Sendable {
     static let bandCount = 10
     static let frequencies = ["31", "63", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"]
+    static let adjustedGainThreshold = 0.05
 
     private(set) var gains: [Double]
     private(set) var range: EQGainRange
+
+    var adjustedBandCount: Int {
+        gains.count { abs($0) >= Self.adjustedGainThreshold }
+    }
+
+    var isFlat: Bool { adjustedBandCount == 0 }
 
     init(gains: [Double] = Array(repeating: 0, count: bandCount), range: EQGainRange = .db12) {
         self.range = range

@@ -23,12 +23,6 @@ struct CoreAudioRealtimeGainState: Equatable {
         self.outputEQs = outputEQs
     }
 
-    /// Compatibility spelling for characterization tests and call sites that
-    /// predate explicit Process/Output stage naming.
-    init(volume: Double, boost: BoostLevel, isMuted: Bool, eq: EQCurve) {
-        self.init(volume: volume, boost: boost, isMuted: isMuted, processEQ: eq)
-    }
-
     var targetGain: Float {
         guard !isMuted else { return 0 }
         let gain = volume * Float(boost.rawValue)
@@ -96,23 +90,5 @@ enum CoreAudioSoftLimiter {
         let overshoot = absolute - threshold
         let compressed = threshold + headroom * (overshoot / (overshoot + headroom))
         return sample >= 0 ? compressed : -compressed
-    }
-}
-
-enum CoreAudioRealtimeGainProcessor {
-    static func process(
-        input: UnsafePointer<Float>,
-        output: UnsafeMutablePointer<Float>,
-        sampleCount: Int,
-        targetGain: Float,
-        ramp: inout CoreAudioGainRamp
-    ) {
-        guard sampleCount > 0 else { return }
-        let targetGain = targetGain.isFinite ? max(targetGain, 0) : 1
-
-        for index in 0..<sampleCount {
-            let gain = ramp.next(targetGain: targetGain)
-            output[index] = CoreAudioSoftLimiter.apply(input[index] * gain)
-        }
     }
 }

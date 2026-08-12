@@ -2,7 +2,6 @@ import Foundation
 
 enum MixerPhase: Equatable, Sendable {
     case starting
-    case refreshing
     case ready
     case empty
     case permissionLimited
@@ -40,7 +39,7 @@ struct AudioHealthSnapshot: Equatable, Sendable {
     var phase: MixerPhase
     var message: String
     var issues: [AudioIssue]
-    /// Compatibility projection — never assigned directly by refresh paths.
+    /// Activity and command status projected separately from mixer health.
     var operationState: AudioOperationState
 
     static let starting = AudioHealthSnapshot(
@@ -217,8 +216,6 @@ enum AudioHealthReducer {
             switch phase {
             case .starting:
                 operationState = .idle
-            case .refreshing:
-                operationState = .refreshing
             case .ready, .empty:
                 operationState = .ready(message)
             case .permissionLimited, .degraded:

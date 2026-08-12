@@ -532,7 +532,7 @@ final class CoreAudioPCMRendererTests: XCTestCase {
                             volume: 0.75,
                             boost: .x1,
                             isMuted: false,
-                            eq: curve
+                            processEQ: curve
                         ))
                     } else {
                         renderer.render(
@@ -578,7 +578,7 @@ final class CoreAudioPCMRendererTests: XCTestCase {
                 volume: 1,
                 boost: .x1,
                 isMuted: false,
-                eq: curve
+                processEQ: curve
             )
         )
     }

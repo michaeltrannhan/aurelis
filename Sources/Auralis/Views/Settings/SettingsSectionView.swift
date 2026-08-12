@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Shared helpers so each settings tab reads consistently. `settingsCustomizationBinding`
-/// mirrors the pattern the old single-form SettingsView used.
 @MainActor
 func settingsCustomizationBinding<Value>(
     store: AudioControlStore,

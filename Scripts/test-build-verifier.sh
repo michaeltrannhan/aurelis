@@ -83,6 +83,16 @@ validate_app() {
 printf '==> Verifier self-test (%s, signing: %s)\n' "$CONFIGURATION" "$CODE_SIGNING_ALLOWED"
 validate_app "$BASE_APP" >/dev/null
 
+expect_failure unsafe-output-path env \
+    VALIDATE_ONLY=YES \
+    BUILT_APP_OVERRIDE="$BASE_APP" \
+    OUTPUT_APP_OVERRIDE=/ \
+    CONFIGURATION="$CONFIGURATION" \
+    RUN_TESTS=NO \
+    REQUIRE_APP_GROUP_SMOKE=NO \
+    CODE_SIGNING_ALLOWED="$CODE_SIGNING_ALLOWED" \
+    "$BUILD_SCRIPT"
+
 REPLACEMENT_APP=$FAULT_ROOT/replacement-output.app
 REPLACEMENT_SENTINEL=$REPLACEMENT_APP/Contents/stale-file-that-must-not-survive
 /bin/mkdir -p "$REPLACEMENT_APP/Contents"

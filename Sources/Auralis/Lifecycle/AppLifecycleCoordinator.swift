@@ -42,6 +42,17 @@ struct AppLifecycleStopReport: Equatable, Sendable {
     let audio: AudioShutdownReport
 }
 
+@MainActor
+final class ApplicationTerminationReplyGate {
+    private(set) var hasReplied = false
+
+    func reply(_ action: () -> Void) {
+        guard !hasReplied else { return }
+        hasReplied = true
+        action()
+    }
+}
+
 /// The one scene-independent owner for application startup and teardown.
 /// Individual services are attempted independently so one degraded facility
 /// cannot prevent discovery, observers, controls, or widget transport from
@@ -163,7 +174,7 @@ final class AppLifecycleCoordinator {
 
     private func performStop() async -> AppLifecycleStopReport {
         // Shutdown order: controls → widget watcher/drain → store intents/edits/
-        // persistence/engine/host lease → stopped.
+        // persistence/engine → stopped.
         controls.stop()
         await widgetBridge.stop()
         let audioReport = await store.shutdown()
@@ -224,10 +235,16 @@ final class AuralisApplicationDelegate: NSObject, NSApplicationDelegate {
         terminationReplyPending = true
         Task {
             InternalDiagnostics.record("lifecycle", "termination.begin")
-            // Exactly-once 2.5s reply deadline.
+            let replyGate = ApplicationTerminationReplyGate()
             let deadline = Task {
-                try? await Task.sleep(nanoseconds: 2_500_000_000)
-                sender.reply(toApplicationShouldTerminate: true)
+                do {
+                    try await Task.sleep(nanoseconds: 2_500_000_000)
+                } catch {
+                    return
+                }
+                replyGate.reply {
+                    sender.reply(toApplicationShouldTerminate: true)
+                }
             }
             let report = await lifecycle.stop()
             deadline.cancel()
@@ -244,13 +261,14 @@ final class AuralisApplicationDelegate: NSObject, NSApplicationDelegate {
                 InternalDiagnostics.error("lifecycle", summary)
             }
             InternalDiagnostics.flush()
-            sender.reply(toApplicationShouldTerminate: true)
+            replyGate.reply {
+                sender.reply(toApplicationShouldTerminate: true)
+            }
         }
         return .terminateLater
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        // Ordinary second launch activates the owner; lease handoff is used for permission relaunch.
         sender.activate(ignoringOtherApps: true)
         return true
     }

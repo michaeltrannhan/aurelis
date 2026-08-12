@@ -23,8 +23,7 @@ final class ExternalControlsCoordinator: ObservableObject {
     private weak var store: AudioControlStore?
     private var isStarted = false
 
-    /// Updated by the menu-extra view so the custom HUD does not cover an open
-    /// mixer. Phase 7 owns the exact popup visibility presentation behavior.
+    /// Updated by the menu-extra view so the custom HUD does not cover an open mixer.
     var isPopupVisible = false
 
     init(

@@ -39,8 +39,16 @@ struct AudioEditSessionKey: Hashable, Sendable {
 }
 
 actor AudioMutationGate {
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Void, Error>
+    }
+
     private var isLocked = false
-    private var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
+    private var waiters: [Waiter] = []
+
+    var pendingWaiterCount: Int { waiters.count }
+    var isIdle: Bool { !isLocked && waiters.isEmpty }
 
     func acquire() async throws {
         try Task.checkCancellation()
@@ -48,28 +56,44 @@ actor AudioMutationGate {
             isLocked = true
             return
         }
+
         let id = UUID()
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            waiters[id] = continuation
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                } else {
+                    waiters.append(Waiter(id: id, continuation: continuation))
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter(id) }
         }
-        try Task.checkCancellation()
+
+        if Task.isCancelled {
+            release()
+            throw CancellationError()
+        }
     }
 
     func release() {
-        if let id = waiters.keys.sorted(by: { $0.uuidString < $1.uuidString }).first {
-            let continuation = waiters.removeValue(forKey: id)!
-            continuation.resume()
-        } else {
+        if waiters.isEmpty {
             isLocked = false
+        } else {
+            waiters.removeFirst().continuation.resume()
         }
     }
 
     func cancelAll() {
         let pending = waiters
         waiters.removeAll()
-        isLocked = false
-        for (_, continuation) in pending {
-            continuation.resume(throwing: CancellationError())
+        for waiter in pending {
+            waiter.continuation.resume(throwing: CancellationError())
         }
+    }
+
+    private func cancelWaiter(_ id: UUID) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        waiters.remove(at: index).continuation.resume(throwing: CancellationError())
     }
 }

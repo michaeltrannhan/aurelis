@@ -83,21 +83,15 @@ actor AudioEngineActor {
         initialMode: BackendMode,
         backendFactory: @escaping BackendFactory
     ) {
-        var topologyContinuation: AsyncStream<Void>.Continuation!
-        var outputContinuation: AsyncStream<AudioOutputSnapshot>.Continuation!
-        var levelContinuation: AsyncStream<[AudioAppIdentity: Double]>.Continuation!
-        self.topologyEvents = AsyncStream(bufferingPolicy: .bufferingNewest(1)) {
-            topologyContinuation = $0
-        }
-        self.outputEvents = AsyncStream(bufferingPolicy: .bufferingNewest(1)) {
-            outputContinuation = $0
-        }
-        self.levelEvents = AsyncStream(bufferingPolicy: .bufferingNewest(1)) {
-            levelContinuation = $0
-        }
-        self.topologyContinuation = topologyContinuation
-        self.outputContinuation = outputContinuation
-        self.levelContinuation = levelContinuation
+        let topology = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let output = AsyncStream<AudioOutputSnapshot>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let levels = AsyncStream<[AudioAppIdentity: Double]>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        self.topologyEvents = topology.stream
+        self.outputEvents = output.stream
+        self.levelEvents = levels.stream
+        self.topologyContinuation = topology.continuation
+        self.outputContinuation = output.continuation
+        self.levelContinuation = levels.continuation
         self.backend = backend
         self.mode = initialMode
         self.backendFactory = backendFactory

@@ -96,13 +96,15 @@ struct MultiOutputRoutePickerModel: Equatable {
         case let .selectedDevice(deviceID):
             let name = namesByID[deviceID]
             let isMissing = name == nil
+            let accessibilityValue = name.map { "Single output, \($0)" }
+                ?? "Selected output is missing"
             return MultiOutputRouteSummary(
                 title: name ?? "Missing Device",
                 detail: name ?? "Missing Device",
                 selectedCount: 1,
                 missingCount: isMissing ? 1 : 0,
                 isMultiOutput: false,
-                accessibilityValue: isMissing ? "Selected output is missing" : "Single output, \(name!)"
+                accessibilityValue: accessibilityValue
             )
         case let .multiOutput(deviceIDs):
             let missingCount = deviceIDs.reduce(into: 0) { count, deviceID in

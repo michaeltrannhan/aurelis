@@ -33,7 +33,6 @@ struct MixerEmptyStateView: View {
     private var iconName: String {
         switch state {
         case .starting: "hourglass"
-        case .refreshing: "arrow.triangle.2.circlepath"
         case .readyEmpty: "speaker.slash"
         case .permissionLimited: "hand.raised.fill"
         case .degraded: "exclamationmark.triangle"

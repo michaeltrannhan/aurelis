@@ -16,13 +16,9 @@ final class CustomizationTests: XCTestCase {
     }
 
     func testPopupDensityWidthsStayCompactAndEQUsable() {
-        XCTAssertEqual(PopupDensity.compact.collapsedWidth, 300)
-        XCTAssertEqual(PopupDensity.comfortable.collapsedWidth, 320)
-        XCTAssertEqual(PopupDensity.spacious.collapsedWidth, 340)
         XCTAssertEqual(PopupDensity.compact.dimensions.width, 360)
         XCTAssertEqual(PopupDensity.comfortable.dimensions.width, 400)
         XCTAssertEqual(PopupDensity.spacious.dimensions.width, 440)
-        XCTAssertLessThan(PopupDensity.spacious.collapsedWidth, PopupDensity.compact.dimensions.width)
         XCTAssertGreaterThanOrEqual(PopupDensity.compact.dimensions.width, 360)
         XCTAssertLessThanOrEqual(PopupDensity.spacious.dimensions.width, 440)
     }
@@ -62,6 +58,32 @@ final class CustomizationTests: XCTestCase {
             .multiOutput(["usb", "hdmi"])
         )
         XCTAssertEqual(DeviceRoute.selectedDevice("  ").normalized, .followDefault)
+    }
+
+    func testDeviceRouteResolvesConnectedOutputsInRouteOrder() {
+        let devices = [
+            AudioDeviceSnapshot(id: "default", name: "Speakers", isDefault: true),
+            AudioDeviceSnapshot(id: "usb", name: "USB DAC"),
+            AudioDeviceSnapshot(id: "hdmi", name: "Display")
+        ]
+
+        XCTAssertEqual(DeviceRoute.followDefault.resolvedDevices(in: devices).map(\.id), ["default"])
+        XCTAssertEqual(DeviceRoute.selectedDevice("usb").resolvedDevices(in: devices).map(\.id), ["usb"])
+        XCTAssertEqual(
+            DeviceRoute.multiOutput(["hdmi", "missing", "usb"]).resolvedDevices(in: devices).map(\.id),
+            ["hdmi", "usb"]
+        )
+        XCTAssertTrue(DeviceRoute.multiOutput(["hdmi", "usb"]).routes(to: "usb", in: devices))
+        XCTAssertFalse(DeviceRoute.selectedDevice("usb").routes(to: "hdmi", in: devices))
+    }
+
+    func testDeviceRouteResolutionToleratesDuplicateDiscoveryRows() {
+        let devices = [
+            AudioDeviceSnapshot(id: "usb", name: "First"),
+            AudioDeviceSnapshot(id: "usb", name: "Duplicate")
+        ]
+
+        XCTAssertEqual(DeviceRoute.selectedDevice("usb").resolvedDevices(in: devices).map(\.name), ["First"])
     }
 
     func testSettingsTabsExposeExpectedSections() {

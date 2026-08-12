@@ -6,26 +6,7 @@ enum AppControlAction {
     case muteToggle
 }
 
-/// Pure command math plus a store-applying executor. Volume-up auto-unmutes;
-/// volume-down that reaches zero auto-mutes — applied as one atomic mutation.
 enum AppControlCommandExecutor {
-    static func nextSettings(settings: AppAudioSettings, action: AppControlAction, step: Double) -> AppAudioSettings {
-        var next = settings
-        switch action {
-        case .volumeUp:
-            next.setVolume(next.volume + step)
-            next.isMuted = false
-        case .volumeDown:
-            next.setVolume(next.volume - step)
-            if next.volume <= 0.001 {
-                next.isMuted = true
-            }
-        case .muteToggle:
-            next.isMuted.toggle()
-        }
-        return next
-    }
-
     static func mutation(for action: AppControlAction, step: Double) -> ControlMutation {
         switch action {
         case .volumeUp: .adjustVolume(step)

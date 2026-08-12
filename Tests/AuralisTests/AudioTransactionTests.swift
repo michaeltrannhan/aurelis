@@ -2,6 +2,109 @@ import Foundation
 import XCTest
 @testable import Auralis
 
+final class AudioMutationGateTests: XCTestCase {
+    func testWaitersAcquireInArrivalOrder() async throws {
+        let gate = AudioMutationGate()
+        let order = MutationOrderRecorder()
+        try await gate.acquire()
+
+        let first = Task {
+            try await gate.acquire()
+            await order.append(1)
+            await gate.release()
+        }
+        await waitForWaiterCount(1, on: gate)
+
+        let second = Task {
+            try await gate.acquire()
+            await order.append(2)
+            await gate.release()
+        }
+        await waitForWaiterCount(2, on: gate)
+
+        await gate.release()
+        try await first.value
+        try await second.value
+
+        let recordedOrder = await order.values
+        let gateIsIdle = await gate.isIdle
+        XCTAssertEqual(recordedOrder, [1, 2])
+        XCTAssertTrue(gateIsIdle)
+    }
+
+    func testCancelledWaiterDoesNotKeepGateLocked() async throws {
+        let gate = AudioMutationGate()
+        try await gate.acquire()
+
+        let waiter = Task { try await gate.acquire() }
+        await waitForWaiterCount(1, on: gate)
+        waiter.cancel()
+
+        do {
+            try await waiter.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        let pendingWaiterCount = await gate.pendingWaiterCount
+        XCTAssertEqual(pendingWaiterCount, 0)
+        await gate.release()
+        var gateIsIdle = await gate.isIdle
+        XCTAssertTrue(gateIsIdle)
+
+        try await gate.acquire()
+        await gate.release()
+        gateIsIdle = await gate.isIdle
+        XCTAssertTrue(gateIsIdle)
+    }
+
+    func testCancellingQueuedWaitersDoesNotReleaseCurrentOwner() async throws {
+        let gate = AudioMutationGate()
+        try await gate.acquire()
+
+        let waiter = Task { try await gate.acquire() }
+        await waitForWaiterCount(1, on: gate)
+        await gate.cancelAll()
+
+        do {
+            try await waiter.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        let nextOwner = Task { try await gate.acquire() }
+        await waitForWaiterCount(1, on: gate)
+        var gateIsIdle = await gate.isIdle
+        XCTAssertFalse(gateIsIdle)
+
+        await gate.release()
+        try await nextOwner.value
+        await gate.release()
+        gateIsIdle = await gate.isIdle
+        XCTAssertTrue(gateIsIdle)
+    }
+
+    private func waitForWaiterCount(_ count: Int, on gate: AudioMutationGate) async {
+        for _ in 0..<1_000 {
+            if await gate.pendingWaiterCount == count { return }
+            await Task.yield()
+        }
+        XCTFail("Timed out waiting for \(count) queued mutation(s)")
+    }
+}
+
+private actor MutationOrderRecorder {
+    private(set) var values: [Int] = []
+
+    func append(_ value: Int) {
+        values.append(value)
+    }
+}
+
 @MainActor
 final class AudioTransactionTests: XCTestCase {
     private let music = AudioAppIdentity(rawValue: "com.example.Music")

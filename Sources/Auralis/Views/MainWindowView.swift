@@ -152,10 +152,10 @@ struct MainWindowView: View {
             outputNames = store.devices.first(where: { $0.id == deviceID }).map { [$0.name] } ?? ["Output"]
             activeStage = .output
         case .app:
-            outputNames = resolvedOutputs(for: row?.settings.route ?? .followDefault).map(\.name)
+            outputNames = (row?.settings.route ?? .followDefault).resolvedDevices(in: store.devices).map(\.name)
             activeStage = .process
         case nil:
-            outputNames = resolvedOutputs(for: row?.settings.route ?? .followDefault).map(\.name)
+            outputNames = (row?.settings.route ?? .followDefault).resolvedDevices(in: store.devices).map(\.name)
             activeStage = nil
         }
 
@@ -445,18 +445,6 @@ struct MainWindowView: View {
         "\(filteredRows.count) of \(store.displayRows.count) apps"
     }
 
-    private func resolvedOutputs(for route: DeviceRoute) -> [AudioDeviceSnapshot] {
-        switch route.normalized {
-        case .followDefault:
-            return store.devices.filter(\.isDefault)
-        case let .selectedDevice(deviceID):
-            return store.devices.filter { $0.id == deviceID }
-        case let .multiOutput(deviceIDs):
-            let byID = Dictionary(uniqueKeysWithValues: store.devices.map { ($0.id, $0) })
-            return deviceIDs.compactMap { byID[$0] }
-        }
-    }
-
     private func select(_ selection: InspectorSelection, usesSheet: Bool) {
         endSelectedContinuousEdits()
         withAnimation(.easeInOut(duration: 0.16)) {
@@ -615,7 +603,7 @@ private struct OutputChannelStrip: View {
     }
 
     private var outputEQLabel: String {
-        let count = model.visibleEQ.gains.filter { abs($0) >= 0.05 }.count
+        let count = model.visibleEQ.adjustedBandCount
         return count == 0 ? "Output EQ · Flat" : "Output EQ · \(count) bands"
     }
 }
@@ -649,7 +637,7 @@ private struct AppSignalInspector: View {
     @State private var showsRoutePicker = false
 
     private var outputs: [AudioDeviceSnapshot] {
-        resolvedRouteDevices(route: row.settings.route, devices: store.devices)
+        row.settings.route.resolvedDevices(in: store.devices)
     }
 
     var body: some View {
@@ -727,8 +715,7 @@ private struct AppSignalInspector: View {
     }
 
     private func outputEQSummary(_ deviceID: String) -> String {
-        let gains = store.settings.deviceSettings[deviceID]?.eq.gains ?? []
-        let count = gains.filter { abs($0) >= 0.05 }.count
+        let count = store.settings.deviceSettings[deviceID]?.eq.adjustedBandCount ?? 0
         return count == 0 ? "Output EQ flat" : "Output EQ · \(count) bands"
     }
 }
@@ -740,7 +727,7 @@ private struct OutputSignalInspector: View {
     let onTuneApp: (AudioAppIdentity) -> Void
 
     private var routedApps: [DisplayableAppRow] {
-        store.displayRows.filter { route($0.settings.route, contains: device.id, devices: store.devices) }
+        store.displayRows.filter { $0.settings.route.routes(to: device.id, in: store.devices) }
     }
 
     var body: some View {
@@ -866,27 +853,4 @@ private struct SaveMixPresetButton: View {
     private var suggestedName: String {
         "Mix \(store.settings.globalProfilesForDisplay.count + 1)"
     }
-}
-
-private func resolvedRouteDevices(
-    route: DeviceRoute,
-    devices: [AudioDeviceSnapshot]
-) -> [AudioDeviceSnapshot] {
-    switch route.normalized {
-    case .followDefault:
-        return devices.filter(\.isDefault)
-    case let .selectedDevice(deviceID):
-        return devices.filter { $0.id == deviceID }
-    case let .multiOutput(deviceIDs):
-        let byID = Dictionary(uniqueKeysWithValues: devices.map { ($0.id, $0) })
-        return deviceIDs.compactMap { byID[$0] }
-    }
-}
-
-private func route(
-    _ route: DeviceRoute,
-    contains deviceID: String,
-    devices: [AudioDeviceSnapshot]
-) -> Bool {
-    resolvedRouteDevices(route: route, devices: devices).contains { $0.id == deviceID }
 }

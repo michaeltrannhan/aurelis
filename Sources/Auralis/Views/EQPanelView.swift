@@ -39,9 +39,7 @@ struct EQBandEditor: View {
 
     private var accent: Color { AuralisColor.stageAccent(stage) }
     private var range: Double { curve.range.rawValue }
-    private var activeBandCount: Int {
-        curve.gains.filter { abs($0) >= 0.05 }.count
-    }
+    private var activeBandCount: Int { curve.adjustedBandCount }
 
     var body: some View {
         VStack(alignment: .leading, spacing: style == .compact ? 10 : 14) {
@@ -473,6 +471,3 @@ extension EQBandEditor {
         )
     }
 }
-
-/// Compatibility alias for older embedding sites.
-typealias EQPanelView = EQBandEditor

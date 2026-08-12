@@ -357,12 +357,6 @@ final class CoreAudioProcessTapManager: CoreAudioTapManaging, CoreAudioRouteCont
         }
     }
 
-    /// Compatibility entry point used by shutdown. Failed resources deliberately
-    /// remain in their identity state for the next retry/recovery pass.
-    func stopAll() {
-        try? tearDownAll()
-    }
-
     func gainState(for identity: AudioAppIdentity) -> CoreAudioRealtimeGainState? {
         onLifecycleQueue { statesByIdentity[identity]?.gainState }
     }

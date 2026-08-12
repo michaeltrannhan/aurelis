@@ -57,7 +57,7 @@ struct AuralisMixerWidgetView: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                Link(destination: URL(string: "auralis://open")!) {
+                Link(destination: AuralisDeepLink.openMixer) {
                     Image(systemName: "arrow.up.right")
                         .font(.caption.weight(.semibold))
                 }
@@ -294,7 +294,7 @@ struct AuralisMixerWidgetView: View {
             }
             HStack(spacing: 5) {
                 if quickProfiles.isEmpty {
-                    Link(destination: URL(string: "auralis://open")!) {
+                    Link(destination: AuralisDeepLink.openMixer) {
                         Label("Create presets in Auralis", systemImage: "plus")
                             .font(.caption2.weight(.semibold))
                     }
@@ -424,7 +424,7 @@ struct AuralisMixerWidgetView: View {
             .disabled(!controlsEnabled || !presentation.hasActiveApps)
             .buttonStyle(.plain)
 
-            Link(destination: URL(string: "auralis://open")!) {
+            Link(destination: AuralisDeepLink.openMixer) {
                 largeActionLabel("Open", systemImage: "arrow.up.right")
             }
             .buttonStyle(.plain)

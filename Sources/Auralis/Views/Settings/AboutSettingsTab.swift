@@ -21,7 +21,7 @@ struct AboutSettingsTab: View {
             }
 
             Section("Reference") {
-                Link("FineTune (parity reference)", destination: URL(string: "https://github.com/ronitsingh10/FineTune")!)
+                Link("FineTune (parity reference)", destination: AuralisURL.fineTuneRepository)
             }
         }
         .formStyle(.grouped)

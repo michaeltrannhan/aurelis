@@ -81,4 +81,14 @@ final class EQCurveTests: XCTestCase {
 
         XCTAssertEqual(curve.gains, Array(repeating: 0, count: EQCurve.bandCount))
     }
+
+    func testFlatSummaryIgnoresSubThresholdNoise() {
+        let flat = EQCurve(gains: [0.049, -0.049])
+        let adjusted = EQCurve(gains: [0.05, -0.2, 0.049])
+
+        XCTAssertTrue(flat.isFlat)
+        XCTAssertEqual(flat.adjustedBandCount, 0)
+        XCTAssertFalse(adjusted.isFlat)
+        XCTAssertEqual(adjusted.adjustedBandCount, 2)
+    }
 }

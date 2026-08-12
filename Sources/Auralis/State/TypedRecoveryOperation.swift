@@ -17,7 +17,7 @@ enum TypedRecoveryOperation: Equatable, Sendable {
 }
 
 extension AudioRecoveryAction {
-    /// Bridge from legacy recovery cases to typed operations.
+    /// Maps UI-facing recovery actions to executable operations.
     var typed: TypedRecoveryOperation {
         switch self {
         case .retry: .refreshAudio

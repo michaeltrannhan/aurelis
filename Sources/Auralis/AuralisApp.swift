@@ -76,7 +76,7 @@ struct AuralisApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            SettingsView(store: store)
+            SettingsRootView(store: store)
                 .environmentObject(controls)
                 .onChange(of: store.settings.customization) { _, _ in
                     Task { await lifecycle.applySettings() }

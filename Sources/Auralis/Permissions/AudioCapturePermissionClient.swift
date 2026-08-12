@@ -55,7 +55,7 @@ struct WorkspaceApplicationRelauncher: ApplicationRelaunching {
 
 @MainActor
 struct SystemAudioCapturePermissionClient: AudioCapturePermissionClient {
-    static let privacySettingsURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!
+    static let privacySettingsURL = AuralisURL.screenCapturePrivacySettings
 
     var infoDictionary: [String: Any] = Bundle.main.infoDictionary ?? [:]
     var workspace: NSWorkspace = .shared

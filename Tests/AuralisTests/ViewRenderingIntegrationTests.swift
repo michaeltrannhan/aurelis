@@ -20,7 +20,11 @@ final class ViewRenderingIntegrationTests: XCTestCase {
         }
         let backend = MockAudioBackend(
             apps: apps,
-            devices: [AudioDeviceSnapshot(id: "main", name: "Main Output", isDefault: true)]
+            devices: [
+                AudioDeviceSnapshot(id: "main", name: "Main Output", isDefault: true),
+                AudioDeviceSnapshot(id: "usb", name: "USB DAC"),
+                AudioDeviceSnapshot(id: "display", name: "Studio Display"),
+            ]
         )
         let store = AudioControlStore(
             settingsStore: SettingsStore(settingsURL: settingsURL),
@@ -139,9 +143,17 @@ final class ViewRenderingIntegrationTests: XCTestCase {
                 AudioDeviceSnapshot(id: "built-in", name: "MacBook Speakers", isDefault: true),
                 AudioDeviceSnapshot(id: "usb", name: "USB DAC"),
                 AudioDeviceSnapshot(id: "display", name: "Studio Display"),
+                AudioDeviceSnapshot(id: "teams", name: "Microsoft Teams Audio"),
+                AudioDeviceSnapshot(id: "stream", name: "Streaming Speakers"),
             ]
         )
-        backend.perDeviceVolume = ["built-in": 0.72, "usb": 0.64, "display": 0.45]
+        backend.perDeviceVolume = [
+            "built-in": 0.72,
+            "usb": 0.64,
+            "display": 0.45,
+            "teams": 0.88,
+            "stream": 0.58,
+        ]
         backend.perDeviceMuted = ["display": true]
         let store = AudioControlStore(
             settingsStore: SettingsStore(settingsURL: settingsURL),

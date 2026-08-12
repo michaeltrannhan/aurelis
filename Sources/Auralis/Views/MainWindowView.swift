@@ -11,6 +11,7 @@ struct MainWindowView: View {
     @State private var channelFilter: ChannelFilter = .playing
     @State private var pulseToken: UUID?
     @State private var showsInspectorSheet = false
+    @State private var outputDeckScrollID: String?
 
     private enum InspectorSelection: Hashable {
         case app(AudioAppIdentity)
@@ -36,6 +37,7 @@ struct MainWindowView: View {
     var body: some View {
         GeometryReader { geometry in
             let usesSheet = geometry.size.width < AuralisSpacing.inspectorBreakpoint
+            let inspectorWidth = AuralisSpacing.inspectorWidth(for: geometry.size.width)
 
             VStack(spacing: 0) {
                 header
@@ -50,7 +52,7 @@ struct MainWindowView: View {
                     .padding(.bottom, 10)
 
                 Divider().opacity(0.45)
-                workspace(usesSheet: usesSheet)
+                workspace(usesSheet: usesSheet, inspectorWidth: inspectorWidth)
             }
             .frame(minWidth: 780, minHeight: 560)
             .background(AuralisColor.canvas)
@@ -178,45 +180,163 @@ struct MainWindowView: View {
     }
 
     private func outputDeck(usesSheet: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("OUTPUTS")
-                    .font(AuralisTypography.metric(10))
-                    .foregroundStyle(.secondary)
-                Text("Volume and Output EQ belong to each physical device")
-                    .font(AuralisTypography.content(.caption2))
-                    .foregroundStyle(.tertiary)
-                Spacer()
-            }
+        let outputIDs = store.channels.outputOrder.filter {
+            store.channels.outputModel(for: $0) != nil
+        }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 10) {
-                    ForEach(store.channels.outputOrder, id: \.self) { deviceID in
-                        if let model = store.channels.outputModel(for: deviceID) {
-                            OutputChannelStrip(
-                                store: store,
-                                model: model,
-                                isSelected: inspectorSelection == .output(deviceID),
-                                onTune: { select(.output(deviceID), usesSheet: usesSheet) }
-                            )
-                        }
+        return GeometryReader { geometry in
+            let paging = OutputDeckPagingModel(
+                itemCount: outputIDs.count,
+                viewportWidth: geometry.size.width
+            )
+            let leadingIndex = paging.clampedLeadingIndex(
+                outputDeckScrollID.flatMap { outputIDs.firstIndex(of: $0) } ?? 0
+            )
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text("OUTPUTS")
+                        .font(AuralisTypography.metric(10))
+                        .foregroundStyle(.secondary)
+                    Text("Volume and Output EQ belong to each physical device")
+                        .font(AuralisTypography.content(.caption2))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .layoutPriority(-1)
+                    Spacer(minLength: 8)
+
+                    if paging.isOverflowing {
+                        outputDeckTransport(
+                            paging: paging,
+                            outputIDs: outputIDs,
+                            leadingIndex: leadingIndex
+                        )
+                        .transition(.opacity)
                     }
                 }
-                .padding(.vertical, 1)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: OutputDeckPagingModel.cardSpacing) {
+                        ForEach(outputIDs, id: \.self) { deviceID in
+                            if let model = store.channels.outputModel(for: deviceID) {
+                                OutputChannelStrip(
+                                    store: store,
+                                    model: model,
+                                    isSelected: inspectorSelection == .output(deviceID),
+                                    onTune: { select(.output(deviceID), usesSheet: usesSheet) }
+                                )
+                                .id(deviceID)
+                            }
+                        }
+                    }
+                    .scrollTargetLayout()
+                    .padding(.vertical, 1)
+                }
+                .scrollTargetBehavior(.viewAligned)
+                .scrollPosition(id: $outputDeckScrollID, anchor: .leading)
+                .accessibilityLabel("Output device channel strips")
             }
-            .frame(height: 132)
-            .accessibilityLabel("Output device channel strips")
+            .onAppear {
+                synchronizeOutputDeckPosition(outputIDs: outputIDs, paging: paging)
+            }
+            .onChange(of: outputIDs) { _, _ in
+                synchronizeOutputDeckPosition(outputIDs: outputIDs, paging: paging)
+            }
+            .onChange(of: paging.maximumLeadingIndex) { _, _ in
+                synchronizeOutputDeckPosition(outputIDs: outputIDs, paging: paging)
+            }
+        }
+        .frame(height: 166)
+    }
+
+    private func outputDeckTransport(
+        paging: OutputDeckPagingModel,
+        outputIDs: [String],
+        leadingIndex: Int
+    ) -> some View {
+        HStack(spacing: 3) {
+            outputDeckPageButton(
+                "Previous output cards",
+                systemImage: "chevron.left",
+                disabled: leadingIndex == 0
+            ) {
+                scrollOutputDeck(
+                    to: paging.previousIndex(from: leadingIndex),
+                    outputIDs: outputIDs
+                )
+            }
+
+            Text(paging.visibleRangeLabel(from: leadingIndex))
+                .font(AuralisTypography.metric(8))
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 46)
+
+            outputDeckPageButton(
+                "Next output cards",
+                systemImage: "chevron.right",
+                disabled: leadingIndex == paging.maximumLeadingIndex
+            ) {
+                scrollOutputDeck(
+                    to: paging.nextIndex(from: leadingIndex),
+                    outputIDs: outputIDs
+                )
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Output card navigation")
+    }
+
+    private func outputDeckPageButton(
+        _ label: String,
+        systemImage: String,
+        disabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 9, weight: .bold))
+                .frame(
+                    width: AuralisSpacing.controlMinHit,
+                    height: AuralisSpacing.controlMinHit
+                )
+                .background(AuralisColor.mutedPanel, in: RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .help(label)
+        .accessibilityLabel(label)
+    }
+
+    private func scrollOutputDeck(to index: Int, outputIDs: [String]) {
+        guard outputIDs.indices.contains(index) else { return }
+        withAnimation(.easeInOut(duration: 0.16)) {
+            outputDeckScrollID = outputIDs[index]
         }
     }
 
-    private func workspace(usesSheet: Bool) -> some View {
+    private func synchronizeOutputDeckPosition(
+        outputIDs: [String],
+        paging: OutputDeckPagingModel
+    ) {
+        guard !outputIDs.isEmpty else {
+            outputDeckScrollID = nil
+            return
+        }
+        let requestedIndex = outputDeckScrollID.flatMap { outputIDs.firstIndex(of: $0) } ?? 0
+        let resolvedID = outputIDs[paging.clampedLeadingIndex(requestedIndex)]
+        if outputDeckScrollID != resolvedID {
+            outputDeckScrollID = resolvedID
+        }
+    }
+
+    private func workspace(usesSheet: Bool, inspectorWidth: CGFloat) -> some View {
         HStack(spacing: 0) {
             channelList(usesSheet: usesSheet)
 
             if !usesSheet {
                 Divider().opacity(0.5)
                 inspector
-                    .frame(width: 400)
+                    .frame(width: inspectorWidth)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -479,7 +599,7 @@ private struct OutputChannelStrip: View {
             .accessibilityLabel("Tune Output EQ for \(model.name), \(outputEQLabel)")
         }
         .padding(11)
-        .frame(width: 232)
+        .frame(width: OutputDeckPagingModel.cardWidth)
         .background(AuralisColor.panel, in: RoundedRectangle(cornerRadius: AuralisSpacing.panelRadius))
         .overlay {
             RoundedRectangle(cornerRadius: AuralisSpacing.panelRadius)

@@ -71,8 +71,19 @@ enum AuralisTypography {
 enum AuralisSpacing {
     static let controlMinHit: CGFloat = 28
     static let comfortableControlHit: CGFloat = 32
-    static let inspectorBreakpoint: CGFloat = 960
+    static let inspectorBreakpoint: CGFloat = 1_080
+    static let inspectorMinWidth: CGFloat = 500
+    static let inspectorMaxWidth: CGFloat = 620
+    static let inspectorWidthFraction: CGFloat = 0.44
     static let panelRadius: CGFloat = 12
+
+    static func inspectorWidth(for windowWidth: CGFloat) -> CGFloat {
+        guard windowWidth.isFinite else { return inspectorMinWidth }
+        return min(
+            max(windowWidth * inspectorWidthFraction, inspectorMinWidth),
+            inspectorMaxWidth
+        )
+    }
 }
 
 enum MixerEmptyState: Equatable {

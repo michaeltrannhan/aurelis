@@ -16,6 +16,7 @@ struct MenuBarRootView: View {
     @State private var showsFirstRun = false
     @State private var availableScreenHeight: CGFloat = 700
     @State private var nav = PopupKeyboardNavModel()
+    @State private var popupOutputID: String?
     @FocusState private var popupFocused: Bool
 
     private enum PopupDestination: Hashable {
@@ -64,6 +65,14 @@ struct MenuBarRootView: View {
         }
     }
 
+    private var popupOutputPager: OutputDevicePagerModel {
+        OutputDevicePagerModel(
+            deviceIDs: store.channels.outputOrder,
+            defaultDeviceID: store.currentOutput?.id,
+            selectedDeviceID: popupOutputID
+        )
+    }
+
     private var popupHeight: Double {
         let maximum = PopupContentLayoutModel.popupMaxHeight(
             availableScreenHeight: availableScreenHeight
@@ -79,7 +88,7 @@ struct MenuBarRootView: View {
             issueCount: visibleIssues.count,
             includesExpandedEQ: false,
             availableScreenHeight: availableScreenHeight,
-            deviceCount: store.currentOutput == nil ? 0 : 1
+            deviceCount: popupOutputPager.deviceIDs.isEmpty ? 0 : 1
         )
         return min(maximum, max(430, content + 190))
     }
@@ -183,17 +192,7 @@ struct MenuBarRootView: View {
         VStack(alignment: .leading, spacing: 8) {
             rootHeader
 
-            if let currentOutput = store.currentOutput,
-               let model = store.channels.outputModel(for: currentOutput.id) {
-                PopupOutputMaster(
-                    store: store,
-                    model: model,
-                    contextLabel: "CURRENT OUTPUT",
-                    onTune: { openOutputEQ(currentOutput.id) }
-                )
-            } else {
-                noOutputCard
-            }
+            popupOutputDeck
 
             VStack(spacing: 6) {
                 TextField("Search apps", text: $searchText)
@@ -212,6 +211,49 @@ struct MenuBarRootView: View {
 
             appList
         }
+    }
+
+    @ViewBuilder
+    private var popupOutputDeck: some View {
+        let pager = popupOutputPager
+        if let outputID = pager.selectedDeviceID,
+           let model = store.channels.outputModel(for: outputID) {
+            PopupOutputMaster(
+                store: store,
+                model: model,
+                contextLabel: model.isDefault ? "CURRENT OUTPUT" : "PHYSICAL OUTPUT",
+                onTune: { openOutputEQ(outputID) },
+                paging: popupOutputPaging(for: pager)
+            )
+        } else {
+            noOutputCard
+        }
+    }
+
+    private func popupOutputPaging(
+        for pager: OutputDevicePagerModel
+    ) -> PopupOutputPaging? {
+        guard pager.count > 1 else { return nil }
+        let previousName = pager.previousDeviceID.flatMap(outputName)
+        let nextName = pager.nextDeviceID.flatMap(outputName)
+        return PopupOutputPaging(
+            position: pager.position,
+            count: pager.count,
+            previousName: previousName,
+            nextName: nextName,
+            onPrevious: {
+                guard let previousID = pager.previousDeviceID else { return }
+                selectPopupOutput(previousID)
+            },
+            onNext: {
+                guard let nextID = pager.nextDeviceID else { return }
+                selectPopupOutput(nextID)
+            }
+        )
+    }
+
+    private func outputName(for deviceID: String) -> String? {
+        store.devices.first(where: { $0.id == deviceID })?.name
     }
 
     private var appList: some View {
@@ -624,6 +666,10 @@ struct MenuBarRootView: View {
     }
 
     private func validateSelection() {
+        if let popupOutputID,
+           !store.channels.outputOrder.contains(popupOutputID) {
+            self.popupOutputID = nil
+        }
         switch destination {
         case let .process(identity) where !store.displayRows.contains(where: { $0.identity == identity }):
             closeInspector()
@@ -650,8 +696,16 @@ struct MenuBarRootView: View {
 
     private func openOutputEQ(_ deviceID: String) {
         endInspectorEdits()
+        popupOutputID = deviceID
         withAnimation(.easeInOut(duration: 0.16)) {
             destination = .output(deviceID)
+        }
+    }
+
+    private func selectPopupOutput(_ deviceID: String) {
+        guard store.channels.outputOrder.contains(deviceID) else { return }
+        withAnimation(.easeInOut(duration: 0.14)) {
+            popupOutputID = deviceID
         }
     }
 
@@ -689,11 +743,21 @@ struct MenuBarRootView: View {
     }
 }
 
+private struct PopupOutputPaging {
+    let position: Int
+    let count: Int
+    let previousName: String?
+    let nextName: String?
+    let onPrevious: () -> Void
+    let onNext: () -> Void
+}
+
 private struct PopupOutputMaster: View {
     @ObservedObject var store: AudioControlStore
     @ObservedObject var model: OutputChannelModel
     let contextLabel: String
     let onTune: (() -> Void)?
+    var paging: PopupOutputPaging? = nil
 
     private var target: ControlTarget { .outputDevice(model.id) }
     private var presentation: OutputControlPresentation {
@@ -713,8 +777,36 @@ private struct PopupOutputMaster: View {
                 }
                 Spacer(minLength: 3)
                 if !model.isDefault {
-                    Button("Make Default") { store.setDefaultOutputDeviceIntent(model.id) }
-                        .controlSize(.mini)
+                    Button {
+                        store.setDefaultOutputDeviceIntent(model.id)
+                    } label: {
+                        Image(systemName: "circle")
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .controlSize(.mini)
+                    .help("Make \(model.name) the default output")
+                    .accessibilityLabel("Make \(model.name) the default output")
+                }
+                if let paging {
+                    HStack(spacing: 2) {
+                        popupOutputPageButton(
+                            systemImage: "chevron.left",
+                            outputName: paging.previousName,
+                            action: paging.onPrevious
+                        )
+                        Text("\(paging.position)/\(paging.count)")
+                            .font(AuralisTypography.metric(8))
+                            .foregroundStyle(.secondary)
+                            .frame(minWidth: 24)
+                        popupOutputPageButton(
+                            systemImage: "chevron.right",
+                            outputName: paging.nextName,
+                            action: paging.onNext
+                        )
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("Physical output navigation")
                 }
                 if let onTune {
                     Button(action: onTune) {
@@ -777,6 +869,24 @@ private struct PopupOutputMaster: View {
         .overlay { RoundedRectangle(cornerRadius: 10).stroke(AuralisColor.hairline) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(model.name) output controls")
+    }
+
+    private func popupOutputPageButton(
+        systemImage: String,
+        outputName: String?,
+        action: @escaping () -> Void
+    ) -> some View {
+        let direction = systemImage == "chevron.left" ? "Previous" : "Next"
+        return Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 8, weight: .bold))
+                .frame(width: 22, height: 24)
+                .background(AuralisColor.mutedPanel, in: RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .disabled(outputName == nil)
+        .help(outputName.map { "\(direction) output: \($0)" } ?? "No \(direction.lowercased()) output")
+        .accessibilityLabel(outputName.map { "\(direction) output, \($0)" } ?? "No \(direction.lowercased()) output")
     }
 }
 

@@ -70,16 +70,16 @@ struct AppRowView: View {
     }
 
     private var desktopBody: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             AudioLevelMeter(levels: levels, identity: row.identity, isMuted: row.settings.isMuted)
-                .frame(width: 50, height: 32)
-            appIcon.frame(width: 34, height: 34)
+                .frame(width: 32, height: 24)
+            appIcon.frame(width: 32, height: 32)
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.displayName).font(.body.weight(.medium)).lineLimit(1)
                 Text(routeDetailLabel)
                     .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
             }
-            .frame(minWidth: 150, maxWidth: .infinity, alignment: .leading)
+            .frame(minWidth: 90, maxWidth: .infinity, alignment: .leading)
 
             Button { onMute(!row.settings.isMuted) } label: {
                 Image(systemName: row.settings.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
@@ -90,7 +90,8 @@ struct AppRowView: View {
             .buttonStyle(.plain).help(row.settings.isMuted ? "Unmute" : "Mute")
 
             Slider(value: Binding(get: { row.settings.volume }, set: { onVolume($0) }), in: 0...1, onEditingChanged: onVolumeEditingChanged)
-                .frame(width: 190)
+                .controlSize(.small)
+                .frame(minWidth: 90, idealWidth: 120, maxWidth: 150)
                 .scrollWheelSteps(onEditingChanged: onVolumeEditingChanged) { logicalSteps in
                     onVolume(ScrollWheelStepModel.nextValue(
                         current: row.settings.volume,
@@ -100,7 +101,7 @@ struct AppRowView: View {
                 }
             Text("\(Int((row.settings.volume * 100).rounded()))%")
                 .font(.callout.monospacedDigit().weight(.medium))
-                .foregroundStyle(.secondary).frame(width: 46, alignment: .trailing)
+                .foregroundStyle(.secondary).frame(width: 40, alignment: .trailing)
 
             boostMenu(compact: false)
 
@@ -113,7 +114,7 @@ struct AppRowView: View {
             }
             .buttonStyle(.plain).help(isSelected ? "Close Process EQ" : "Open Process EQ")
         }
-        .padding(.horizontal, 12).padding(.vertical, 7)
+        .padding(.horizontal, 10).padding(.vertical, 7)
         .frame(minHeight: rowHeight)
         .background(
             RoundedRectangle(cornerRadius: 8)

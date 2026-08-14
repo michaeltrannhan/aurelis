@@ -6,17 +6,9 @@ set -eu
 # where chronod remembers a disposable Xcode DerivedData bundle after it has
 # been removed by the build.
 
-fail() {
-    printf 'error: %s\n' "$*" >&2
-    exit 1
-}
-
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
-APP_PRODUCT_NAME=${APP_PRODUCT_NAME:-Auralis}
-WIDGET_NAME=${WIDGET_NAME:-AuralisWidget}
-APP_BUNDLE_ID=${APP_BUNDLE_ID:-com.michaeltrannhan.Auralis}
-WIDGET_BUNDLE_ID=${WIDGET_BUNDLE_ID:-com.michaeltrannhan.Auralis.Widget}
+# shellcheck source=lib.sh
+. "$SCRIPT_DIR/lib.sh"
 DEBUG_APPLICATIONS_DIR=${DEBUG_APPLICATIONS_DIR:-/Applications}
 APP_PATH=${APP_PATH:-$DEBUG_APPLICATIONS_DIR/$APP_PRODUCT_NAME-Debug.app}
 RELAUNCH_APP=${RELAUNCH_APP:-YES}

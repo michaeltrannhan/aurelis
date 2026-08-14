@@ -15,7 +15,8 @@ let package = Package(
         .executableTarget(name: "Auralis", dependencies: ["AuralisWidgetShared"]),
         .testTarget(
             name: "AuralisTests",
-            dependencies: ["Auralis", "AuralisWidgetShared"]
+            dependencies: ["Auralis", "AuralisWidgetShared"],
+            exclude: ["Fixtures"]
         )
     ]
 )

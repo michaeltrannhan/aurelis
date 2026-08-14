@@ -14,35 +14,30 @@ Accessibility, then add the widget from the gallery.
 
 ## Install
 
-Prerequisites: Xcode 16.4 or newer, one valid Apple Development code-signing
-identity in the login keychain, and [XcodeGen 2.45.4](https://github.com/yonaskolb/XcodeGen/releases/tag/2.45.4):
-
 ```sh
-brew install xcodegen
-xcodegen --version   # expect 2.45.4 for CI parity
+./install.sh
 ```
 
-One command builds the signed Release app, installs it, registers the desktop widget, and launches Auralis:
+Same command: `Scripts/install-app.sh`. Tries a GitHub release first
+(`Scripts/install-prebuilt.sh`, assets in [packaging/README.md](packaging/README.md));
+if none is published, builds from source. `--user` installs to `~/Applications`.
+`--from-source` skips the fast path. `--prebuilt` requires a release (fails if
+missing). `--yes` is noninteractive (implied when stdin is not a TTY or `CI=true`).
 
-```sh
-Scripts/install-app.sh
-```
+Keep only one installed copy: two `Auralis.app` bundles share one bundle
+identifier, which duplicates the widget gallery entry; the installer refuses to
+proceed when it detects a second copy.
 
-This installs to `/Applications`. For a per-user install that needs no admin rights:
-
-```sh
-Scripts/install-app.sh --user
-```
-
-which installs to `~/Applications` instead. Keep only one installed copy: two `Auralis.app` bundles share one bundle identifier, which duplicates the widget gallery entry and confuses AppIntent delivery; the installer refuses to proceed when it detects a second copy.
+Source builds need Xcode 16.4+, an Apple Development identity, and XcodeGen
+2.45.4 (the installer fetches the pinned XcodeGen zip when it is missing).
+`--skip-build` reinstalls the last Release build; `--no-launch` skips starting
+the app. `Scripts/install-app.sh --help` lists all options.
 
 After the first launch:
 
 1. Grant **Screen & System Audio Recording** when prompted (required to see and control per-app audio).
 2. Grant **Accessibility** when prompted (required for media-key and popup behavior).
 3. Click the date/time in the menu bar → **Edit Widgets** → search **Auralis** and drag a widget to the desktop.
-
-Useful flags: `--skip-build` reinstalls the last Release build, `--no-launch` installs without starting the app. `Scripts/install-app.sh --help` lists all options.
 
 ## Build
 

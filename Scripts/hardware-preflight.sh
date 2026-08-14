@@ -2,7 +2,8 @@
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+# shellcheck source=lib.sh
+. "$SCRIPT_DIR/lib.sh"
 cd "$REPOSITORY_ROOT"
 
 MIN_PHYSICAL_OUTPUTS=${MIN_PHYSICAL_OUTPUTS:-2}
@@ -16,10 +17,7 @@ case "$MIN_PHYSICAL_OUTPUTS" in
         ;;
 esac
 
-command -v xcrun >/dev/null 2>&1 || {
-    printf 'error: xcrun is required\n' >&2
-    exit 1
-}
+require_command xcrun
 
 /bin/mkdir -p "$BUILD_DIRECTORY"
 xcrun swiftc "$SCRIPT_DIR/HardwarePreflight.swift" \

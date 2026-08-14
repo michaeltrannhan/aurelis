@@ -1,19 +1,16 @@
 #!/bin/sh
+# Stable CI entry point — do not rename.
+# Gates: all|preflight|strict|tsan|asan|ubsan|stress|xcode|signed|hardware|coverage
 set -eu
-set -o pipefail
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+# shellcheck source=lib.sh
+. "$SCRIPT_DIR/lib.sh"
 cd "$REPOSITORY_ROOT"
 
 MODE=${1:-all}
 STRESS_ITERATIONS=${AURALIS_STRESS_ITERATIONS:-100000}
 COVERAGE_FLOOR=${AURALIS_COVERAGE_FLOOR:-59}
-
-fail() {
-    printf 'error: %s\n' "$*" >&2
-    exit 1
-}
 
 assert_no_forbidden_diagnostics() {
     log_glob=$1
@@ -105,7 +102,7 @@ run_coverage() {
     rm -rf "$RESULT_BUNDLE"
 
     if [ ! -f Auralis.xcodeproj/project.pbxproj ]; then
-        require_command_xcodegen
+        require_command xcodegen
         xcodegen generate
     fi
 
@@ -126,10 +123,6 @@ run_coverage() {
 
     assert_no_forbidden_diagnostics "$LOG_FILE"
     "$SCRIPT_DIR/check-coverage-floor.sh" "$RESULT_BUNDLE" "$COVERAGE_FLOOR"
-}
-
-require_command_xcodegen() {
-    command -v xcodegen >/dev/null 2>&1 || fail "required command not found: xcodegen"
 }
 
 case "$MODE" in

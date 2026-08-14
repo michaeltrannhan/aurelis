@@ -1,14 +1,16 @@
 #!/bin/sh
 set -eu
 
-fail() {
-    printf 'error: %s\n' "$*" >&2
-    exit 1
-}
+# Publishable GitHub-release bundle for Auralis.app (Apple Silicon).
+# Asset names: packaging/dist.toml and Scripts/lib/prebuilt.sh.
+# CI sibling publishes the three files under .build/release/ on tag v*.
+# Stable CI entry point — do not rename.
 
-require_command() {
-    command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
-}
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib.sh
+. "$SCRIPT_DIR/lib.sh"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/lib/prebuilt.sh"
 
 require_distribution_signature() {
     bundle_path=$1
@@ -43,24 +45,25 @@ cleanup() {
     if [ -n "${ARCHIVE_VALIDATION_ROOT:-}" ] && [ -d "$ARCHIVE_VALIDATION_ROOT" ]; then
         /bin/rm -rf "$ARCHIVE_VALIDATION_ROOT"
     fi
+    if [ -n "${TARBALL_VALIDATION_ROOT:-}" ] && [ -d "$TARBALL_VALIDATION_ROOT" ]; then
+        /bin/rm -rf "$TARBALL_VALIDATION_ROOT"
+    fi
 }
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 cd "$REPOSITORY_ROOT"
+auralis_load_versions
 
-APP_PRODUCT_NAME=${APP_PRODUCT_NAME:-Auralis}
-WIDGET_NAME=${WIDGET_NAME:-AuralisWidget}
-MARKETING_VERSION=${MARKETING_VERSION:-0.0.8}
-CURRENT_PROJECT_VERSION=${CURRENT_PROJECT_VERSION:-8}
 SKIP_BUILD=${SKIP_BUILD:-NO}
 REQUIRE_NOTARIZATION=${REQUIRE_NOTARIZATION:-YES}
 NOTARY_PROFILE=${NOTARY_PROFILE:-}
 OUTPUT_DIRECTORY=${OUTPUT_DIRECTORY:-$REPOSITORY_ROOT/.build/release}
 APP_PATH=${APP_PATH:-$REPOSITORY_ROOT/.build/products/Release/$APP_PRODUCT_NAME.app}
 WIDGET_PATH=$APP_PATH/Contents/PlugIns/$WIDGET_NAME.appex
-ARCHIVE_PATH=$OUTPUT_DIRECTORY/$APP_PRODUCT_NAME-$MARKETING_VERSION-$CURRENT_PROJECT_VERSION.zip
+ARCHIVE_PATH=$OUTPUT_DIRECTORY/$(auralis_dist_zip_name "$MARKETING_VERSION")
+TARBALL_PATH=$OUTPUT_DIRECTORY/$(auralis_dist_tarball_name "$MARKETING_VERSION")
+CHECKSUMS_PATH=$OUTPUT_DIRECTORY/$(auralis_dist_checksums_name "$MARKETING_VERSION")
 ARCHIVE_VALIDATION_ROOT=
+TARBALL_VALIDATION_ROOT=
 
 case "$SKIP_BUILD" in YES|NO) ;; *) fail "SKIP_BUILD must be YES or NO" ;; esac
 case "$REQUIRE_NOTARIZATION" in YES|NO) ;; *) fail "REQUIRE_NOTARIZATION must be YES or NO" ;; esac
@@ -71,6 +74,7 @@ fi
 
 require_command codesign
 require_command ditto
+require_command tar
 require_command xcrun
 require_command spctl
 
@@ -84,8 +88,7 @@ fi
 validate_distribution_product "$APP_PATH"
 
 /bin/mkdir -p "$OUTPUT_DIRECTORY"
-/bin/rm -f "$ARCHIVE_PATH"
-/usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ARCHIVE_PATH"
+auralis_dist_create_zip "$APP_PATH" "$ARCHIVE_PATH"
 
 if [ -n "$NOTARY_PROFILE" ]; then
     printf '==> Submitting %s for notarization\n' "$ARCHIVE_PATH"
@@ -94,12 +97,14 @@ if [ -n "$NOTARY_PROFILE" ]; then
         --wait
     xcrun stapler staple "$APP_PATH"
     xcrun stapler validate "$APP_PATH"
-    /bin/rm -f "$ARCHIVE_PATH"
-    /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ARCHIVE_PATH"
+    auralis_dist_create_zip "$APP_PATH" "$ARCHIVE_PATH"
     /usr/sbin/spctl --assess --type execute --verbose=4 "$APP_PATH"
 else
     printf 'warning: notarization skipped because REQUIRE_NOTARIZATION=NO\n' >&2
 fi
+
+printf '==> Writing %s\n' "$TARBALL_PATH"
+auralis_dist_create_tarball "$APP_PATH" "$TARBALL_PATH"
 
 ARCHIVE_VALIDATION_ROOT=$(/usr/bin/mktemp -d "$OUTPUT_DIRECTORY/.auralis-archive-validation.XXXXXX") ||
     fail "could not create archive validation directory"
@@ -115,4 +120,19 @@ if [ -n "$NOTARY_PROFILE" ]; then
     /usr/sbin/spctl --assess --type execute --verbose=4 "$EXTRACTED_APP"
 fi
 
-printf '==> Release package validated: %s\n' "$ARCHIVE_PATH"
+TARBALL_VALIDATION_ROOT=$(/usr/bin/mktemp -d "$OUTPUT_DIRECTORY/.auralis-tarball-validation.XXXXXX") ||
+    fail "could not create tarball validation directory"
+auralis_dist_unpack_tarball "$TARBALL_PATH" "$TARBALL_VALIDATION_ROOT"
+EXTRACTED_TARBALL_APP=$TARBALL_VALIDATION_ROOT/$APP_PRODUCT_NAME.app
+[ -d "$EXTRACTED_TARBALL_APP" ] ||
+    fail "release tarball does not contain $APP_PRODUCT_NAME.app at its root"
+/usr/bin/codesign --verify --deep --strict "$EXTRACTED_TARBALL_APP" ||
+    fail "tarball app failed signature verification"
+
+auralis_dist_write_checksums "$OUTPUT_DIRECTORY" "$MARKETING_VERSION"
+auralis_dist_verify_checksums "$CHECKSUMS_PATH" "$OUTPUT_DIRECTORY"
+
+printf '==> Release package validated\n'
+printf '    zip:       %s\n' "$ARCHIVE_PATH"
+printf '    tarball:   %s\n' "$TARBALL_PATH"
+printf '    checksums: %s\n' "$CHECKSUMS_PATH"

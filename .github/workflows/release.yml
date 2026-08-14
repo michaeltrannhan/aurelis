@@ -1,0 +1,98 @@
+name: Release
+
+# Publish the notarized Auralis.app GitHub Release on tags v* (Apple Silicon).
+# Asset names match packaging/dist.toml / Scripts/lib/prebuilt.sh.
+#
+# Required on the runner (not defined as GitHub Actions secrets in this repo):
+#   - Developer ID Application identity in the login keychain
+#   - notarytool keychain profile whose name is NOTARY_PROFILE
+# Optional GitHub secret:
+#   NOTARY_PROFILE — keychain profile name only (the cert/API key stay in
+#   the runner keychain). packaging/README.md documents local use as
+#   `NOTARY_PROFILE=your-profile Scripts/package-release.sh`.
+# Hosted macos-15 runners do not have that identity or profile; the job
+# skips publishing rather than uploading unsigned binaries.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+
+      - uses: ./.github/actions/setup
+        with:
+          cache-suffix: release
+
+      - name: Check Developer ID and notary profile
+        id: creds
+        env:
+          NOTARY_PROFILE: ${{ secrets.NOTARY_PROFILE }}
+        run: |
+          set -euo pipefail
+          identities=$(security find-identity -v -p codesigning 2>/dev/null || true)
+          if ! printf '%s\n' "${identities}" | grep -q 'Developer ID Application:'; then
+            echo "::warning::Skipping GitHub Release: no Developer ID Application identity in the keychain."
+            echo "Hosted macos-15 runners cannot notarize. Use a self-hosted arm64 macOS runner with:"
+            echo "  - Developer ID Application certificate and private key"
+            echo "  - notarytool keychain profile (NOTARY_PROFILE)"
+            echo "See packaging/README.md and packaging/dist.toml [ci]."
+            echo "ready=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if [ -z "${NOTARY_PROFILE}" ]; then
+            echo "::warning::Skipping GitHub Release: NOTARY_PROFILE is unset."
+            echo "Set secret NOTARY_PROFILE to the notarytool keychain profile name on the runner."
+            echo "package-release.sh requires NOTARY_PROFILE when REQUIRE_NOTARIZATION=YES."
+            echo "ready=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo "ready=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Package signed release
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          NOTARY_PROFILE: ${{ secrets.NOTARY_PROFILE }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          export MARKETING_VERSION="${VERSION}"
+          Scripts/package-release.sh
+          test -f ".build/release/Auralis-${VERSION}-aarch64-apple-darwin.zip"
+          test -f ".build/release/Auralis-${VERSION}-aarch64-apple-darwin.tar.xz"
+          test -f ".build/release/Auralis-${VERSION}-SHA256SUMS"
+
+      - name: Publish GitHub Release
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          TAG="${GITHUB_REF_NAME}"
+          zip=".build/release/Auralis-${VERSION}-aarch64-apple-darwin.zip"
+          tarball=".build/release/Auralis-${VERSION}-aarch64-apple-darwin.tar.xz"
+          checksums=".build/release/Auralis-${VERSION}-SHA256SUMS"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" "${zip}" "${tarball}" "${checksums}" --clobber
+          else
+            gh release create "${TAG}" \
+              --generate-notes \
+              --title "${TAG}" \
+              "${zip}" "${tarball}" "${checksums}"
+          fi

@@ -3,14 +3,41 @@ import XCTest
 
 @MainActor
 final class AudioCapturePermissionTests: XCTestCase {
-    func testMissingUsageDescriptionBlocksTapAttempt() {
-        let state = AudioCapturePermissionState(
+    func testPermissionSummariesAndTapGating() {
+        let missing = AudioCapturePermissionState(
             screenCapture: .granted,
             audioUsageDescription: .missing
         )
+        XCTAssertFalse(missing.allowsProcessTaps)
+        XCTAssertEqual(missing.summary, "Audio capture usage description missing")
 
-        XCTAssertFalse(state.allowsProcessTaps)
-        XCTAssertEqual(state.summary, "Audio capture usage description missing")
+        let granted = AudioCapturePermissionState(
+            screenCapture: .granted,
+            audioUsageDescription: .present
+        )
+        XCTAssertTrue(granted.allowsProcessTaps)
+        XCTAssertEqual(granted.summary, "Audio capture ready")
+
+        let denied = AudioCapturePermissionState(
+            screenCapture: .denied,
+            audioUsageDescription: .present
+        )
+        XCTAssertFalse(denied.allowsProcessTaps)
+        XCTAssertEqual(denied.summary, "Screen & System Audio Recording denied")
+
+        let notDetermined = AudioCapturePermissionState(
+            screenCapture: .notDetermined,
+            audioUsageDescription: .present
+        )
+        XCTAssertFalse(notDetermined.allowsProcessTaps)
+        XCTAssertEqual(notDetermined.summary, "Screen & System Audio Recording not requested")
+
+        let pending = AudioCapturePermissionState(
+            screenCapture: .pendingRestart,
+            audioUsageDescription: .present
+        )
+        XCTAssertFalse(pending.allowsProcessTaps)
+        XCTAssertEqual(pending.summary, "Relaunch Auralis to finish enabling audio capture")
     }
 
     func testMissingUsageDescriptionAlwaysSupersedesSystemSettingsActions() {
@@ -30,46 +57,6 @@ final class AudioCapturePermissionTests: XCTestCase {
             XCTAssertNil(presentation.secondary)
             XCTAssertTrue(presentation.detail.contains("System Settings cannot repair it"))
         }
-    }
-
-    func testGrantedScreenCaptureAndUsageDescriptionAllowTaps() {
-        let state = AudioCapturePermissionState(
-            screenCapture: .granted,
-            audioUsageDescription: .present
-        )
-
-        XCTAssertTrue(state.allowsProcessTaps)
-        XCTAssertEqual(state.summary, "Audio capture ready")
-    }
-
-    func testDeniedScreenCaptureBlocksTaps() {
-        let state = AudioCapturePermissionState(
-            screenCapture: .denied,
-            audioUsageDescription: .present
-        )
-
-        XCTAssertFalse(state.allowsProcessTaps)
-        XCTAssertEqual(state.summary, "Screen & System Audio Recording denied")
-    }
-
-    func testNotDeterminedSummary() {
-        let state = AudioCapturePermissionState(
-            screenCapture: .notDetermined,
-            audioUsageDescription: .present
-        )
-
-        XCTAssertFalse(state.allowsProcessTaps)
-        XCTAssertEqual(state.summary, "Screen & System Audio Recording not requested")
-    }
-
-    func testPendingRestartBlocksTapsWithRelaunchSummary() {
-        let state = AudioCapturePermissionState(
-            screenCapture: .pendingRestart,
-            audioUsageDescription: .present
-        )
-
-        XCTAssertFalse(state.allowsProcessTaps)
-        XCTAssertEqual(state.summary, "Relaunch Auralis to finish enabling audio capture")
     }
 
     func testPrivacySettingsURLIsStable() {

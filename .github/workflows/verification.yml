@@ -2,9 +2,15 @@ name: Verification
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   push:
-    branches: [main]
+    branches: [main, master]
   workflow_dispatch:
+    inputs:
+      run_hardware:
+        description: Run hardware / e2e-device gates (physical outputs required)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -15,6 +21,7 @@ concurrency:
 
 env:
   DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+  AURALIS_STRESS_ITERATIONS: "100000"
 
 jobs:
   preflight:
@@ -22,166 +29,92 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-      - name: Install pinned XcodeGen
-        run: Scripts/install-xcodegen-ci.sh
-      - name: Toolchain preflight
-        run: Scripts/ci-preflight.sh
+      - uses: ./.github/actions/setup
+        with:
+          cache-suffix: preflight
+          cache-swift: "false"
       - name: Generate Xcode project and list schemes
         run: |
           xcodegen generate
           xcodebuild -list -project Auralis.xcodeproj
 
-  strict-concurrency:
+  verify:
+    name: ${{ matrix.name }}
     needs: preflight
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: ${{ matrix.timeout-minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: strict-concurrency
+            gate: strict
+            timeout-minutes: 25
+          - name: thread-sanitizer
+            gate: tsan
+            timeout-minutes: 40
+          - name: address-sanitizer
+            gate: asan
+            timeout-minutes: 40
+          - name: undefined-behavior-sanitizer
+            gate: ubsan
+            timeout-minutes: 40
+          - name: sustained-audio-stress
+            gate: stress
+            timeout-minutes: 25
+          - name: generated-xcode-products
+            gate: xcode
+            timeout-minutes: 40
+          - name: coverage
+            gate: coverage
+            timeout-minutes: 35
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-      - name: Install pinned XcodeGen
-        run: Scripts/install-xcodegen-ci.sh
-      - name: Preflight
-        run: Scripts/ci-preflight.sh
-      - name: Strict concurrency tests
-        run: Scripts/run-verification.sh strict
+      - uses: ./.github/actions/setup
+        with:
+          cache-suffix: ${{ matrix.gate }}
+      - name: Run ${{ matrix.gate }}
+        run: Scripts/run-verification.sh ${{ matrix.gate }}
       - name: Upload failure artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: strict-concurrency-logs
+          name: ${{ matrix.name }}-logs
           path: |
             .build/logs
             **/*.xcresult
           if-no-files-found: ignore
 
-  thread-sanitizer:
+  # Hardware / live Core Audio HAL tests. Off by default so PR CI stays green
+  # without devices. Enable with workflow_dispatch input run_hardware, or by
+  # labeling a PR `hardware` or `e2e-device`.
+  # Signed/Developer ID product tests stay off hosted CI (no distribution cert).
+  hardware:
+    name: hardware
     needs: preflight
-    runs-on: macos-15
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-      - name: Install pinned XcodeGen
-        run: Scripts/install-xcodegen-ci.sh
-      - name: Preflight
-        run: Scripts/ci-preflight.sh
-      - name: Thread Sanitizer
-        run: Scripts/run-verification.sh tsan
-      - name: Upload failure artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: tsan-logs
-          path: |
-            .build/logs
-            **/*.xcresult
-          if-no-files-found: ignore
-
-  address-sanitizer:
-    needs: preflight
-    runs-on: macos-15
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-      - name: Install pinned XcodeGen
-        run: Scripts/install-xcodegen-ci.sh
-      - name: Preflight
-        run: Scripts/ci-preflight.sh
-      - name: Address Sanitizer
-        run: Scripts/run-verification.sh asan
-      - name: Upload failure artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: asan-logs
-          path: |
-            .build/logs
-            **/*.xcresult
-          if-no-files-found: ignore
-
-  undefined-behavior-sanitizer:
-    needs: preflight
-    runs-on: macos-15
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-      - name: Install pinned XcodeGen
-        run: Scripts/install-xcodegen-ci.sh
-      - name: Preflight
-        run: Scripts/ci-preflight.sh
-      - name: Undefined Behavior Sanitizer
-        run: Scripts/run-verification.sh ubsan
-      - name: Upload failure artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ubsan-logs
-          path: |
-            .build/logs
-            **/*.xcresult
-          if-no-files-found: ignore
-
-  sustained-audio-stress:
-    needs: preflight
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.run_hardware) ||
+      (github.event_name == 'pull_request' &&
+        (contains(github.event.pull_request.labels.*.name, 'hardware') ||
+         contains(github.event.pull_request.labels.*.name, 'e2e-device')))
     runs-on: macos-15
     timeout-minutes: 25
     env:
-      AURALIS_STRESS_ITERATIONS: 100000
+      AURALIS_HW_TESTS: "1"
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-      - name: Install pinned XcodeGen
-        run: Scripts/install-xcodegen-ci.sh
-      - name: Preflight
-        run: Scripts/ci-preflight.sh
-      - name: Sustained audio stress
-        run: Scripts/run-verification.sh stress
+      - uses: ./.github/actions/setup
+        with:
+          cache-suffix: hardware
+      - name: Hardware preflight
+        run: Scripts/run-verification.sh hardware
+      - name: Live Core Audio HAL tests
+        run: swift test --filter CoreAudioHardwareTests
       - name: Upload failure artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: stress-logs
-          path: |
-            .build/logs
-            **/*.xcresult
-          if-no-files-found: ignore
-
-  generated-xcode-products:
-    needs: preflight
-    runs-on: macos-15
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-      - name: Install pinned XcodeGen
-        run: Scripts/install-xcodegen-ci.sh
-      - name: Preflight
-        run: Scripts/ci-preflight.sh
-      - name: Generated Debug/Release products
-        run: Scripts/run-verification.sh xcode
-      - name: Upload failure artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: xcode-product-logs
-          path: |
-            .build/logs
-            **/*.xcresult
-          if-no-files-found: ignore
-
-  coverage:
-    needs: preflight
-    runs-on: macos-15
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-      - name: Install pinned XcodeGen
-        run: Scripts/install-xcodegen-ci.sh
-      - name: Preflight
-        run: Scripts/ci-preflight.sh
-      - name: Coverage floor (59%)
-        run: Scripts/run-verification.sh coverage
-      - name: Upload failure artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-logs
+          name: hardware-logs
           path: |
             .build/logs
             **/*.xcresult

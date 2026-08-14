@@ -6,14 +6,9 @@ set -eu
 # at one durable path avoids stale Launch Services and WidgetKit registrations
 # as disposable repository and DerivedData products are replaced.
 
-fail() {
-    printf 'error: %s\n' "$*" >&2
-    exit 1
-}
-
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
-APP_PRODUCT_NAME=${APP_PRODUCT_NAME:-Auralis}
+# shellcheck source=lib.sh
+. "$SCRIPT_DIR/lib.sh"
 SOURCE_APP_PATH=${APP_PATH:-$REPOSITORY_ROOT/.build/products/Debug/$APP_PRODUCT_NAME.app}
 DEBUG_APPLICATIONS_DIR=${DEBUG_APPLICATIONS_DIR:-/Applications}
 INSTALLED_APP_PATH=${INSTALLED_APP_PATH:-$DEBUG_APPLICATIONS_DIR/$APP_PRODUCT_NAME-Debug.app}
@@ -68,8 +63,7 @@ if [ "$DEPLOY_APP" = YES ]; then
     # Stop the previous instance before replacing its signed bundle. This also
     # prevents Launch Services from retaining the repository build as the
     # currently-running application for this bundle identifier.
-    /usr/bin/osascript -e "tell application id \"$APP_BUNDLE_ID\" to quit" \
-        >/dev/null 2>&1 || true
+    quit_app_by_bundle_id "$APP_BUNDLE_ID"
     if [ -d "$INSTALLED_WIDGET_PATH" ]; then
         /usr/bin/pluginkit -r "$INSTALLED_WIDGET_PATH" >/dev/null 2>&1 || true
     fi

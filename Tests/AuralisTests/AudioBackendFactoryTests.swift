@@ -2,12 +2,6 @@ import XCTest
 @testable import Auralis
 
 final class AudioBackendFactoryTests: XCTestCase {
-    func testMockModeCreatesMockBackend() {
-        let backend = AudioBackendFactory.makeBackend(mode: .mock)
-
-        XCTAssertTrue(backend is MockAudioBackend)
-    }
-
     @MainActor
     func testPersistedMockModeStillSupportsStoreRefresh() async throws {
         let url = FileManager.default.temporaryDirectory
@@ -22,6 +16,7 @@ final class AudioBackendFactoryTests: XCTestCase {
 
         try await store.refresh()
 
+        XCTAssertTrue(backend is MockAudioBackend)
         XCTAssertFalse(store.displayRows.isEmpty)
     }
 }

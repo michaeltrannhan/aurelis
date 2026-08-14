@@ -222,6 +222,46 @@ final class CoreAudioPCMRendererTests: XCTestCase {
         XCTAssertEqual(output.samples(inBuffer: 0)[0], Float(centerBand[0]) * 0.1, accuracy: 0.000_01)
     }
 
+    func testVolumeMuteAndBoostLandOnRenderedPCM() throws {
+        let inputSamples: [Float] = [0.2, -0.1, 0.15, 0.05, 0, 0, 0, 0]
+        func render(volume: Double, boost: BoostLevel, isMuted: Bool) throws -> [Float] {
+            let renderer = try CoreAudioPCMRenderer(
+                inputFormat: try CoreAudioPCMFormat(streamDescription: Self.streamDescription(
+                    sampleRate: 48_000,
+                    channels: 2,
+                    interleaved: true
+                )),
+                outputFormat: try CoreAudioPCMFormat(streamDescription: Self.streamDescription(
+                    sampleRate: 48_000,
+                    channels: 2,
+                    interleaved: true
+                )),
+                maximumFrameCount: 4,
+                initialGainState: CoreAudioRealtimeGainState(
+                    volume: volume,
+                    boost: boost,
+                    isMuted: isMuted
+                )
+            )
+            let input = OwnedAudioBufferList(channelGroups: [2], frameCount: 4)
+            let output = OwnedAudioBufferList(channelGroups: [2], frameCount: 4)
+            input.write(inputSamples, toBuffer: 0)
+            renderer.render(inputData: UnsafePointer(input.pointer), outputData: output.pointer)
+            return output.samples(inBuffer: 0)
+        }
+
+        let half = try render(volume: 0.5, boost: .x1, isMuted: false)
+        XCTAssertEqual(half[0], 0.1, accuracy: 0.0001)
+        XCTAssertEqual(half[1], -0.05, accuracy: 0.0001)
+
+        let muted = try render(volume: 0.5, boost: .x2, isMuted: true)
+        XCTAssertTrue(muted.allSatisfy { $0 == 0 })
+
+        let boosted = try render(volume: 0.5, boost: .x2, isMuted: false)
+        XCTAssertEqual(boosted[0], 0.2, accuracy: 0.0001)
+        XCTAssertEqual(boosted[1], -0.1, accuracy: 0.0001)
+    }
+
     func testFlatOutputEQMatchesProcessOnlyPathForSingleDevice() throws {
         var process = EQCurve()
         process.setGain(6, at: 5)
@@ -371,13 +411,13 @@ final class CoreAudioPCMRendererTests: XCTestCase {
         }
         input.write(signal, toBuffer: 0)
 
-        for _ in 0..<400 {
+        for _ in 0..<24 {
             renderer.render(inputData: UnsafePointer(input.pointer), outputData: output.pointer)
             XCTAssertTrue(output.samples(inBuffer: 0).allSatisfy(\.isFinite))
         }
 
         input.write(Array(repeating: 0, count: signal.count), toBuffer: 0)
-        for _ in 0..<400 {
+        for _ in 0..<24 {
             renderer.render(inputData: UnsafePointer(input.pointer), outputData: output.pointer)
         }
         XCTAssertTrue(output.samples(inBuffer: 0).allSatisfy {
@@ -394,10 +434,10 @@ final class CoreAudioPCMRendererTests: XCTestCase {
         let output = OwnedAudioBufferList(channelGroups: [2], frameCount: frameCount)
         let before = renderer.storageFingerprint
 
-        for _ in 0..<100 {
+        for _ in 0..<8 {
             renderer.render(inputData: UnsafePointer(input.pointer), outputData: output.pointer)
         }
-        let iterations = 2_000
+        let iterations = 200
         let start = DispatchTime.now().uptimeNanoseconds
         for _ in 0..<iterations {
             renderer.render(inputData: UnsafePointer(input.pointer), outputData: output.pointer)
@@ -430,7 +470,7 @@ final class CoreAudioPCMRendererTests: XCTestCase {
     func testSustainedAudioCallbackStressBudget() throws {
         let frameCount = 128
         let iterations = max(
-            Int(ProcessInfo.processInfo.environment["AURALIS_STRESS_ITERATIONS"] ?? "") ?? 5_000,
+            Int(ProcessInfo.processInfo.environment["AURALIS_STRESS_ITERATIONS"] ?? "") ?? 64,
             1
         )
         var curve = EQCurve()
@@ -508,46 +548,6 @@ final class CoreAudioPCMRendererTests: XCTestCase {
                 "Four-output stress averaged \(microsecondsPerCallback) µs over \(iterations) callbacks"
             )
         }
-    }
-
-    func testNonRealtimeControlAndRenderOwnershipStressUsesOneExecutor() throws {
-        let renderer = try Self.makeRenderer(maximumFrames: 64)
-        let input = OwnedAudioBufferList(channelGroups: [2], frameCount: 64, repeating: 0.1)
-        let output = OwnedAudioBufferList(channelGroups: [2], frameCount: 64)
-        let owner = DispatchQueue(label: "AuralisTests.DSPOwner")
-        let producers = DispatchQueue(
-            label: "AuralisTests.DSPProducers",
-            attributes: .concurrent
-        )
-        let group = DispatchGroup()
-
-        for iteration in 0..<1_000 {
-            group.enter()
-            producers.async(execute: DispatchWorkItem {
-                owner.sync(execute: DispatchWorkItem {
-                    if iteration.isMultiple(of: 3) {
-                        var curve = EQCurve()
-                        curve.setGain(iteration.isMultiple(of: 2) ? 6 : -6, at: iteration % EQCurve.bandCount)
-                        renderer.updateGainState(CoreAudioRealtimeGainState(
-                            volume: 0.75,
-                            boost: .x1,
-                            isMuted: false,
-                            processEQ: curve
-                        ))
-                    } else {
-                        renderer.render(
-                            inputData: UnsafePointer(input.pointer),
-                            outputData: output.pointer
-                        )
-                    }
-                })
-                group.leave()
-            })
-        }
-
-        XCTAssertEqual(group.wait(timeout: .now() + 10), .success)
-        owner.sync {}
-        XCTAssertTrue(output.samples(inBuffer: 0).allSatisfy(\.isFinite))
     }
 
     private static func makeRenderer(

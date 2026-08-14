@@ -1,13 +1,9 @@
 #!/bin/sh
 set -eu
 
-fail() {
-    printf 'error: %s\n' "$*" >&2
-    exit 1
-}
-
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+# shellcheck source=lib.sh
+. "$SCRIPT_DIR/lib.sh"
 cd "$REPOSITORY_ROOT"
 
 CONFIGURATION=${CONFIGURATION:-Release}

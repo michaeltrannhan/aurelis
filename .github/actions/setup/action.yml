@@ -1,0 +1,60 @@
+name: Setup Auralis CI
+description: Cache toolchains, install pinned XcodeGen, and run Scripts/ci-preflight.sh
+
+inputs:
+  cache-suffix:
+    description: Distinguishes SwiftPM/.build caches per job
+    required: false
+    default: default
+  cache-swift:
+    description: Restore and save SwiftPM and .build caches
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Cache pinned XcodeGen
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ${{ runner.temp }}/auralis-xcodegen-2.45.4
+        key: xcodegen-2.45.4-${{ runner.os }}-${{ runner.arch }}
+
+    - name: Cache SwiftPM
+      if: inputs.cache-swift == 'true'
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          .build
+          ~/Library/Caches/org.swift.swiftpm
+        key: ${{ runner.os }}-${{ runner.arch }}-swiftpm-${{ inputs.cache-suffix }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-swiftpm-${{ inputs.cache-suffix }}-
+
+    - name: Install pinned XcodeGen
+      shell: bash
+      env:
+        AURALIS_XCODEGEN_ROOT: ${{ runner.temp }}/auralis-xcodegen-2.45.4
+      run: |
+        set -euo pipefail
+        # Scripts/install-xcodegen-ci.sh is the public entry point. The XcodeGen
+        # zip unpacks to a directory named xcodegen/; `test -x` is true for
+        # directories, so ensure_xcodegen can `cp` that directory and fail.
+        # Seed bin/xcodegen from extract/xcodegen/bin/xcodegen when that happens.
+        if ! Scripts/install-xcodegen-ci.sh; then
+          root="${AURALIS_XCODEGEN_ROOT}"
+          candidate="${root}/extract/xcodegen/bin/xcodegen"
+          if [ -f "${candidate}" ]; then
+            mkdir -p "${root}/bin"
+            cp "${candidate}" "${root}/bin/xcodegen"
+            chmod +x "${root}/bin/xcodegen"
+            Scripts/install-xcodegen-ci.sh
+          else
+            echo "error: Scripts/install-xcodegen-ci.sh failed and no extracted binary was found at ${candidate}" >&2
+            exit 1
+          fi
+        fi
+
+    - name: Toolchain preflight
+      shell: bash
+      run: Scripts/ci-preflight.sh

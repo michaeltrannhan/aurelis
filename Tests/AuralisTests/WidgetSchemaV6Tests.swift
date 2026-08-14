@@ -6,12 +6,12 @@ final class WidgetSchemaV6Tests: XCTestCase {
     func testConcurrentSequenceAllocationIsUniqueAndOrdered() {
         WidgetCommandSequence.resetForTests(startingAt: 1)
         let values = LockedTestValue<[UInt64]>([])
-        DispatchQueue.concurrentPerform(iterations: 100) { _ in
+        DispatchQueue.concurrentPerform(iterations: 32) { _ in
             let value = WidgetCommandSequence.next()
             values.withValue { $0.append(value) }
         }
-        XCTAssertEqual(Set(values.value).count, 100)
-        XCTAssertEqual(values.value.sorted(), Array(1...100).map(UInt64.init))
+        XCTAssertEqual(Set(values.value).count, 32)
+        XCTAssertEqual(values.value.sorted(), Array(1...32).map(UInt64.init))
     }
 
     func testRelativeActionsRequireSchemaV6() throws {

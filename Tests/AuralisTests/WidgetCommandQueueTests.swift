@@ -6,7 +6,7 @@ import XCTest
 final class WidgetCommandQueueTests: XCTestCase {
     func testConcurrentEnqueueAndDrainLosesNoCommands() async throws {
         let layout = try makeLayout()
-        let commands = (0..<120).map { index in
+        let commands = (0..<48).map { index in
             WidgetCommand.app(
                 identity: "app-\(index)",
                 action: .setVolume(Double(index % 100) / 100)

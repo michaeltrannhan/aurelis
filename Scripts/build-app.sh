@@ -12,18 +12,9 @@ set -eu
 #     SIGN_IDENTITY="Apple Development" Scripts/build-debug-app.sh
 #   (Intel/universal builds are out of scope; arm64-only.)
 
-fail() {
-    printf 'error: %s\n' "$*" >&2
-    exit 1
-}
-
-require_command() {
-    command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
-}
-
-require_file() {
-    [ -e "$1" ] || fail "required path not found: $1"
-}
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib.sh
+. "$SCRIPT_DIR/lib.sh"
 
 validate_output_app_path() {
     output_path=$1
@@ -270,9 +261,8 @@ print_build_summary() {
     fi
 }
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 cd "$REPOSITORY_ROOT"
+auralis_load_versions
 
 SCHEME=${SCHEME:-Auralis}
 CONFIGURATION=${CONFIGURATION:-Debug}
@@ -288,8 +278,6 @@ APP_BUNDLE_ID=${APP_BUNDLE_ID:-com.michaeltrannhan.Auralis}
 WIDGET_BUNDLE_ID=${WIDGET_BUNDLE_ID:-com.michaeltrannhan.Auralis.Widget}
 APP_URL_NAME=${APP_URL_NAME:-$APP_BUNDLE_ID}
 APP_URL_SCHEME=${APP_URL_SCHEME:-auralis}
-MARKETING_VERSION=${MARKETING_VERSION:-0.0.8}
-CURRENT_PROJECT_VERSION=${CURRENT_PROJECT_VERSION:-8}
 ARCHS=${ARCHS:-arm64}
 case " $ARCHS " in
     *" x86_64 "*|*" i386 "*)

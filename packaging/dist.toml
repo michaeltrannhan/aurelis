@@ -1,0 +1,89 @@
+# Auralis GitHub-release distribution contract.
+#
+# Auralis is a Swift/macOS menu-bar app (not a Rust crate). Do not add
+# cargo-dist; Scripts/package-release.sh is the single packager. It already
+# builds the Developer ID / notarized zip Apple requires. This file names the
+# GitHub assets that install.sh and CI must agree on.
+#
+# cargo-dist would generate .github/workflows; leave workflow files to the CI
+# sibling. Expected tag workflow is documented under [ci] below.
+
+[package]
+name = "Auralis"
+# Inner executable and .app bundle share this name.
+binary_name = "Auralis"
+bundle = "Auralis.app"
+bundle_identifier = "com.michaeltrannhan.Auralis"
+widget_bundle = "AuralisWidget.appex"
+widget_bundle_identifier = "com.michaeltrannhan.Auralis.Widget"
+# Matches LICENSE (do not edit that file from packaging).
+license = "GPL-3.0-or-later"
+min_macos = "14.2"
+# CFBundleShortVersionString / project.yml MARKETING_VERSION.
+version = "0.0.8"
+
+[targets]
+# Apple Silicon only. Intel and universal binaries are out of scope.
+triples = ["aarch64-apple-darwin"]
+# Apple ARCHS equivalent of aarch64-apple-darwin:
+apple_archs = ["arm64"]
+
+[github]
+# git remote: git@github.com:michaeltrannhan/aurelis.git
+owner = "michaeltrannhan"
+repo = "aurelis"
+# Git tag for version 0.0.8:
+#   v0.0.8
+tag_prefix = "v"
+
+[artifacts]
+# Version is MARKETING_VERSION with no leading v. Archives contain Auralis.app
+# at the root — never the bare Contents/MacOS/Auralis executable (widget,
+# Info.plist, and code signature would be missing).
+#
+#   Auralis-{version}-aarch64-apple-darwin.zip
+#   Auralis-{version}-aarch64-apple-darwin.tar.xz
+#   Auralis-{version}-SHA256SUMS
+zip_pattern = "Auralis-{version}-aarch64-apple-darwin.zip"
+tarball_pattern = "Auralis-{version}-aarch64-apple-darwin.tar.xz"
+checksums_pattern = "Auralis-{version}-SHA256SUMS"
+# Example for 0.0.8:
+#   Auralis-0.0.8-aarch64-apple-darwin.zip
+#   Auralis-0.0.8-aarch64-apple-darwin.tar.xz
+#   Auralis-0.0.8-SHA256SUMS
+format_zip = "ditto -c -k --sequesterRsrc --keepParent (preserves signature)"
+format_tarball = "bsdtar xz of Auralis.app at archive root"
+checksum = "SHA-256, BSD shasum two-space format, filenames only"
+output_directory = ".build/release"
+
+# Prefer the zip for install and Homebrew: it is the notarization container
+# and the format ditto round-trips without stripping macOS metadata. The
+# tar.xz exists for a curl | tar -xJ unpack on Apple Silicon Macs.
+
+[homebrew]
+cask = "packaging/homebrew/auralis.rb"
+cask_name = "auralis"
+url_asset = "zip"
+
+[ci]
+# CI sibling: add a tag workflow; do not generate it from cargo-dist.
+# Trigger: push of tags matching v*
+# Runner: macos-15, DEVELOPER_DIR=/Applications/Xcode_16.4.app/Contents/Developer
+# Permissions: contents: write (to publish the GitHub Release)
+#
+# Steps:
+#   1. actions/checkout (pinned, same as verification.yml)
+#   2. Scripts/install-xcodegen-ci.sh
+#   3. Scripts/ci-preflight.sh
+#   4. NOTARY_PROFILE=<keychain-profile> Scripts/package-release.sh
+#      (Developer ID Application identity + notarytool keychain profile)
+#   5. Publish a GitHub Release for the tag with exactly these files:
+#        .build/release/Auralis-${VERSION}-aarch64-apple-darwin.zip
+#        .build/release/Auralis-${VERSION}-aarch64-apple-darwin.tar.xz
+#        .build/release/Auralis-${VERSION}-SHA256SUMS
+#      VERSION is the tag without the leading v (v0.0.8 -> 0.0.8).
+#   6. Optional: rewrite packaging/homebrew/auralis.rb sha256 from the zip
+#      line in SHA256SUMS if publishing a tap.
+#
+# Do not upload the unsigned SPM .build/release/Auralis executable.
+# Do not add linux/windows/x86_64 targets.

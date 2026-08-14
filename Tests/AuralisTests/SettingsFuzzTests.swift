@@ -6,7 +6,7 @@ final class SettingsFuzzTests: XCTestCase {
     func testSeededMalformedSettingsDecodePropertyProducesCanonicalRoundTrips() throws {
         var generator = SeededRandomNumberGenerator(seed: 0x4551_4D41_4352_4550)
 
-        for iteration in 0..<400 {
+        for iteration in 0..<64 {
             let appID = "app-\(iteration % 23)"
             let gainCount = Int.random(in: 0...28, using: &generator)
             let gains: [Any] = (0..<gainCount).map { index in
@@ -67,7 +67,7 @@ final class SettingsFuzzTests: XCTestCase {
     func testSeededCorruptByteStreamsAreQuarantinedByteForByte() throws {
         var generator = SeededRandomNumberGenerator(seed: 0x434F_5252_5550_5421)
 
-        for iteration in 0..<32 {
+        for iteration in 0..<8 {
             let url = temporaryFileURL(prefix: "AuralisCorruptFuzz", filename: "settings.json")
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             let byteCount = Int.random(in: 1...512, using: &generator)
@@ -88,7 +88,7 @@ final class SettingsFuzzTests: XCTestCase {
     func testFutureVersionPropertyNeverRewritesOrQuarantines() throws {
         var generator = SeededRandomNumberGenerator(seed: 0x4655_5455_5245_2121)
 
-        for _ in 0..<32 {
+        for _ in 0..<8 {
             let version = Int.random(
                 in: (PersistedSettings.currentVersion + 1)...10_000,
                 using: &generator

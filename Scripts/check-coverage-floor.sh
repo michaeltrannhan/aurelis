@@ -1,13 +1,12 @@
 #!/bin/sh
 set -eu
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=lib.sh
+. "$SCRIPT_DIR/lib.sh"
+
 RESULT_BUNDLE=${1:-}
 FLOOR=${2:-59}
-
-fail() {
-    printf 'error: %s\n' "$*" >&2
-    exit 1
-}
 
 [ -n "$RESULT_BUNDLE" ] || fail "usage: $0 <result-bundle> [floor-percent]"
 [ -d "$RESULT_BUNDLE" ] || fail "result bundle not found: $RESULT_BUNDLE"

@@ -1,0 +1,58 @@
+{
+  "version": 8,
+  "hasCompletedOnboarding": true,
+  "customization": {
+    "appearance": "dark",
+    "popupDensity": "compact",
+    "defaultNewAppVolume": 0.4,
+    "eqGainRange": 12,
+    "volumeStep": 0.05,
+    "showInactiveApps": true,
+    "backendMode": "coreAudioDiscovery"
+  },
+  "appSettings": {
+    "com.apple.Music": {
+      "displayName": "Music",
+      "volume": 0.72,
+      "isMuted": false,
+      "boost": 2,
+      "eq": {
+        "range": 12,
+        "gains": [0, 0, 0, 0, 3.5, 0, 0, 0, 0, 0]
+      },
+      "route": {
+        "type": "multiOutput",
+        "deviceIDs": ["built-in", "usb"]
+      }
+    },
+    "com.apple.Safari": {
+      "displayName": "Safari",
+      "volume": 0.4,
+      "isMuted": true,
+      "boost": 1,
+      "route": {
+        "type": "selectedDevice",
+        "deviceID": "usb"
+      }
+    }
+  },
+  "deviceSettings": {
+    "built-in": {
+      "displayName": "MacBook Speakers",
+      "volume": 0.65,
+      "isMuted": false
+    },
+    "usb": {
+      "displayName": "USB DAC",
+      "volume": 0.48,
+      "isMuted": false,
+      "eq": {
+        "range": 12,
+        "gains": [0, -4, 0, 0, 0, 0, 0, 0, 0, 0]
+      }
+    }
+  },
+  "pinnedAppIDs": ["com.apple.Music"],
+  "ignoredAppIDs": [],
+  "appDisplayOrder": ["com.apple.Music", "com.apple.Safari"]
+}

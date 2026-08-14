@@ -15,42 +15,35 @@ final class WidgetRenderingTests: XCTestCase {
         )
     }
 
-    func testMixerRendersProductionSmallMediumAndLargeFamilies() throws {
-        let entry = makeEntry(hostState: .running)
-
+    func testProductionFamiliesRenderRunningAndClosedHosts() throws {
+        let running = makeEntry(hostState: .running)
         try assertRenders(
-            AuralisMixerWidgetView(entry: entry.withFamily(.systemSmall)),
+            AuralisMixerWidgetView(entry: running.withFamily(.systemSmall)),
             size: CGSize(width: 158, height: 158),
             captureName: "mixer-small"
         )
         try assertRenders(
-            AuralisMixerWidgetView(entry: entry.withFamily(.systemMedium)),
+            AuralisMixerWidgetView(entry: running.withFamily(.systemMedium)),
             size: CGSize(width: 338, height: 158),
             captureName: "mixer-medium"
         )
         try assertRenders(
-            AuralisMixerWidgetView(entry: entry.withFamily(.systemLarge)),
+            AuralisMixerWidgetView(entry: running.withFamily(.systemLarge)),
             size: CGSize(width: 344, height: 344),
             captureName: "mixer-large"
         )
-    }
-
-    func testEQViewRendersProductionLargeFamily() throws {
         try assertRenders(
-            AuralisEQWidgetView(entry: makeEntry(hostState: .running).withFamily(.systemLarge)),
+            AuralisEQWidgetView(entry: running.withFamily(.systemLarge)),
             size: CGSize(width: 344, height: 344)
         )
-    }
 
-    func testClosedHostStatesRenderWithoutInteractiveData() throws {
-        let entry = makeEntry(hostState: .stopped)
-
+        let closed = makeEntry(hostState: .stopped)
         try assertRenders(
-            AuralisMixerWidgetView(entry: entry.withFamily(.systemMedium)),
+            AuralisMixerWidgetView(entry: closed.withFamily(.systemMedium)),
             size: CGSize(width: 338, height: 158)
         )
         try assertRenders(
-            AuralisEQWidgetView(entry: entry.withFamily(.systemLarge)),
+            AuralisEQWidgetView(entry: closed.withFamily(.systemLarge)),
             size: CGSize(width: 344, height: 344)
         )
     }
@@ -78,13 +71,10 @@ final class WidgetRenderingTests: XCTestCase {
 
     private func captureIfRequested(_ image: NSImage, name: String?) throws {
         guard let name,
+              let directory = ProcessInfo.processInfo.environment["AURALIS_WIDGET_CAPTURE_DIR"],
               let tiff = image.tiffRepresentation,
               let representation = NSBitmapImageRep(data: tiff),
               let png = representation.representation(using: .png, properties: [:]) else { return }
-        let directory = ProcessInfo.processInfo.environment["AURALIS_WIDGET_CAPTURE_DIR"]
-            ?? FileManager.default.temporaryDirectory
-                .appendingPathComponent("AuralisWidgetCaptures", isDirectory: true)
-                .path
         let directoryURL = URL(fileURLWithPath: directory, isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         try png.write(to: directoryURL.appendingPathComponent("\(name).png"), options: .atomic)

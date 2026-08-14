@@ -9,18 +9,16 @@ final class CustomizationTests: XCTestCase {
         XCTAssertEqual(AppCustomization(defaultNewAppVolume: .nan).defaultNewAppVolume, 1)
     }
 
-    func testPopupDensityDimensionsScalePredictably() {
-        XCTAssertLessThan(PopupDensity.compact.dimensions.width, PopupDensity.comfortable.dimensions.width)
-        XCTAssertLessThan(PopupDensity.comfortable.dimensions.width, PopupDensity.spacious.dimensions.width)
-        XCTAssertLessThan(PopupDensity.compact.dimensions.rowHeight, PopupDensity.spacious.dimensions.rowHeight)
-    }
-
-    func testPopupDensityWidthsStayCompactAndEQUsable() {
+    func testPopupDensityDimensionsScaleAndStayUsable() {
         XCTAssertEqual(PopupDensity.compact.dimensions.width, 360)
         XCTAssertEqual(PopupDensity.comfortable.dimensions.width, 400)
         XCTAssertEqual(PopupDensity.spacious.dimensions.width, 440)
-        XCTAssertGreaterThanOrEqual(PopupDensity.compact.dimensions.width, 360)
-        XCTAssertLessThanOrEqual(PopupDensity.spacious.dimensions.width, 440)
+        XCTAssertLessThan(PopupDensity.compact.dimensions.rowHeight, PopupDensity.spacious.dimensions.rowHeight)
+        XCTAssertLessThan(
+            PopupDensity.compact.dimensions.maxContentHeight,
+            PopupDensity.spacious.dimensions.maxContentHeight
+        )
+        XCTAssertGreaterThan(PopupDensity.comfortable.dimensions.maxContentHeight, 300)
     }
 
     func testVolumeStepFractions() {
@@ -90,11 +88,6 @@ final class CustomizationTests: XCTestCase {
         XCTAssertEqual(SettingsTab.allCases.map(\.label), ["General", "Audio", "Controls", "About & diagnostics"])
         XCTAssertEqual(SettingsTab.general.systemImage, "gearshape")
         XCTAssertEqual(SettingsTab.audio.systemImage, "speaker.wave.2")
-    }
-
-    func testPopupDimensionsIncludeMaxContentHeight() {
-        XCTAssertLessThan(PopupDensity.compact.dimensions.maxContentHeight, PopupDensity.spacious.dimensions.maxContentHeight)
-        XCTAssertGreaterThan(PopupDensity.comfortable.dimensions.maxContentHeight, 300)
     }
 
     func testPopupContentHeightUsesIntrinsicRowAndExpandedEQSizes() {

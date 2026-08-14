@@ -42,11 +42,6 @@ final class AuroraConsolePresentationTests: XCTestCase {
         XCTAssertEqual(MixerEmptyState(phase: .empty), .readyEmpty)
     }
 
-    func testSettingsTabsUseAuroraLabels() {
-        XCTAssertEqual(SettingsTab.shortcuts.label, "Controls")
-        XCTAssertEqual(SettingsTab.about.label, "About & diagnostics")
-    }
-
     func testDesktopInspectorClaimsMoreSpaceWithoutCrowdingTheProcessLane() {
         XCTAssertEqual(AuralisSpacing.inspectorWidth(for: 1_080), 500)
         XCTAssertEqual(AuralisSpacing.inspectorWidth(for: 1_180), 519.2, accuracy: 0.001)

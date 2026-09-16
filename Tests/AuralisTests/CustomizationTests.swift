@@ -193,6 +193,17 @@ final class CustomizationTests: XCTestCase {
         XCTAssertEqual(customization.menuBarIconStyle, .speaker)
     }
 
+    func testFirstRunExposesOnlyTheContextualCompletionAction() {
+        XCTAssertEqual(
+            FirstRunCompletionAction.visibleActions(allowsProcessTaps: false),
+            [.continueDiscovery]
+        )
+        XCTAssertEqual(
+            FirstRunCompletionAction.visibleActions(allowsProcessTaps: true),
+            [.startMixing]
+        )
+    }
+
     func testMissingMediaKeysFieldPreservesLegacyEnabledDefault() throws {
         let json = Data(#"{"appearance":"system"}"#.utf8)
         let decoded = try JSONDecoder().decode(AppCustomization.self, from: json)

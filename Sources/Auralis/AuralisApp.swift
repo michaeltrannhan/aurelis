@@ -7,6 +7,7 @@ struct AuralisApp: App {
     @StateObject private var store: AudioControlStore
     @StateObject private var controls: ExternalControlsCoordinator
     @StateObject private var widgetBridge: WidgetBridge
+    @StateObject private var launchAtLogin: LaunchAtLoginController
     private let lifecycle: AppLifecycleCoordinator
 
     init() {
@@ -48,6 +49,7 @@ struct AuralisApp: App {
         _store = StateObject(wrappedValue: controlStore)
         _controls = StateObject(wrappedValue: externalControls)
         _widgetBridge = StateObject(wrappedValue: bridge)
+        _launchAtLogin = StateObject(wrappedValue: LaunchAtLoginController())
         self.lifecycle = lifecycle
         appDelegate.configure(lifecycle: lifecycle)
     }
@@ -66,18 +68,21 @@ struct AuralisApp: App {
         Window("Auralis", id: AppWindowID.main.rawValue) {
             MainWindowSceneContent(store: store, widgetBridge: widgetBridge)
                 .environmentObject(controls)
+                .environmentObject(launchAtLogin)
         }
         .defaultSize(width: 1080, height: 760)
 
         MenuBarExtra("Auralis", systemImage: menuBarSymbol) {
             MenuBarRootView(store: store)
                 .environmentObject(controls)
+                .environmentObject(launchAtLogin)
         }
         .menuBarExtraStyle(.window)
 
         Settings {
             SettingsRootView(store: store)
                 .environmentObject(controls)
+                .environmentObject(launchAtLogin)
                 .onChange(of: store.settings.customization) { _, _ in
                     Task { await lifecycle.applySettings() }
                 }

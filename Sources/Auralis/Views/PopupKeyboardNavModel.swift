@@ -1,5 +1,14 @@
 import Foundation
 
+enum PopupKeyboardOwnership {
+    static func rowShortcutsEnabled(
+        hasInspector: Bool,
+        isSearchFocused: Bool
+    ) -> Bool {
+        !hasInspector && !isSearchFocused
+    }
+}
+
 /// Pure ordering model backing arrow-key navigation in the popup. Editing mode
 /// clears the order so keyboard selection is disabled while reordering.
 final class PopupKeyboardNavModel {

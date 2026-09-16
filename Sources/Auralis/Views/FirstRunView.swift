@@ -1,10 +1,21 @@
 import SwiftUI
 
+enum FirstRunCompletionAction: CaseIterable, Equatable {
+    case continueDiscovery
+    case startMixing
+
+    static func visibleActions(allowsProcessTaps: Bool) -> [Self] {
+        allowsProcessTaps ? [.startMixing] : [.continueDiscovery]
+    }
+}
+
 struct FirstRunView: View {
     @ObservedObject var store: AudioControlStore
+    @EnvironmentObject private var launchAtLogin: LaunchAtLoginController
     @Environment(\.dismiss) private var dismiss
     @State private var isCommitting = false
     @State private var commitErrorMessage: String?
+    @State private var wantsLaunchAtLogin = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -33,6 +44,16 @@ struct FirstRunView: View {
                 Text("Media-key control stays off until you enable it later in Controls settings.")
                     .font(AuralisTypography.content(.caption))
                     .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    LaunchAtLoginToggle(controller: launchAtLogin, isOn: $wantsLaunchAtLogin)
+                    if launchAtLogin.status == .requiresApproval {
+                        Button("Open Login Items Settings") {
+                            launchAtLogin.openLoginItemsSettings()
+                        }
+                    }
+                    LaunchAtLoginFooter(controller: launchAtLogin)
+                }
             }
             .padding(24)
 
@@ -50,33 +71,43 @@ struct FirstRunView: View {
                     }
                 }
                 Spacer()
-                Button {
-                    completeOnboarding()
-                } label: {
-                    Text(isCommitting ? "Saving…" : "Continue in discovery mode")
-                }
-                .disabled(isCommitting)
-                .frame(minHeight: AuralisSpacing.controlMinHit)
-
-                Button {
-                    completeOnboarding()
-                } label: {
-                    HStack(spacing: 6) {
-                        if isCommitting { ProgressView().controlSize(.small) }
-                        Text(isCommitting ? "Saving…" : "Start mixing")
+                let completionActions = FirstRunCompletionAction.visibleActions(
+                    allowsProcessTaps: store.permissionState.allowsProcessTaps
+                )
+                if completionActions.contains(.continueDiscovery) {
+                    Button {
+                        completeOnboarding()
+                    } label: {
+                        Text(isCommitting ? "Saving…" : "Continue in discovery mode")
                     }
+                    .disabled(isCommitting)
+                    .frame(minHeight: AuralisSpacing.controlMinHit)
                 }
-                .disabled(isCommitting)
-                .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
-                .tint(AuralisColor.signalCyan)
-                .frame(minHeight: AuralisSpacing.controlMinHit)
+                if completionActions.contains(.startMixing) {
+                    Button {
+                        completeOnboarding()
+                    } label: {
+                        HStack(spacing: 6) {
+                            if isCommitting { ProgressView().controlSize(.small) }
+                            Text(isCommitting ? "Saving…" : "Start mixing")
+                        }
+                    }
+                    .disabled(isCommitting)
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .tint(AuralisColor.signalCyan)
+                    .frame(minHeight: AuralisSpacing.controlMinHit)
+                }
             }
             .padding(.horizontal, 24)
             .padding(.vertical, 16)
         }
         .frame(width: 520)
         .background(AuralisColor.canvas)
+        .onAppear {
+            launchAtLogin.refresh()
+            wantsLaunchAtLogin = launchAtLogin.status.defaultOnboardingEnabled
+        }
         .task {
             if store.permissionState.allowsProcessTaps {
                 store.refreshIntent()
@@ -91,6 +122,7 @@ struct FirstRunView: View {
         Task { @MainActor in
             do {
                 try await store.completeOnboarding()
+                launchAtLogin.applyOnboardingPreference(wantsLaunchAtLogin)
                 dismiss()
             } catch {
                 commitErrorMessage = UserFacingFailure.from(error, title: "Couldn’t save setup").message

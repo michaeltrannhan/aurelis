@@ -46,7 +46,7 @@ Widget: WidgetBridge writes WidgetSnapshot to App Group;
 
 ## Testing
 
-**Software (always, CI):** `swift test` — **351** `AuralisTests`; `CoreAudioHardwareTests` skip. Then `Scripts/run-verification.sh` for strict/tsan/asan/ubsan/stress/xcode/coverage.
+**Software (always, CI):** `swift test` — **366** `AuralisTests`; `CoreAudioHardwareTests` skip. Then `Scripts/run-verification.sh` for strict/tsan/asan/ubsan/stress/xcode/coverage.
 
 - `SoftwarePipelineE2ETests` — v8 fixture → v9 migrate, persist/reload (not hardware-gated).
 - `CoreAudioPCMRendererTests.testVolumeMuteAndBoostLandOnRenderedPCM` — volume/mute/boost on rendered PCM.

@@ -2,10 +2,13 @@ import SwiftUI
 
 struct GeneralSettingsTab: View {
     @ObservedObject var store: AudioControlStore
+    @EnvironmentObject private var launchAtLogin: LaunchAtLoginController
     @State private var confirmsReset = false
 
     var body: some View {
         Form {
+            LaunchAtLoginSection(controller: launchAtLogin)
+
             Section("Appearance") {
                 Picker("Appearance", selection: settingsCustomizationBinding(store: store, \.appearance)) {
                     ForEach(AppAppearance.allCases) { appearance in

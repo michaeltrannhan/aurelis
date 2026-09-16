@@ -4,6 +4,7 @@ struct MenuBarRootView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @EnvironmentObject private var controls: ExternalControlsCoordinator
+    @EnvironmentObject private var launchAtLogin: LaunchAtLoginController
     @ObservedObject var store: AudioControlStore
 
     @State private var keyboardSelectionID: AudioAppIdentity?
@@ -18,6 +19,7 @@ struct MenuBarRootView: View {
     @State private var nav = PopupKeyboardNavModel()
     @State private var popupOutputID: String?
     @FocusState private var popupFocused: Bool
+    @FocusState private var searchFocused: Bool
 
     private enum PopupDestination: Hashable {
         case process(AudioAppIdentity)
@@ -93,6 +95,13 @@ struct MenuBarRootView: View {
         return min(maximum, max(430, content + 190))
     }
 
+    private var rowShortcutsEnabled: Bool {
+        PopupKeyboardOwnership.rowShortcutsEnabled(
+            hasInspector: destination != nil,
+            isSearchFocused: searchFocused
+        )
+    }
+
     var body: some View {
         keyboardEnabledPopup
             .accessibilityHint(PopupKeyboardNavModel.accessibilityHint)
@@ -135,7 +144,10 @@ struct MenuBarRootView: View {
                 controls.isPopupVisible = false
                 endInspectorEdits()
             }
-            .sheet(isPresented: $showsFirstRun) { FirstRunView(store: store) }
+            .sheet(isPresented: $showsFirstRun) {
+                FirstRunView(store: store)
+                    .environmentObject(launchAtLogin)
+            }
             .alert("Save Mix Preset", isPresented: $showsSavePreset) {
                 TextField("Preset name", text: $presetName)
                 Button("Save") { store.createProfileIntent(named: presetName, scope: .global) }
@@ -157,17 +169,20 @@ struct MenuBarRootView: View {
                 showsRoutePicker = false
                 syncKeyboardNavigation()
             }
+            .onChange(of: searchFocused) { _, _ in
+                syncKeyboardNavigation()
+            }
     }
 
     private var navigationKeyEnabledPopup: some View {
         observedPopup
             .onKeyPress(.downArrow) {
-                guard destination == nil else { return .ignored }
+                guard rowShortcutsEnabled else { return .ignored }
                 if let next = nav.next(after: keyboardSelectionID) { keyboardSelectionID = next }
                 return .handled
             }
             .onKeyPress(.upArrow) {
-                guard destination == nil else { return .ignored }
+                guard rowShortcutsEnabled else { return .ignored }
                 if let previous = nav.previous(before: keyboardSelectionID) { keyboardSelectionID = previous }
                 return .handled
             }
@@ -176,22 +191,22 @@ struct MenuBarRootView: View {
     private var keyboardEnabledPopup: some View {
         navigationKeyEnabledPopup
             .onKeyPress(.space) {
-                guard destination == nil else { return .ignored }
+                guard rowShortcutsEnabled else { return .ignored }
                 toggleSelectedMute()
                 return .handled
             }
             .onKeyPress(.return) {
-                guard destination == nil else { return .ignored }
+                guard rowShortcutsEnabled else { return .ignored }
                 openSelectedProcessEQ()
                 return .handled
             }
             .onKeyPress(.leftArrow) {
-                guard destination == nil else { return .ignored }
+                guard rowShortcutsEnabled else { return .ignored }
                 adjustSelectedVolume(by: -store.settings.customization.volumeStep.fraction)
                 return .handled
             }
             .onKeyPress(.rightArrow) {
-                guard destination == nil else { return .ignored }
+                guard rowShortcutsEnabled else { return .ignored }
                 adjustSelectedVolume(by: store.settings.customization.volumeStep.fraction)
                 return .handled
             }
@@ -221,6 +236,7 @@ struct MenuBarRootView: View {
             VStack(spacing: 6) {
                 TextField("Search apps", text: $searchText)
                     .textFieldStyle(.roundedBorder)
+                    .focused($searchFocused)
                     .accessibilityLabel("Search audio apps")
 
                 Picker("Channels", selection: $channelFilter) {
@@ -682,7 +698,7 @@ struct MenuBarRootView: View {
     }
 
     private func syncKeyboardNavigation() {
-        nav.sync(apps: filteredRows.map(\.identity), isEditing: destination != nil)
+        nav.sync(apps: filteredRows.map(\.identity), isEditing: !rowShortcutsEnabled)
         if let keyboardSelectionID, !filteredRows.contains(where: { $0.identity == keyboardSelectionID }) {
             self.keyboardSelectionID = nil
         }

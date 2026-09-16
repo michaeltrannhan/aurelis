@@ -32,6 +32,21 @@ final class PopupKeyboardNavModelTests: XCTestCase {
         XCTAssertNil(nav.next(after: nil))
     }
 
+    func testRowShortcutsYieldKeyboardOwnershipToSearchAndInspector() {
+        XCTAssertTrue(PopupKeyboardOwnership.rowShortcutsEnabled(
+            hasInspector: false,
+            isSearchFocused: false
+        ))
+        XCTAssertFalse(PopupKeyboardOwnership.rowShortcutsEnabled(
+            hasInspector: true,
+            isSearchFocused: false
+        ))
+        XCTAssertFalse(PopupKeyboardOwnership.rowShortcutsEnabled(
+            hasInspector: false,
+            isSearchFocused: true
+        ))
+    }
+
     func testReturnTargetsSelectedRowOrDefaultsToFirstVisibleRow() {
         let nav = PopupKeyboardNavModel()
         let music = AudioAppIdentity(rawValue: "com.example.Music")

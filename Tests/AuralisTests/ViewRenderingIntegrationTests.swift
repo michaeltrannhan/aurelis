@@ -33,8 +33,10 @@ final class ViewRenderingIntegrationTests: XCTestCase {
         )
         try await store.refresh()
         let controls = ExternalControlsCoordinator()
+        let launchAtLogin = LaunchAtLoginController(client: RenderingLoginItemClient())
         let view = MenuBarRootView(store: store)
             .environmentObject(controls)
+            .environmentObject(launchAtLogin)
         let render = try await renderPNG(view, size: CGSize(width: 360, height: 660))
 
         XCTAssertEqual(render.size.width, 360)
@@ -87,6 +89,14 @@ final class ViewRenderingIntegrationTests: XCTestCase {
         withExtendedLifetime(window) {}
         return (png, hostingView.bounds.size)
     }
+}
+
+@MainActor
+private struct RenderingLoginItemClient: LoginItemClient {
+    func currentStatus() -> LoginItemStatus { .unavailable }
+    func register() throws {}
+    func unregister() throws {}
+    func openLoginItemsSettings() -> Bool { true }
 }
 
 private struct RenderingPermissionClient: AudioCapturePermissionClient {

@@ -4,6 +4,45 @@ import Foundation
 /// intent validation here makes every button produce the same versioned wire
 /// command that the host validates and acknowledges.
 public enum WidgetIntentCommandFactory {
+    public static func adjustAppVolume(appID: String, delta: Double,
+                                       now: Date = Date()) -> WidgetCommand? {
+        appCommand(appID: appID, action: .adjustVolume(delta), now: now)
+    }
+
+    public static func toggleAppMuted(appID: String, now: Date = Date()) -> WidgetCommand? {
+        appCommand(appID: appID, action: .toggleMuted, now: now)
+    }
+
+    public static func adjustOutputDeviceVolume(deviceID: String, delta: Double,
+                                                now: Date = Date()) -> WidgetCommand? {
+        outputGesture(deviceID: deviceID, action: .adjustVolume(delta), now: now)
+    }
+
+    public static func toggleOutputDeviceMuted(deviceID: String,
+                                               now: Date = Date()) -> WidgetCommand? {
+        outputGesture(deviceID: deviceID, action: .toggleMuted, now: now)
+    }
+
+    private static func outputGesture(deviceID: String, action: WidgetCommandAction,
+                                      now: Date) -> WidgetCommand? {
+        validated(WidgetCommand(
+            sequence: WidgetCommandSequence.next(),
+            createdAt: now,
+            targetType: .outputDevice,
+            targetIdentity: deviceID,
+            action: action
+        ), now: now)
+    }
+
+    public static func adjustEQBandGain(appID: String, band: Int, delta: Double,
+                                        now: Date = Date()) -> WidgetCommand? {
+        appCommand(appID: appID, action: .adjustEQBandGain(band: band, delta: delta), now: now)
+    }
+
+    public static func cycleAppBoost(appID: String, now: Date = Date()) -> WidgetCommand? {
+        appCommand(appID: appID, action: .cycleBoost, now: now)
+    }
+
     public static func setAppMuted(
         appID: String,
         muted: Bool,

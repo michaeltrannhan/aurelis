@@ -29,6 +29,26 @@ final class WidgetBridge: ObservableObject {
     private let watcher = WidgetCommandDirectoryWatcher()
     private var processor: WidgetCommandProcessor?
     private var isStarted = false
+    private var isStopping = false
+
+    /// A lifecycle invariant used by shutdown diagnostics and regression tests:
+    /// a stopped bridge must not retain transport work or command processors.
+    var hasActiveTransportResources: Bool {
+        !activeTransportResourceNames.isEmpty
+    }
+
+    var activeTransportResourceNames: [String] {
+        var names: [String] = []
+        if isStarted { names.append("started-state") }
+        if isStopping { names.append("stopping-state") }
+        if watcher.isActive { names.append("directory-watcher") }
+        if processor != nil { names.append("command-processor") }
+        if snapshotTask != nil { names.append("snapshot-task") }
+        if heartbeatTask != nil { names.append("heartbeat-task") }
+        if drainTask != nil { names.append("drain-task") }
+        if !subscriptions.isEmpty { names.append("store-subscriptions") }
+        return names
+    }
 
     init(
         store: AudioControlStore,
@@ -42,6 +62,12 @@ final class WidgetBridge: ObservableObject {
         self.store = store
         self.fileActor = WidgetIPCFileActor(layoutResolver: layoutResolver)
         self.reloadTimelines = reloadTimelines
+    }
+
+    deinit {
+        snapshotTask?.cancel()
+        heartbeatTask?.cancel()
+        drainTask?.cancel()
     }
 
     @discardableResult
@@ -69,9 +95,9 @@ final class WidgetBridge: ObservableObject {
         subscribe(to: store)
         processor = WidgetCommandProcessor(
             layout: resolvedLayout,
-            execute: { [weak store] command in
+            execute: { [weak store] command, claim in
                 guard let store else { throw WidgetBridgeError.storeUnavailable }
-                try await WidgetCommandStoreExecutor.apply(command, to: store)
+                try await WidgetCommandStoreExecutor.apply(command, claim: claim, to: store)
             },
             publishSnapshot: { [weak self] in
                 guard let self else { throw WidgetBridgeError.storeUnavailable }
@@ -79,10 +105,6 @@ final class WidgetBridge: ObservableObject {
             },
             resultPublished: { [weak self] _ in
                 self?.reloadTimelines()
-            },
-            resolveRelative: { [weak store] command in
-                guard let store else { throw WidgetBridgeError.storeUnavailable }
-                return try WidgetCommandStoreExecutor.resolveRelative(command, store: store)
             }
         )
 
@@ -91,13 +113,14 @@ final class WidgetBridge: ObservableObject {
             try watcher.start(fileDescriptor: descriptor) { [weak self] in
                 self?.drainCommands()
             }
-            isStarted = true
             _ = try await writeSnapshotNow(hostState: .running)
+            isStarted = true
             startHeartbeat()
             drainCommands()
             InternalDiagnostics.record("widget", "bridge.start complete=true")
             return true
         } catch {
+            isStarted = false
             watcher.stop()
             processor = nil
             subscriptions.removeAll()
@@ -109,14 +132,20 @@ final class WidgetBridge: ObservableObject {
 
     func stop() async {
         guard isStarted else { return }
+        guard !isStopping else { return }
+        isStopping = true
         InternalDiagnostics.record("widget", "bridge.stop begin")
         // Quiescent shutdown: stop watcher, await drain of in-flight work,
         // preserve unexecuted claims, write stopped snapshot, then clear processor.
         watcher.stop()
-        snapshotTask?.cancel()
+        let pendingSnapshotTask = snapshotTask
         snapshotTask = nil
-        heartbeatTask?.cancel()
+        pendingSnapshotTask?.cancel()
+        let pendingHeartbeatTask = heartbeatTask
         heartbeatTask = nil
+        pendingHeartbeatTask?.cancel()
+        if let pendingSnapshotTask { await pendingSnapshotTask.value }
+        if let pendingHeartbeatTask { await pendingHeartbeatTask.value }
         if let drainTask { await drainTask.value }
         drainTask = nil
         drainRequested = false
@@ -125,12 +154,15 @@ final class WidgetBridge: ObservableObject {
         if (try? await writeSnapshotNow(hostState: .stopped)) != nil {
             reloadTimelines()
         }
+        processor = nil
         isStarted = false
+        isStopping = false
         InternalDiagnostics.record("widget", "bridge.stop complete")
     }
 
     /// Forces an immediate snapshot write, bypassing the debounce.
     func flush() async {
+        guard isStarted, !isStopping else { return }
         snapshotTask?.cancel()
         snapshotTask = nil
         do {
@@ -152,12 +184,13 @@ final class WidgetBridge: ObservableObject {
     }
 
     private func scheduleSnapshotWrite() {
+        guard isStarted, !isStopping else { return }
         snapshotTask?.cancel()
+        let delay = snapshotDebounce
         snapshotTask = Task { [weak self] in
-            guard let self else { return }
-            do { try await Task.sleep(nanoseconds: snapshotDebounce) }
+            do { try await Task.sleep(nanoseconds: delay) }
             catch { return }
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, let self else { return }
             do {
                 _ = try await writeSnapshotNow(hostState: .running)
             } catch {
@@ -169,12 +202,12 @@ final class WidgetBridge: ObservableObject {
 
     private func startHeartbeat() {
         heartbeatTask?.cancel()
+        let interval = heartbeatInterval
         heartbeatTask = Task { [weak self] in
-            guard let self else { return }
             while !Task.isCancelled {
-                do { try await Task.sleep(nanoseconds: heartbeatInterval) }
+                do { try await Task.sleep(nanoseconds: interval) }
                 catch { return }
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, let self else { return }
                 do {
                     _ = try await writeSnapshotNow(hostState: .running)
                     // The directory DispatchSource is the low-latency path.
@@ -261,6 +294,7 @@ final class WidgetBridge: ObservableObject {
     }
 
     private func drainCommands() {
+        guard isStarted, !isStopping else { return }
         guard let processor else { return }
         guard drainTask == nil else {
             drainRequested = true

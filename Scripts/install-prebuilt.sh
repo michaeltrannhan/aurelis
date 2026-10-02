@@ -14,7 +14,7 @@ set -eu
 # Without those flags the app is left under --output (default .build/prebuilt).
 # Prefers a local .build/release zip from package-release.sh when present.
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$SCRIPT_DIR/lib.sh"
 # shellcheck disable=SC1091
@@ -53,7 +53,7 @@ while [ $# -gt 0 ]; do
         --user) INSTALL_SCOPE=user ;;
         --no-launch) LAUNCH_APP=NO ;;
         --allow-missing) ALLOW_MISSING=YES ;;
-        --yes|-y) AURALIS_YES=YES ;;
+        --yes|-y) ;;
         -h|--help) usage ;;
         *) usage ;;
     esac
@@ -144,8 +144,7 @@ esac
 EXTRACTED_APP=$UNPACK_ROOT/$APP_PRODUCT_NAME.app
 [ -d "$EXTRACTED_APP" ] ||
     fail "archive did not contain $APP_PRODUCT_NAME.app at its root"
-/usr/bin/codesign --verify --deep --strict "$EXTRACTED_APP" ||
-    fail "unpacked app failed signature verification"
+auralis_validate_signed_app "$EXTRACTED_APP"
 
 STAGED_APP=$OUTPUT_DIRECTORY/$APP_PRODUCT_NAME.app
 /bin/rm -rf "$STAGED_APP"

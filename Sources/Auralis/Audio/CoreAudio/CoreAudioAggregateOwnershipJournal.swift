@@ -118,7 +118,7 @@ private struct CoreAudioAggregateOwnershipPayload: Codable {
     }
 }
 
-private actor CoreAudioAggregateOwnershipPersistenceActor {
+private final class CoreAudioAggregateOwnershipPersistence {
     let journalURL: URL
     let aggregateUIDPrefix: String
 
@@ -196,19 +196,16 @@ private actor CoreAudioAggregateOwnershipPersistenceActor {
     }
 }
 
-private final class BlockingAggregateJournalResult<Value>: @unchecked Sendable {
-    var result: Result<Value, Error>?
-}
-
-/// Synchronous lifecycle facade backed by an actor. Aggregate creation cannot
-/// proceed until its ownership record is durably written, while the filesystem
-/// work itself executes outside the caller's actor/executor.
+/// Synchronous lifecycle persistence serialized on a private filesystem queue.
+/// Aggregate creation cannot proceed until its ownership record is durably
+/// written; each load-modify-save transaction executes as one queue operation.
 final class CoreAudioAggregateOwnershipJournal: CoreAudioAggregateOwnershipJournaling, @unchecked Sendable {
     static let shared = CoreAudioAggregateOwnershipJournal()
 
     let journalURL: URL
     let aggregateUIDPrefix: String
-    private let persistence: CoreAudioAggregateOwnershipPersistenceActor
+    private let persistence: CoreAudioAggregateOwnershipPersistence
+    private let queue = DispatchQueue(label: "Auralis.AggregateOwnershipPersistence")
 
     init(
         journalURL: URL = CoreAudioAggregateOwnershipJournal.defaultJournalURL(),
@@ -216,26 +213,22 @@ final class CoreAudioAggregateOwnershipJournal: CoreAudioAggregateOwnershipJourn
     ) {
         self.journalURL = journalURL
         self.aggregateUIDPrefix = aggregateUIDPrefix
-        persistence = CoreAudioAggregateOwnershipPersistenceActor(
+        persistence = CoreAudioAggregateOwnershipPersistence(
             journalURL: journalURL,
             aggregateUIDPrefix: aggregateUIDPrefix
         )
     }
 
     func records() throws -> [CoreAudioAggregateOwnershipRecord] {
-        try Self.wait { [persistence] in try await persistence.records() }
+        try queue.sync { try persistence.records() }
     }
 
     func recordAggregate(uid: String, deviceID: AudioObjectID) throws {
-        try Self.wait { [persistence] in
-            try await persistence.recordAggregate(uid: uid, deviceID: deviceID)
-        }
+        try queue.sync { try persistence.recordAggregate(uid: uid, deviceID: deviceID) }
     }
 
     func removeAggregate(uid: String) throws {
-        try Self.wait { [persistence] in
-            try await persistence.removeAggregate(uid: uid)
-        }
+        try queue.sync { try persistence.removeAggregate(uid: uid) }
     }
 
     static func defaultJournalURL() -> URL {
@@ -249,20 +242,4 @@ final class CoreAudioAggregateOwnershipJournal: CoreAudioAggregateOwnershipJourn
             .appendingPathComponent("aggregate-ownership.json")
     }
 
-    private static func wait<Value: Sendable>(
-        _ operation: @escaping @Sendable () async throws -> Value
-    ) throws -> Value {
-        let semaphore = DispatchSemaphore(value: 0)
-        let box = BlockingAggregateJournalResult<Value>()
-        Task.detached(priority: .userInitiated) {
-            do {
-                box.result = .success(try await operation())
-            } catch {
-                box.result = .failure(error)
-            }
-            semaphore.signal()
-        }
-        semaphore.wait()
-        return try box.result!.get()
-    }
 }

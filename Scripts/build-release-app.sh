@@ -4,7 +4,7 @@ set -eu
 # Build and validate the Release app and embedded widget. Release products do
 # not receive a repo-local runtime log path or compile DEBUG diagnostics.
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$SCRIPT_DIR/lib.sh"
 
@@ -19,7 +19,7 @@ OUTPUT_APP_OVERRIDE=${OUTPUT_APP_OVERRIDE:-$REPOSITORY_ROOT/.build/products/Rele
 CONFIGURATION=Release \
 RUN_TESTS="$RUN_TESTS" \
 OUTPUT_APP_OVERRIDE="$OUTPUT_APP_OVERRIDE" \
-AURALIS_DEBUG_LOG_PATH= \
+AURALIS_DEBUG_LOG_PATH='' \
 AURALIS_DIAGNOSTICS_MODE=minimal \
 LOG_VARIANT=${LOG_VARIANT:-release} \
     "$SCRIPT_DIR/build-app.sh"

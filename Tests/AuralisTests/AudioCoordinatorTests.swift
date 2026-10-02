@@ -56,6 +56,72 @@ final class AudioCoordinatorTests: XCTestCase {
         XCTAssertTrue(report.succeeded)
     }
 
+    func testTopologyObservationStopsSymmetricallyAndRestartsWithFreshStream() async {
+        let backend = ObservingCoordinatorBackend()
+        let engine = AudioEngineActor(
+            backend: backend,
+            initialMode: .mock,
+            backendFactory: { _ in ObservingCoordinatorBackend() }
+        )
+        await engine.startObservation(debounceNanoseconds: 0)
+        XCTAssertEqual(backend.startCount, 1)
+        await engine.stopObservation()
+        XCTAssertEqual(backend.stopCount, 1)
+        await engine.startObservation(debounceNanoseconds: 0)
+        XCTAssertEqual(backend.startCount, 2)
+        let report = await engine.shutdown()
+        XCTAssertTrue(report.stoppedTopologyObservation)
+        XCTAssertEqual(backend.stopCount, 2)
+        await engine.startObservation()
+        XCTAssertEqual(backend.startCount, 2, "Shutdown must close observation admission")
+    }
+
+    func testConcurrentShutdownClosesDirectBackendAdmission() async throws {
+        let backend = CoordinatorBackend()
+        let engine = AudioEngineActor(
+            backend: backend,
+            initialMode: .mock,
+            backendFactory: { _ in CoordinatorBackend() }
+        )
+        async let first = engine.shutdown()
+        async let second = engine.shutdown()
+        let reports = await (first, second)
+        XCTAssertEqual(reports.0, reports.1)
+        XCTAssertEqual(backend.tearDownAllCount, 1)
+        do {
+            _ = try await engine.fetchTopologySnapshot()
+            XCTFail("A stopped engine must reject discovery")
+        } catch {}
+        do {
+            try await engine.apply(.setMuted(.init(rawValue: "music"), true))
+            XCTFail("A stopped engine must reject commands")
+        } catch {}
+        do {
+            _ = try await engine.beginBackendSwitch(to: .coreAudioDiscovery)
+            XCTFail("A stopped engine must reject backend replacement")
+        } catch {}
+        XCTAssertTrue(backend.commands.isEmpty)
+        XCTAssertEqual(backend.tearDownAllCount, 1)
+    }
+
+    func testMeterObservationTaskDoesNotRetainReleasedEngine() async {
+        weak var releasedEngine: AudioEngineActor?
+        var engine: AudioEngineActor? = AudioEngineActor(
+            backend: MeteringCoordinatorBackend(),
+            initialMode: .mock,
+            backendFactory: { _ in MeteringCoordinatorBackend() }
+        )
+        releasedEngine = engine
+
+        await engine?.startObservation(meterIntervalNanoseconds: 60_000_000_000)
+        engine = nil
+        for _ in 0..<100 where releasedEngine != nil {
+            await Task.yield()
+        }
+
+        XCTAssertNil(releasedEngine, "The engine's meter task must not form an owner-task retain cycle")
+    }
+
     func testPermissionCoordinatorMapsAndDelegates() {
         let client = CoordinatorPermissionClient(state: .init(screenCapture: .denied, audioUsageDescription: .present))
         let coordinator = AudioPermissionCoordinator(client: client)
@@ -219,6 +285,12 @@ private final class CoordinatorBackend: AudioBackend, AudioBackendStatusProvidin
     func tearDownAllTaps() throws { lock.withLock { storedTearDownAllCount += 1 } }
 }
 
+private final class MeteringCoordinatorBackend: AudioBackend, AudioBackendAppLevelProviding {
+    func fetchSnapshot() throws -> AudioBackendSnapshot { AudioBackendSnapshot() }
+    func apply(_ command: AudioBackendCommand) throws {}
+    func consumeAppLevels() -> [AudioAppIdentity: Double] { [:] }
+}
+
 private final class CoordinatorPermissionClient: AudioCapturePermissionClient {
     let state: AudioCapturePermissionState
     let requestState: AudioCapturePermissionState
@@ -232,4 +304,34 @@ private final class CoordinatorPermissionClient: AudioCapturePermissionClient {
     func requestScreenCaptureAccess() -> AudioCapturePermissionState { requestState }
     func openPrivacySettings() { openCount += 1 }
     func relaunchApp() async throws { relaunchCount += 1 }
+}
+
+private final class ObservingCoordinatorBackend: AudioBackend, AudioBackendUpdatePublishing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: AsyncStream<Void>.Continuation?
+    private var starts = 0
+    private var stops = 0
+
+    var startCount: Int { lock.withLock { starts } }
+    var stopCount: Int { lock.withLock { stops } }
+
+    var updateEvents: AsyncStream<Void> {
+        lock.withLock {
+            starts += 1
+            let events = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            continuation = events.continuation
+            return events.stream
+        }
+    }
+
+    func stopPublishingUpdates() {
+        lock.withLock {
+            stops += 1
+            continuation?.finish()
+            continuation = nil
+        }
+    }
+
+    func fetchSnapshot() throws -> AudioBackendSnapshot { AudioBackendSnapshot() }
+    func apply(_ command: AudioBackendCommand) throws {}
 }

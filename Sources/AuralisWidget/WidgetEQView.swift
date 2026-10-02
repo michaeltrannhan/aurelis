@@ -2,9 +2,8 @@ import AuralisWidgetShared
 import SwiftUI
 import WidgetKit
 
-/// systemLarge widget view: a focused 10-band EQ for the first active app.
-/// macOS doesn't provide an extra-large widget family, so the ten bands use a
-/// two-row layout instead of squeezing every control into one 344-point row.
+/// Preserves the installed EQ widget kind while giving every advertised family
+/// a usable app remote. Ten-band EQ remains available in the large family.
 struct AuralisEQWidgetView: View {
     let entry: AuralisEntry
 
@@ -12,65 +11,107 @@ struct AuralisEQWidgetView: View {
         WidgetMixerPresentation(snapshot: entry.snapshot, date: entry.date, maximumAppCount: 2)
     }
 
-    private var controlsEnabled: Bool {
-        presentation.controlsEnabled
-    }
-
-    private var eqApp: WidgetSnapshot.AppSummary? {
-        entry.snapshot.apps.first(where: \.isActive) ?? entry.snapshot.apps.first
+    private var app: WidgetSnapshot.AppSummary? {
+        entry.snapshot.apps.first(where: \.isActive)
+            ?? entry.snapshot.apps.first(where: \.isPinned)
+            ?? entry.snapshot.apps.first
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            header
-            Divider()
-            if let app = eqApp {
-                WidgetEQChart(app: app, controlsEnabled: controlsEnabled)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                AuralisWidgetMark().frame(width: 22, height: 22)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Quick Remote").font(.caption.weight(.semibold))
+                    if !presentation.controlsEnabled {
+                        Text("Open Auralis").font(.system(size: 10)).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+                WidgetOpenLink()
+            }
+            if let app {
+                if entry.family == .systemSmall {
+                    compactRemote(app)
+                } else if entry.family == .systemLarge {
+                    WidgetAppRow(app: app, volumeStep: entry.snapshot.volumeStep,
+                                 controlsEnabled: presentation.controlsEnabled)
+                    WidgetEQChart(app: app, controlsEnabled: presentation.controlsEnabled)
+                    Text("Process EQ · 0.5 dB steps").font(.caption2).foregroundStyle(.secondary)
+                } else {
+                    HStack(spacing: 16) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(app.displayName).font(.headline).lineLimit(1)
+                            Text(app.isMuted ? "Muted" : "\(Int((app.volume * 100).rounded()))%")
+                                .font(.system(size: 25, weight: .semibold, design: .rounded).monospacedDigit())
+                            WidgetVolumeRail(volume: app.volume, isMuted: app.isMuted)
+                            Text(app.routeLabel).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(spacing: 6) {
+                            appControls(app)
+                            boostButton(app)
+                        }
+                    }
+                }
             } else {
-                Spacer(minLength: 0)
-                Text("No audio app to equalize")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                Spacer(minLength: 0)
-            }
-            footer
-        }
-        .padding(10)
-    }
-
-    private var header: some View {
-        HStack(spacing: 8) {
-            AuralisWidgetMark()
-                .frame(width: 26, height: 26)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Auralis EQ")
-                    .font(.subheadline.weight(.semibold))
-                Text(controlsEnabled ? entry.snapshot.statusMessage : "Open Auralis to use controls")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                Text(presentation.controlsEnabled ? "Play audio to control an app" : "Open Auralis to use controls")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             }
             Spacer(minLength: 0)
-            Button(intent: RefreshAppIntent()) {
-                Image(systemName: "arrow.clockwise")
+        }
+        .padding(12)
+        .tint(WidgetPalette.cyan)
+    }
+
+    private func compactRemote(_ app: WidgetSnapshot.AppSummary) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(app.displayName).font(.caption.weight(.medium)).lineLimit(1)
+            HStack {
+                Text(app.isMuted ? "Muted" : "\(Int((app.volume * 100).rounded()))%")
+                    .font(.system(size: 22, weight: .semibold, design: .rounded).monospacedDigit())
+                Spacer(minLength: 0)
+                boostButton(app)
             }
-            .disabled(!controlsEnabled)
-            .accessibilityLabel("Refresh audio apps")
+            WidgetVolumeRail(volume: app.volume, isMuted: app.isMuted)
+            appControls(app)
         }
     }
 
-    private var footer: some View {
-        HStack {
-            Text("0.5 dB steps · Fine-tune in the app")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-            Spacer(minLength: 0)
-            Link(destination: AuralisDeepLink.openMixer) {
-                Label("Open", systemImage: "arrow.up.right.square")
-                    .font(.caption2.weight(.semibold))
+    private func appControls(_ app: WidgetSnapshot.AppSummary) -> some View {
+        HStack(spacing: 4) {
+            Button(intent: AdjustAppVolumeIntent(appID: app.id, delta: -entry.snapshot.volumeStep)) {
+                controlIcon("minus")
             }
+            .accessibilityLabel(WidgetMixerPresentation.volumeLabel(name: app.displayName, direction: -1))
+            Button(intent: ToggleAppMutedIntent(appID: app.id)) {
+                controlIcon(app.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+            }
+            .accessibilityLabel(WidgetMixerPresentation.muteLabel(name: app.displayName, isMuted: app.isMuted))
+            Button(intent: AdjustAppVolumeIntent(appID: app.id, delta: entry.snapshot.volumeStep)) {
+                controlIcon("plus")
+            }
+            .accessibilityLabel(WidgetMixerPresentation.volumeLabel(name: app.displayName, direction: 1))
         }
+        .buttonStyle(.plain)
+        .disabled(!presentation.controlsEnabled)
+    }
+
+    private func controlIcon(_ symbol: String) -> some View {
+        Image(systemName: symbol).font(.caption.weight(.semibold))
+            .frame(width: 30, height: 28)
+            .background(WidgetPalette.panel, in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    private func boostButton(_ app: WidgetSnapshot.AppSummary) -> some View {
+        Button(intent: CycleAppBoostIntent(appID: app.id)) {
+            Text("\(Int(app.boost))×").font(.caption.weight(.semibold))
+                .frame(minWidth: 32, minHeight: 28)
+                .background(WidgetPalette.panel, in: RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain).disabled(!presentation.controlsEnabled)
+        .accessibilityLabel(WidgetMixerPresentation.boostLabel(name: app.displayName))
     }
 }
 
@@ -128,7 +169,7 @@ struct WidgetEQChart: View {
                 Spacer(minLength: 0)
                 Text(String(format: "%+.1f", gain))
                     .font(.system(size: 8, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(abs(gain) < 0.05 ? Color.secondary : Color.accentColor)
+                    .foregroundStyle(abs(gain) < 0.05 ? Color.secondary : WidgetPalette.cyan)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
@@ -140,41 +181,40 @@ struct WidgetEQChart: View {
                 Rectangle()
                     .fill(Color.secondary.opacity(0.28))
                     .frame(width: 14, height: 1)
-                    .offset(y: 18)
+                    .offset(y: 12)
                 Circle()
                     .fill(Color(nsColor: .controlBackgroundColor))
-                    .overlay(Circle().fill(Color.accentColor).frame(width: 6, height: 6))
+                    .overlay(Circle().fill(WidgetPalette.cyan).frame(width: 6, height: 6))
                     .frame(width: 12, height: 12)
-                    .offset(y: (1 - normalized) * 30)
+                    .offset(y: (1 - normalized) * 18)
             }
-            .frame(height: 42)
+            .frame(height: 30)
 
             HStack(spacing: 4) {
-                gainButton(index: index, gain: gain, direction: -1, systemName: "minus")
-                gainButton(index: index, gain: gain, direction: 1, systemName: "plus")
+                gainButton(index: index, direction: -1, systemName: "minus")
+                gainButton(index: index, direction: 1, systemName: "plus")
             }
         }
         .padding(6)
-        .frame(maxWidth: .infinity, minHeight: 92)
-        .background(Color.black.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
+        .frame(maxWidth: .infinity, minHeight: 80)
+        .background(WidgetPalette.panel, in: RoundedRectangle(cornerRadius: 9))
     }
 
     private func gainButton(
         index: Int,
-        gain: Double,
         direction: Double,
         systemName: String
     ) -> some View {
-        Button(intent: SetEQBandGainAppIntent(
+        Button(intent: AdjustEQBandGainAppIntent(
             appID: app.id,
             band: index,
-            gain: steppedGain(gain, direction: direction)
+            delta: direction * 0.5
         )) {
             Image(systemName: systemName)
                 .font(.system(size: 8, weight: .bold))
                 .frame(maxWidth: .infinity)
                 .frame(height: 20)
-                .background(Color.accentColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 6))
+                .background(WidgetPalette.cyan.opacity(0.16), in: RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
         .disabled(!controlsEnabled)
@@ -188,9 +228,6 @@ struct WidgetEQChart: View {
         )
     }
 
-    private func steppedGain(_ gain: Double, direction: Double) -> Double {
-        min(max(gain + direction * 0.5, -range), range)
-    }
 }
 
 /// Frequency labels shared with `EQCurve.frequencies` in the app. Defined here

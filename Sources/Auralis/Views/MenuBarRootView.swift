@@ -3,6 +3,7 @@ import SwiftUI
 struct MenuBarRootView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var controls: ExternalControlsCoordinator
     @EnvironmentObject private var launchAtLogin: LaunchAtLoginController
     @ObservedObject var store: AudioControlStore
@@ -10,7 +11,7 @@ struct MenuBarRootView: View {
     @State private var keyboardSelectionID: AudioAppIdentity?
     @State private var destination: PopupDestination?
     @State private var searchText = ""
-    @State private var channelFilter: PopupChannelFilter = .playing
+    @State private var channelFilter: MixerChannelFilter = .playing
     @State private var showsRoutePicker = false
     @State private var showsSavePreset = false
     @State private var presetName = ""
@@ -26,21 +27,6 @@ struct MenuBarRootView: View {
         case output(String)
     }
 
-    private enum PopupChannelFilter: String, CaseIterable, Identifiable {
-        case playing
-        case pinned
-        case all
-
-        var id: String { rawValue }
-
-        var title: String {
-            switch self {
-            case .playing: "Playing"
-            case .pinned: "Pinned"
-            case .all: "All"
-            }
-        }
-    }
 
     private var dimensions: PopupDimensions {
         store.settings.customization.popupDensity.dimensions
@@ -54,18 +40,11 @@ struct MenuBarRootView: View {
         )
     }
 
-    private var filteredRows: [DisplayableAppRow] {
-        store.displayRows.filter { row in
-            switch channelFilter {
-            case .playing: row.isActive
-            case .pinned: row.isPinned
-            case .all: true
-            }
-        }.filter { row in
-            let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-            return query.isEmpty || row.displayName.localizedCaseInsensitiveContains(query)
-        }
+    private var listPresentation: MixerListPresentation {
+        MixerListPresentation(rows: store.displayRows, search: searchText, filter: channelFilter, phase: store.mixerPhase)
     }
+
+    private var filteredRows: [DisplayableAppRow] { listPresentation.rows }
 
     private var popupOutputPager: OutputDevicePagerModel {
         OutputDevicePagerModel(
@@ -92,7 +71,9 @@ struct MenuBarRootView: View {
             availableScreenHeight: availableScreenHeight,
             deviceCount: popupOutputPager.deviceIDs.isEmpty ? 0 : 1
         )
-        return min(maximum, max(430, content + 190))
+        // Reserve the output card, search/filter controls, result count and
+        // fixed keyboard footer before allocating scrollable row space.
+        return min(maximum, max(580, content + 200))
     }
 
     private var rowShortcutsEnabled: Bool {
@@ -112,10 +93,10 @@ struct MenuBarRootView: View {
         Group {
             if destination == nil {
                 mixerPage
-                    .transition(.move(edge: .leading).combined(with: .opacity))
+                    .transition(reduceMotion ? .identity : .move(edge: .leading).combined(with: .opacity))
             } else {
                 inspectorPage
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .transition(reduceMotion ? .identity : .move(edge: .trailing).combined(with: .opacity))
             }
         }
     }
@@ -234,22 +215,55 @@ struct MenuBarRootView: View {
             popupOutputDeck
 
             VStack(spacing: 6) {
-                TextField("Search apps", text: $searchText)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($searchFocused)
-                    .accessibilityLabel("Search audio apps")
-
-                Picker("Channels", selection: $channelFilter) {
-                    ForEach(PopupChannelFilter.allCases) { filter in
-                        Text(filter.title).tag(filter)
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    TextField("Search apps", text: $searchText)
+                        .textFieldStyle(.plain)
+                        .focused($searchFocused)
+                        .accessibilityLabel("Search audio apps")
+                    if !searchText.isEmpty {
+                        Button { searchText = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear search")
                     }
                 }
-                .pickerStyle(.segmented)
+                .padding(.horizontal, 8)
+                .frame(minHeight: 28)
+                .background(AuralisColor.mutedPanel, in: RoundedRectangle(cornerRadius: 7))
+                .overlay { RoundedRectangle(cornerRadius: 7).stroke(AuralisColor.hairline) }
+
+                HStack(spacing: 8) {
+                    Text("Channels")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    Picker("Channels", selection: $channelFilter) {
+                        ForEach(MixerChannelFilter.allCases) { filter in
+                            Text(filter.title).tag(filter)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .frame(width: 180)
+                    Text("\(filteredRows.count) results")
+                        .font(AuralisTypography.metric(10))
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                }
+
             }
 
             Divider()
 
             appList
+            keyboardHint
         }
     }
 
@@ -334,14 +348,12 @@ struct MenuBarRootView: View {
                                 }
                             }
                         }
-
-                        keyboardHint
                     }
                 }
             }
             .onChange(of: keyboardSelectionID) { _, identity in
                 guard let identity else { return }
-                withAnimation(.easeInOut(duration: 0.12)) {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.12)) {
                     proxy.scrollTo(identity, anchor: .center)
                 }
             }
@@ -349,27 +361,20 @@ struct MenuBarRootView: View {
     }
 
     private var popupEmptyState: some View {
-        Group {
-            if !searchText.isEmpty || channelFilter != .all {
-                VStack(spacing: 7) {
-                    Image(systemName: "line.3.horizontal.decrease.circle")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                    Text("No matching apps").font(.headline)
-                    Button("Show All") {
-                        searchText = ""
-                        channelFilter = .all
-                    }
-                    .controlSize(.small)
-                }
-                .frame(maxWidth: .infinity)
-            } else {
-                MixerEmptyStateView(
-                    state: MixerEmptyState(phase: store.mixerPhase),
-                    onRefresh: { store.refreshIntent() },
-                    onShowInactive: showInactiveApps
-                )
-            }
+        MixerEmptyStateView(
+            state: listPresentation.emptyState,
+            onRefresh: { store.refreshIntent() },
+            onShowInactive: showInactiveApps,
+            onResetFilter: resetEmptyFilter,
+            compact: true
+        )
+    }
+
+    private func resetEmptyFilter() {
+        if listPresentation.emptyState == .noMatchingApps {
+            searchText = ""
+        } else {
+            channelFilter = .all
         }
     }
 
@@ -394,6 +399,14 @@ struct MenuBarRootView: View {
                     }
                 }
             }
+            HStack(spacing: 6) {
+                Image(systemName: "keyboard").accessibilityHidden(true)
+                Text("←/→ select band · ↑/↓ adjust gain")
+                    .font(.system(size: 10))
+            }
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+            .overlay(alignment: .top) { Divider().opacity(0.5) }
         }
     }
 
@@ -413,8 +426,9 @@ struct MenuBarRootView: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(inspectorTitle)
-                    .font(AuralisTypography.workspaceTitle(16))
+                    .font(.system(size: 14, weight: .semibold))
                     .lineLimit(1)
+                    .help(inspectorTitle)
                 Text(inspectorStageLabel)
                     .font(AuralisTypography.metric(9))
                     .foregroundStyle(inspectorAccent)
@@ -443,7 +457,7 @@ struct MenuBarRootView: View {
     private func processInspector(_ row: DisplayableAppRow) -> some View {
         EQBandEditor(store: store, row: row, style: .compact, onClose: closeInspector)
 
-        PopupInspectorSection(title: "ROUTE", accent: AuralisColor.signalCyan) {
+        PopupInspectorSection(title: "PLAY THROUGH", accent: AuralisColor.signalCyan) {
             Button { showsRoutePicker = true } label: {
                 HStack {
                     VStack(alignment: .leading, spacing: 1) {
@@ -471,7 +485,7 @@ struct MenuBarRootView: View {
             }
         }
 
-        PopupInspectorSection(title: "ROUTED OUTPUTS", accent: AuralisColor.peakRose) {
+        PopupInspectorSection(title: "TUNE YOUR OUTPUTS", accent: AuralisColor.peakRose) {
             let outputs = row.settings.route.resolvedDevices(in: store.devices)
             if outputs.isEmpty {
                 Text("No connected destination")
@@ -568,11 +582,11 @@ struct MenuBarRootView: View {
             } else {
                 Circle().fill(statusTint).frame(width: 6, height: 6)
             }
-            Text("\(filteredRows.filter(\.isActive).count)/\(store.displayRows.count)")
-                .font(AuralisTypography.metric(9))
+            Text("\(store.displayRows.filter(\.isActive).count) playing")
+                .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 8)
         .frame(height: 22)
         .background(AuralisColor.mutedPanel, in: Capsule())
         .help(store.statusMessage)
@@ -634,13 +648,14 @@ struct MenuBarRootView: View {
     private var keyboardHint: some View {
         HStack(spacing: 7) {
             Image(systemName: "keyboard").foregroundStyle(.secondary)
-            Text(PopupKeyboardNavModel.visibleKeyboardHint)
-                .font(.caption2)
+            Text("Use arrow keys to navigate")
+                .font(.system(size: 10))
                 .foregroundStyle(.secondary)
             Spacer()
         }
-        .padding(9)
-        .background(AuralisColor.mutedPanel, in: RoundedRectangle(cornerRadius: 9))
+        .frame(height: 34)
+        .help(PopupKeyboardNavModel.visibleKeyboardHint)
+        .overlay(alignment: .top) { Divider().opacity(0.5) }
     }
 
     private var statusTint: Color {
@@ -728,7 +743,7 @@ struct MenuBarRootView: View {
     private func openProcessEQ(_ identity: AudioAppIdentity) {
         endInspectorEdits()
         keyboardSelectionID = identity
-        withAnimation(.easeInOut(duration: 0.16)) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) {
             destination = .process(identity)
         }
     }
@@ -736,7 +751,7 @@ struct MenuBarRootView: View {
     private func openOutputEQ(_ deviceID: String) {
         endInspectorEdits()
         popupOutputID = deviceID
-        withAnimation(.easeInOut(duration: 0.16)) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) {
             destination = .output(deviceID)
         }
     }
@@ -750,7 +765,7 @@ struct MenuBarRootView: View {
 
     private func closeInspector() {
         endInspectorEdits()
-        withAnimation(.easeInOut(duration: 0.16)) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) {
             destination = nil
         }
     }
@@ -778,6 +793,8 @@ struct MenuBarRootView: View {
     private func showInactiveApps() {
         var customization = store.settings.customization
         customization.showInactiveApps = true
+        channelFilter = .all
+        searchText = ""
         store.applyCustomizationIntent(customization)
     }
 }
@@ -813,6 +830,7 @@ private struct PopupOutputMaster: View {
                     Text(model.name)
                         .font(.caption.weight(.semibold))
                         .lineLimit(1)
+                        .help(model.name)
                 }
                 Spacer(minLength: 3)
                 if !model.isDefault {
@@ -850,12 +868,17 @@ private struct PopupOutputMaster: View {
                 if let onTune {
                     Button(action: onTune) {
                         HStack(spacing: 4) {
-                            Circle().fill(AuralisColor.peakRose).frame(width: 6, height: 6)
+                            Circle().fill(AuralisColor.stageAccent(.output)).frame(width: 6, height: 6)
                             Text("Output EQ")
+                                .font(.caption2.weight(.medium))
                         }
                         .frame(minHeight: 28)
+                        .padding(.horizontal, 6)
+                        .foregroundStyle(AuralisColor.stageAccent(.output))
+                        .background(AuralisColor.stageAccent(.output).opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+                        .overlay { RoundedRectangle(cornerRadius: 6).stroke(AuralisColor.stageAccent(.output).opacity(0.3)) }
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.plain)
                     .accessibilityLabel("Tune Output EQ for \(model.name)")
                 }
             }
@@ -877,7 +900,7 @@ private struct PopupOutputMaster: View {
                 }
 
                 if presentation.showsVolume {
-                    Slider(
+                    VolumeSlider(
                         value: Binding(
                             get: { model.visibleVolume },
                             set: { value in
@@ -886,12 +909,13 @@ private struct PopupOutputMaster: View {
                                 )
                             }
                         ),
-                        in: 0...1,
+                        isMuted: model.visibleMuted,
                         onEditingChanged: { editing in
                             if !editing { store.commandCoordinator.flushContinuous(for: target) }
                         }
                     )
                     .disabled(!presentation.enablesVolume)
+                    .accessibilityLabel("Volume for \(model.name)")
                     Text("\(Int((model.visibleVolume * 100).rounded()))%")
                         .font(AuralisTypography.metric(10))
                         .frame(width: 36, alignment: .trailing)
@@ -919,7 +943,7 @@ private struct PopupOutputMaster: View {
         return Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 8, weight: .bold))
-                .frame(width: 22, height: 24)
+                .frame(width: 28, height: 28)
                 .background(AuralisColor.mutedPanel, in: RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)

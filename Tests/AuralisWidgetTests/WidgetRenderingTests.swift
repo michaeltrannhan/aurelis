@@ -15,57 +15,68 @@ final class WidgetRenderingTests: XCTestCase {
         )
     }
 
-    func testProductionFamiliesRenderRunningAndClosedHosts() throws {
+    func testProductionFamiliesRenderRunningAndClosedHosts() async throws {
+        let families: [(WidgetFamily, CGSize, String)] = [
+            (.systemSmall, CGSize(width: 158, height: 158), "small"),
+            (.systemMedium, CGSize(width: 338, height: 158), "medium"),
+            (.systemLarge, CGSize(width: 344, height: 344), "large")
+        ]
+        let originalAppearance = NSApp.appearance
+        defer { NSApp.appearance = originalAppearance }
+        for (state, stateName) in [(WidgetHostState.running, "running"), (.stopped, "closed")] {
+            for (family, size, familyName) in families {
+                for scheme in [ColorScheme.light, .dark] {
+                    NSApp.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+                    let entry = makeEntry(hostState: state).withFamily(family)
+                    let suffix = "\(familyName)-\(stateName)-\(scheme == .dark ? "dark" : "light")"
+                    try await assertRenders(AuralisMixerWidgetView(entry: entry).environment(\.colorScheme, scheme),
+                                      size: size, scheme: scheme, captureName: "mixer-\(suffix)")
+                    try await assertRenders(AuralisEQWidgetView(entry: entry).environment(\.colorScheme, scheme),
+                                      size: size, scheme: scheme, captureName: "remote-\(suffix)")
+                }
+            }
+        }
         let running = makeEntry(hostState: .running)
-        try assertRenders(
-            AuralisMixerWidgetView(entry: running.withFamily(.systemSmall)),
-            size: CGSize(width: 158, height: 158),
-            captureName: "mixer-small"
-        )
-        try assertRenders(
-            AuralisMixerWidgetView(entry: running.withFamily(.systemMedium)),
-            size: CGSize(width: 338, height: 158),
-            captureName: "mixer-medium"
-        )
-        try assertRenders(
-            AuralisMixerWidgetView(entry: running.withFamily(.systemLarge)),
-            size: CGSize(width: 344, height: 344),
-            captureName: "mixer-large"
-        )
-        try assertRenders(
-            AuralisEQWidgetView(entry: running.withFamily(.systemLarge)),
-            size: CGSize(width: 344, height: 344)
-        )
-
-        let closed = makeEntry(hostState: .stopped)
-        try assertRenders(
-            AuralisMixerWidgetView(entry: closed.withFamily(.systemMedium)),
-            size: CGSize(width: 338, height: 158)
-        )
-        try assertRenders(
-            AuralisEQWidgetView(entry: closed.withFamily(.systemLarge)),
-            size: CGSize(width: 344, height: 344)
-        )
+        let stale = AuralisEntry(date: running.date.addingTimeInterval(600),
+                                 snapshot: running.snapshot, family: .systemLarge)
+        XCTAssertFalse(WidgetMixerPresentation(snapshot: stale.snapshot, date: stale.date,
+                                              maximumAppCount: 2).controlsEnabled)
+        try await assertRenders(AuralisMixerWidgetView(entry: stale), size: CGSize(width: 344, height: 344),
+                          captureName: "mixer-large-stale")
+        try await assertRenders(AuralisEQWidgetView(entry: stale), size: CGSize(width: 344, height: 344),
+                          captureName: "remote-large-stale")
     }
 
     private func assertRenders<V: View>(
         _ view: V,
         size: CGSize,
+        scheme: ColorScheme = .light,
         captureName: String? = nil,
         file: StaticString = #filePath,
         line: UInt = #line
-    ) throws {
-        let renderer = ImageRenderer(
-            content: view
-                .frame(width: size.width, height: size.height)
-                .background(Color(nsColor: .windowBackgroundColor))
-        )
-        renderer.scale = 1
-        renderer.proposedSize = ProposedViewSize(size)
-        let image = try XCTUnwrap(renderer.nsImage, file: file, line: line)
-        XCTAssertEqual(image.size.width, size.width, accuracy: 0.5, file: file, line: line)
-        XCTAssertEqual(image.size.height, size.height, accuracy: 0.5, file: file, line: line)
+    ) async throws {
+        // NSHostingView also renders Link controls, which ImageRenderer replaces
+        // with unsupported-view placeholders outside the WidgetKit host.
+        let hostingView = NSHostingView(rootView: view
+            .frame(width: size.width, height: size.height)
+            .background(scheme == .dark ? Color(red: 0.075, green: 0.09, blue: 0.12) : Color(nsColor: .windowBackgroundColor)))
+        hostingView.frame = NSRect(origin: .zero, size: size)
+        let window = NSWindow(contentRect: hostingView.frame, styleMask: .borderless,
+                              backing: .buffered, defer: false)
+        window.contentView = hostingView
+        window.layoutIfNeeded()
+        hostingView.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(60))
+        hostingView.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds))
+        hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
+        let image = NSImage(size: size)
+        image.addRepresentation(bitmap)
+        XCTAssertEqual(hostingView.bounds.size.width, size.width, accuracy: 0.5, file: file, line: line)
+        XCTAssertEqual(hostingView.bounds.size.height, size.height, accuracy: 0.5, file: file, line: line)
         XCTAssertNotNil(image.tiffRepresentation, file: file, line: line)
+        withExtendedLifetime(window) {}
+
         try captureIfRequested(image, name: captureName)
     }
 

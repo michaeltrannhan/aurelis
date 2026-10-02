@@ -38,8 +38,7 @@ final class CoreAudioDiscoveryBackend: AudioBackend {
         if let routeManager = tapManager as? CoreAudioRouteControlling {
             routeManager.setAvailableOutputUIDs(
                 deviceState.devices.map(\.id),
-                defaultOutputUIDs: deviceState.defaultOutputDeviceUIDs,
-                nominalSampleRatesByUID: deviceState.nominalSampleRatesByUID
+                defaultOutputUIDs: deviceState.defaultOutputDeviceUIDs
             )
         }
 
@@ -115,6 +114,10 @@ extension CoreAudioDiscoveryBackend: AudioBackendAppLevelProviding {
 extension CoreAudioDiscoveryBackend: AudioBackendUpdatePublishing {
     var updateEvents: AsyncStream<Void> {
         eventSource.events
+    }
+
+    func stopPublishingUpdates() {
+        eventSource.stop()
     }
 }
 

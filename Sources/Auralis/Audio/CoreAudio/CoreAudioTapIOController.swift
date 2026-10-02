@@ -68,11 +68,6 @@ enum CoreAudioAggregateReadiness {
 /// lifecycle/resource mutation remains serialized by the manager's lifecycle
 /// executor.
 final class CoreAudioTapIOController {
-    private struct OutputDeviceInfo {
-        var uid: String
-        var nominalSampleRate: Double
-    }
-
     private let target: CoreAudioTapTarget
     let outputDeviceUIDs: [String]
     private let operations: CoreAudioActiveTapOperating
@@ -111,7 +106,7 @@ final class CoreAudioTapIOController {
         // Resolve every physical output before creating owned resources. HAL
         // reconciles differing physical rates inside the aggregate; the
         // aggregate's validated stream descriptions below define render I/O.
-        _ = try outputDeviceUIDs.map(Self.outputDeviceInfo)
+        for uid in outputDeviceUIDs { try Self.validateOutputDevice(for: uid) }
 
         let tapDescription = CATapDescription(stereoMixdownOfProcesses: target.processObjectIDs)
         tapDescription.name = "Auralis \(target.displayName)"
@@ -521,14 +516,13 @@ final class CoreAudioTapIOController {
         return normalized.isEmpty ? nil : normalized
     }
 
-    private static func outputDeviceInfo(for uid: String) throws -> OutputDeviceInfo {
+    private static func validateOutputDevice(for uid: String) throws {
         guard let objectID = try? CoreAudioPropertyReader.deviceObjectID(forUID: uid) else {
             throw CoreAudioTapStartFailure.deviceUnavailable
         }
-        guard let nominalSampleRate = nominalSampleRate(for: objectID) else {
+        guard nominalSampleRate(for: objectID) != nil else {
             throw CoreAudioTapStartFailure.deviceUnavailable
         }
-        return OutputDeviceInfo(uid: uid, nominalSampleRate: nominalSampleRate)
     }
 
     private static func outputChannelCount(forUID uid: String) throws -> Int {

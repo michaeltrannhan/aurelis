@@ -47,6 +47,144 @@ private enum WidgetIntentCommandSender {
     }
 }
 
+struct AdjustAppVolumeIntent: AppIntent {
+    static let title: LocalizedStringResource = "Adjust App Volume"
+    static var isDiscoverable: Bool { false }
+
+    @Parameter(title: "Application Identifier")
+    var appID: String
+
+    @Parameter(title: "Volume Change")
+    var delta: Double
+
+    init() { self.appID = ""; self.delta = 0 }
+    init(appID: String, delta: Double) {
+        self.appID = appID
+        self.delta = delta
+    }
+
+    func perform() async throws -> some IntentResult {
+        guard let command = WidgetIntentCommandFactory.adjustAppVolume(
+            appID: appID, delta: delta
+        ) else { return .result() }
+        try WidgetIntentCommandSender.enqueue(command)
+        return .result()
+    }
+}
+
+struct ToggleAppMutedIntent: AppIntent {
+    static let title: LocalizedStringResource = "Toggle App Mute"
+    static var isDiscoverable: Bool { false }
+
+    @Parameter(title: "Application Identifier")
+    var appID: String
+
+    init() { self.appID = "" }
+    init(appID: String) {
+        self.appID = appID
+    }
+
+    func perform() async throws -> some IntentResult {
+        guard let command = WidgetIntentCommandFactory.toggleAppMuted(
+            appID: appID
+        ) else { return .result() }
+        try WidgetIntentCommandSender.enqueue(command)
+        return .result()
+    }
+}
+
+struct AdjustOutputDeviceVolumeIntent: AppIntent {
+    static let title: LocalizedStringResource = "Adjust Output Device Volume"
+    static var isDiscoverable: Bool { false }
+
+    @Parameter(title: "Output Device Identifier")
+    var deviceID: String
+
+    @Parameter(title: "Volume Change")
+    var delta: Double
+
+    init() { self.deviceID = ""; self.delta = 0 }
+    init(deviceID: String, delta: Double) {
+        self.deviceID = deviceID
+        self.delta = delta
+    }
+
+    func perform() async throws -> some IntentResult {
+        guard let command = WidgetIntentCommandFactory.adjustOutputDeviceVolume(
+            deviceID: deviceID, delta: delta
+        ) else { return .result() }
+        try WidgetIntentCommandSender.enqueue(command)
+        return .result()
+    }
+}
+
+struct ToggleOutputDeviceMutedIntent: AppIntent {
+    static let title: LocalizedStringResource = "Toggle Output Device Mute"
+    static var isDiscoverable: Bool { false }
+
+    @Parameter(title: "Output Device Identifier")
+    var deviceID: String
+
+    init() { self.deviceID = "" }
+    init(deviceID: String) {
+        self.deviceID = deviceID
+    }
+
+    func perform() async throws -> some IntentResult {
+        guard let command = WidgetIntentCommandFactory.toggleOutputDeviceMuted(
+            deviceID: deviceID
+        ) else { return .result() }
+        try WidgetIntentCommandSender.enqueue(command)
+        return .result()
+    }
+}
+
+struct AdjustEQBandGainAppIntent: AppIntent {
+    static let title: LocalizedStringResource = "Adjust EQ Band Gain"
+    static var isDiscoverable: Bool { false }
+
+    @Parameter(title: "Application Identifier")
+    var appID: String
+    @Parameter(title: "EQ Band")
+    var band: Int
+    @Parameter(title: "Gain Change")
+    var delta: Double
+
+    init() { self.appID = ""; self.band = 0; self.delta = 0 }
+    init(appID: String, band: Int, delta: Double) {
+        self.appID = appID
+        self.band = band
+        self.delta = delta
+    }
+
+    func perform() async throws -> some IntentResult {
+        guard let command = WidgetIntentCommandFactory.adjustEQBandGain(
+            appID: appID, band: band, delta: delta
+        ) else { return .result() }
+        try WidgetIntentCommandSender.enqueue(command)
+        return .result()
+    }
+}
+
+struct CycleAppBoostIntent: AppIntent {
+    static let title: LocalizedStringResource = "Cycle App Boost"
+    static var isDiscoverable: Bool { false }
+
+    @Parameter(title: "Application Identifier")
+    var appID: String
+
+    init() { self.appID = "" }
+    init(appID: String) { self.appID = appID }
+
+    func perform() async throws -> some IntentResult {
+        guard let command = WidgetIntentCommandFactory.cycleAppBoost(appID: appID) else {
+            return .result()
+        }
+        try WidgetIntentCommandSender.enqueue(command)
+        return .result()
+    }
+}
+
 struct SetAppMutedIntent: AppIntent {
     static let title: LocalizedStringResource = "Set App Mute"
     static let description = IntentDescription("Mute or unmute an audio app from the widget.")

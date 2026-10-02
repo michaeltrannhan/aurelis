@@ -4,7 +4,7 @@ set -eu
 # Build the diagnostics-enabled Debug app and embedded widget. Build/test logs
 # and app runtime diagnostics stay under .build/logs in this repository.
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$SCRIPT_DIR/lib.sh"
 

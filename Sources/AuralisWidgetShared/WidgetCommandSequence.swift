@@ -32,28 +32,3 @@ public enum WidgetCommandSequence {
         state.lock.unlock()
     }
 }
-
-/// Absolute resolution recorded before a relative widget command is applied.
-public struct WidgetCommandResolution: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 1
-
-    public let schemaVersion: Int
-    public let commandID: UUID
-    public let sequence: UInt64
-    public let resolvedAction: WidgetCommandAction
-    public let resolvedAt: Date
-
-    public init(
-        schemaVersion: Int = currentSchemaVersion,
-        commandID: UUID,
-        sequence: UInt64,
-        resolvedAction: WidgetCommandAction,
-        resolvedAt: Date = Date()
-    ) {
-        self.schemaVersion = schemaVersion
-        self.commandID = commandID
-        self.sequence = sequence
-        self.resolvedAction = resolvedAction
-        self.resolvedAt = resolvedAt
-    }
-}

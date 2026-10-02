@@ -89,6 +89,9 @@ enum MixerEmptyState: Equatable {
     case permissionLimited
     case degraded
     case failed
+    case noMatchingApps
+    case noPinnedApps
+    case noPlayingApps
 
     init(phase: MixerPhase) {
         switch phase {
@@ -107,16 +110,65 @@ enum MixerEmptyState: Equatable {
         case .permissionLimited: "Audio permission required"
         case .degraded: "Mixer is degraded"
         case .failed: "Couldn’t load apps"
+        case .noMatchingApps: "No matching apps"
+        case .noPinnedApps: "No pinned apps yet"
+        case .noPlayingApps: "No apps playing"
         }
     }
 
     var message: String {
         switch self {
         case .starting: "Auralis is preparing discovery."
-        case .readyEmpty: "Play something, then refresh — or show inactive apps."
+        case .readyEmpty: "Play audio in an app, or show inactive apps."
         case .permissionLimited: "Grant Screen & System Audio Recording to control per-app audio."
         case .degraded: "Some controls need attention. Refresh or review issues above."
         case .failed: "Audio discovery failed. Refresh to try again."
+        case .noMatchingApps: "Try a different name or clear your search."
+        case .noPinnedApps: "Pin an app from its shortcut menu to keep it here."
+        case .noPlayingApps: "Play audio in an app, or browse all discovered apps."
+        }
+    }
+}
+
+enum MixerChannelFilter: String, CaseIterable, Identifiable {
+    case playing, pinned, all
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .playing: "Playing"
+        case .pinned: "Pinned"
+        case .all: "All"
+        }
+    }
+}
+
+/// Shared by the popup and desktop so filtering cannot hide discovery failures.
+struct MixerListPresentation {
+    let rows: [DisplayableAppRow]
+    let emptyState: MixerEmptyState
+
+    init(rows: [DisplayableAppRow], search: String, filter: MixerChannelFilter, phase: MixerPhase) {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.rows = rows.filter { row in
+            let matchesFilter = switch filter {
+            case .playing: row.isActive
+            case .pinned: row.isPinned
+            case .all: true
+            }
+            return matchesFilter && (query.isEmpty || row.displayName.localizedCaseInsensitiveContains(query))
+        }
+        let discoveryState = MixerEmptyState(phase: phase)
+        if rows.isEmpty || discoveryState == .starting || discoveryState == .permissionLimited
+            || discoveryState == .degraded || discoveryState == .failed {
+            emptyState = discoveryState
+        } else if !query.isEmpty {
+            emptyState = .noMatchingApps
+        } else {
+            emptyState = switch filter {
+            case .playing: .noPlayingApps
+            case .pinned: .noPinnedApps
+            case .all: .readyEmpty
+            }
         }
     }
 }

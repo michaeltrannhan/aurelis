@@ -315,6 +315,8 @@ public enum WidgetCommandAction: Codable, Equatable, Sendable {
     case toggleMuted
     case setBoost(Double)
     case setEQBandGain(band: Int, gain: Double)
+    case adjustEQBandGain(band: Int, delta: Double)
+    case cycleBoost
     case selectOutput
     case applyProfile
     case assignProfileToCurrentOutput
@@ -327,12 +329,12 @@ public enum WidgetCommandAction: Codable, Equatable, Sendable {
 
     private enum Kind: String, Codable {
         case setMuted, setVolume, adjustVolume, toggleMuted, setBoost, setEQBandGain, selectOutput, applyProfile
-        case assignProfileToCurrentOutput, revertProfileChanges, refresh
+        case assignProfileToCurrentOutput, revertProfileChanges, refresh, adjustEQBandGain, cycleBoost
     }
 
     public var isRelative: Bool {
         switch self {
-        case .adjustVolume, .toggleMuted: true
+        case .adjustVolume, .toggleMuted, .adjustEQBandGain, .cycleBoost: true
         default: false
         }
     }
@@ -356,6 +358,13 @@ public enum WidgetCommandAction: Codable, Equatable, Sendable {
                 band: try container.decode(Int.self, forKey: .band),
                 gain: try container.decode(Double.self, forKey: .gain)
             )
+        case .adjustEQBandGain:
+            self = .adjustEQBandGain(
+                band: try container.decode(Int.self, forKey: .band),
+                delta: try container.decode(Double.self, forKey: .value)
+            )
+        case .cycleBoost:
+            self = .cycleBoost
         case .selectOutput:
             self = .selectOutput
         case .applyProfile:
@@ -390,6 +399,12 @@ public enum WidgetCommandAction: Codable, Equatable, Sendable {
             try container.encode(Kind.setEQBandGain, forKey: .type)
             try container.encode(band, forKey: .band)
             try container.encode(gain, forKey: .gain)
+        case let .adjustEQBandGain(band, delta):
+            try container.encode(Kind.adjustEQBandGain, forKey: .type)
+            try container.encode(band, forKey: .band)
+            try container.encode(delta, forKey: .value)
+        case .cycleBoost:
+            try container.encode(Kind.cycleBoost, forKey: .type)
         case .selectOutput:
             try container.encode(Kind.selectOutput, forKey: .type)
         case .applyProfile:
@@ -730,6 +745,14 @@ public struct WidgetCommand: Codable, Equatable, Identifiable, Sendable {
                   (-24...24).contains(gain) else {
                 throw WidgetCommandValidationError.invalidValue
             }
+        case let (.app, .adjustEQBandGain(band, delta)):
+            try Self.requireIdentity(identity)
+            guard (0..<WidgetWireNormalization.bandCount).contains(band),
+                  delta.isFinite, (-48...48).contains(delta) else {
+                throw WidgetCommandValidationError.invalidValue
+            }
+        case (.app, .cycleBoost):
+            try Self.requireIdentity(identity)
         case (.outputDevice, .setMuted), (.outputDevice, .toggleMuted):
             try Self.requireIdentity(identity)
         case let (.outputDevice, .setVolume(value)):

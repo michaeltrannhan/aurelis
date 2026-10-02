@@ -3,9 +3,7 @@
 # POSIX sh. Does not change directory.
 
 AURALIS_DIST_PACKAGE_NAME=Auralis
-AURALIS_DIST_APP_NAME=Auralis.app
 AURALIS_DIST_TARGET=aarch64-apple-darwin
-AURALIS_DIST_LICENSE=GPL-3.0-or-later
 AURALIS_DIST_GITHUB_OWNER=${AURALIS_DIST_GITHUB_OWNER:-michaeltrannhan}
 AURALIS_DIST_GITHUB_REPO=${AURALIS_DIST_GITHUB_REPO:-aurelis}
 
@@ -31,8 +29,21 @@ auralis_dist_checksums_name() {
     printf '%s-%s-SHA256SUMS' "$AURALIS_DIST_PACKAGE_NAME" "$1"
 }
 
-auralis_dist_tag() {
-    printf 'v%s' "$1"
+auralis_dist_dmg_name() {
+    printf '%s.dmg' "$(auralis_dist_archive_basename "$1")"
+}
+
+auralis_dist_unnotarized_dmg_name() {
+    printf '%s-unnotarized.dmg' "$(auralis_dist_archive_basename "$1")"
+}
+
+auralis_dist_dmg_checksum_name() {
+    # usage: auralis_dist_dmg_checksum_name VERSION REQUIRE_NOTARIZATION
+    case "$2" in
+        YES) printf '%s.sha256' "$(auralis_dist_dmg_name "$1")" ;;
+        NO) printf '%s.sha256' "$(auralis_dist_unnotarized_dmg_name "$1")" ;;
+        *) auralis_dist_fail "DMG notarization flag must be YES or NO" ;;
+    esac
 }
 
 auralis_dist_asset_url() {

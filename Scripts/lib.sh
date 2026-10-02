@@ -9,9 +9,9 @@ if [ -z "${AURALIS_LIB_SH:-}" ]; then
     AURALIS_LIB_SH=1
 
     if [ -z "${SCRIPT_DIR:-}" ]; then
-        SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+        SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
     fi
-    REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+    REPOSITORY_ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
 
     # Pinned XcodeGen release (CI and local source builds share this).
     XCODEGEN_VERSION=2.45.4
@@ -131,11 +131,11 @@ if [ -z "${AURALIS_LIB_SH:-}" ]; then
         mkdir -p "$INSTALL_ROOT/extract"
         /usr/bin/unzip -q "$ZIP_PATH" -d "$INSTALL_ROOT/extract"
 
-        if [ -x "$INSTALL_ROOT/extract/bin/xcodegen" ]; then
+        if [ -f "$INSTALL_ROOT/extract/bin/xcodegen" ] && [ -x "$INSTALL_ROOT/extract/bin/xcodegen" ]; then
             cp "$INSTALL_ROOT/extract/bin/xcodegen" "$BIN_DIR/xcodegen"
-        elif [ -x "$INSTALL_ROOT/extract/xcodegen" ]; then
+        elif [ -f "$INSTALL_ROOT/extract/xcodegen" ] && [ -x "$INSTALL_ROOT/extract/xcodegen" ]; then
             cp "$INSTALL_ROOT/extract/xcodegen" "$BIN_DIR/xcodegen"
-        elif [ -x "$INSTALL_ROOT/extract/xcodegen/bin/xcodegen" ]; then
+        elif [ -f "$INSTALL_ROOT/extract/xcodegen/bin/xcodegen" ] && [ -x "$INSTALL_ROOT/extract/xcodegen/bin/xcodegen" ]; then
             cp "$INSTALL_ROOT/extract/xcodegen/bin/xcodegen" "$BIN_DIR/xcodegen"
         else
             fail "could not locate xcodegen binary inside release zip"
@@ -209,12 +209,63 @@ if [ -z "${AURALIS_LIB_SH:-}" ]; then
         /bin/mv "$staged" "$dest"
     }
 
+    auralis_validate_signed_bundle() {
+        candidate_bundle=$1
+        expected_identifier=$2
+        description=$3
+        info_plist=$candidate_bundle/Contents/Info.plist
+        [ -f "$info_plist" ] || fail "$description has no Info.plist"
+        actual_identifier=$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$info_plist" 2>/dev/null) ||
+            fail "could not read $description bundle identifier"
+        [ "$actual_identifier" = "$expected_identifier" ] ||
+            fail "$description bundle identifier is '$actual_identifier'; expected '$expected_identifier'"
+        executable_name=$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$info_plist" 2>/dev/null) ||
+            fail "could not read $description executable name"
+        architectures=$(/usr/bin/lipo -archs "$candidate_bundle/Contents/MacOS/$executable_name" 2>/dev/null) ||
+            fail "could not inspect $description architecture"
+        [ "$architectures" = arm64 ] || fail "$description must contain arm64 only (found '$architectures')"
+        /usr/bin/codesign --verify --deep --strict "$candidate_bundle" ||
+            fail "$description failed code-signature verification"
+        signature_metadata=$(/usr/bin/codesign -dv --verbose=4 "$candidate_bundle" 2>&1) ||
+            fail "could not inspect $description signature"
+        AURALIS_SIGNATURE_AUTHORITY=$(printf '%s\n' "$signature_metadata" |
+            /usr/bin/awk '/^Authority=/ { print substr($0, index($0, "=") + 1); exit }')
+        AURALIS_SIGNATURE_TEAM=$(printf '%s\n' "$signature_metadata" |
+            /usr/bin/awk -F= '/^TeamIdentifier=/ { print $2; exit }')
+        case "$AURALIS_SIGNATURE_AUTHORITY" in
+            "Developer ID Application:"*) AURALIS_SIGNATURE_KIND=developer-id ;;
+            "Apple Development:"*) AURALIS_SIGNATURE_KIND=development ;;
+            *) fail "$description must use an Apple Development or Developer ID Application certificate" ;;
+        esac
+        [ -n "$AURALIS_SIGNATURE_TEAM" ] || fail "$description signature has no TeamIdentifier"
+        printf '%s\n' "$signature_metadata" |
+            /usr/bin/grep -q '^CodeDirectory .*flags=.*(runtime)' ||
+            fail "$description does not enable the hardened runtime"
+    }
+
+    auralis_validate_signed_app() {
+        candidate_app=$1
+        candidate_widget=$candidate_app/Contents/PlugIns/$WIDGET_NAME.appex
+        auralis_validate_signed_bundle "$candidate_app" "$APP_BUNDLE_ID" app
+        AURALIS_APP_SIGNATURE_KIND=$AURALIS_SIGNATURE_KIND
+        AURALIS_APP_SIGNATURE_TEAM=$AURALIS_SIGNATURE_TEAM
+        # shellcheck disable=SC2034 # Returned to package-dmg.sh for notarization errors.
+        AURALIS_APP_SIGNATURE_AUTHORITY=$AURALIS_SIGNATURE_AUTHORITY
+        auralis_validate_signed_bundle "$candidate_widget" "$WIDGET_BUNDLE_ID" "embedded widget"
+        [ "$AURALIS_SIGNATURE_TEAM" = "$AURALIS_APP_SIGNATURE_TEAM" ] ||
+            fail "app and embedded widget use different signing teams"
+        [ "$AURALIS_SIGNATURE_KIND" = "$AURALIS_APP_SIGNATURE_KIND" ] ||
+            fail "app and embedded widget use different signing certificate classes"
+    }
+
     # Copy a signed Auralis.app into /Applications or ~/Applications and
     # refresh the widget gallery. Used by install-app.sh and install-prebuilt.sh.
     auralis_install_bundle() {
         src_app=$1
         scope=$2
         launch=${3:-YES}
+
+        auralis_validate_signed_app "$src_app"
 
         case "$scope" in
             system)

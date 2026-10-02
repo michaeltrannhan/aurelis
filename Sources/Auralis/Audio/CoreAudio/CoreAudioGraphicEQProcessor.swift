@@ -35,15 +35,6 @@ final class CoreAudioGraphicEQProcessor {
         processor.renderSnapshot()
     }
 
-    @inline(__always)
-    func processSample(
-        _ input: Float,
-        channel: Int,
-        snapshot: CoreAudioBiquadRenderSnapshot
-    ) -> Float {
-        processor.processSample(input, channel: channel, snapshot: snapshot)
-    }
-
     func process(input: UnsafePointer<Float>, output: UnsafeMutablePointer<Float>, frameCount: Int) {
         processor.process(input: input, output: output, frameCount: frameCount)
     }

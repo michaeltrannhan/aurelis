@@ -19,8 +19,7 @@ protocol CoreAudioRealtimeTapControlling: AnyObject {
 protocol CoreAudioRouteControlling: AnyObject {
     func setAvailableOutputUIDs(
         _ outputUIDs: [String],
-        defaultOutputUIDs: [String],
-        nominalSampleRatesByUID: [String: Double]
+        defaultOutputUIDs: [String]
     )
     func setRoute(_ identity: AudioAppIdentity, _ route: DeviceRoute) throws
 }
@@ -229,6 +228,10 @@ final class CoreAudioProcessTapManager: CoreAudioTapManaging, CoreAudioRouteCont
     deinit {
         for state in statesByIdentity.values {
             state.retryWorkItem?.cancel()
+            try? state.controller?.stop()
+            for controller in state.retiringControllers {
+                try? controller.stop()
+            }
         }
     }
 
@@ -365,14 +368,12 @@ final class CoreAudioProcessTapManager: CoreAudioTapManaging, CoreAudioRouteCont
 
     func setAvailableOutputUIDs(
         _ outputUIDs: [String],
-        defaultOutputUIDs: [String],
-        nominalSampleRatesByUID: [String: Double]
+        defaultOutputUIDs: [String]
     ) {
         onLifecycleQueue {
             // Aggregate-device nominal-rate listeners are the single source of
             // DSP rate changes. Physical-rate notifications no longer rebuild a
             // tap controller and race that listener.
-            _ = nominalSampleRatesByUID
             let outputs = Self.uniqueNonempty(outputUIDs)
             let defaults = Self.uniqueNonempty(defaultOutputUIDs)
             let topologyChanged = availableOutputUIDs != outputs
@@ -403,19 +404,10 @@ final class CoreAudioProcessTapManager: CoreAudioTapManaging, CoreAudioRouteCont
         }
     }
 
-    func setAvailableOutputUIDs(_ outputUIDs: [String], defaultOutputUIDs: [String]) {
-        setAvailableOutputUIDs(
-            outputUIDs,
-            defaultOutputUIDs: defaultOutputUIDs,
-            nominalSampleRatesByUID: [:]
-        )
-    }
-
     func setAvailableOutputUIDs(_ outputUIDs: [String], defaultOutputUID: String?) {
         setAvailableOutputUIDs(
             outputUIDs,
-            defaultOutputUIDs: defaultOutputUID.map { [$0] } ?? [],
-            nominalSampleRatesByUID: [:]
+            defaultOutputUIDs: defaultOutputUID.map { [$0] } ?? []
         )
     }
 
@@ -449,6 +441,11 @@ final class CoreAudioProcessTapManager: CoreAudioTapManaging, CoreAudioRouteCont
                     state: failedState
                 )
                 failedState.requestedConfiguration = rolledBackConfiguration
+                syncOutputEQs(
+                    into: &failedState,
+                    outputUIDs: failedState.controller?.outputDeviceUIDs
+                        ?? rolledBackConfiguration.outputUIDs
+                )
 
                 if failedState.requiresControllerReplacement {
                     scheduleRetryIfAllowed(
@@ -540,6 +537,9 @@ final class CoreAudioProcessTapManager: CoreAudioTapManaging, CoreAudioRouteCont
                 state.attemptCount = attemptsBeforeCleanup
             } catch {
                 recordFailure(error, purpose: .configure(configuration), in: &state, identity: identity)
+                if let controller = state.controller {
+                    syncOutputEQs(into: &state, outputUIDs: controller.outputDeviceUIDs)
+                }
                 statesByIdentity[identity] = state
                 throw error
             }
@@ -557,6 +557,9 @@ final class CoreAudioProcessTapManager: CoreAudioTapManaging, CoreAudioRouteCont
             state.attemptCount += 1
             let error = CoreAudioTapStartFailure.deviceUnavailable
             recordFailure(error, purpose: .configure(configuration), in: &state, identity: identity)
+            if let controller = state.controller {
+                syncOutputEQs(into: &state, outputUIDs: controller.outputDeviceUIDs)
+            }
             statesByIdentity[identity] = state
             throw error
         }
@@ -576,6 +579,10 @@ final class CoreAudioProcessTapManager: CoreAudioTapManaging, CoreAudioRouteCont
                 )
             }
         } catch {
+            // A rejected replacement must not change the surviving output's EQ.
+            if let controller = state.controller {
+                syncOutputEQs(into: &state, outputUIDs: controller.outputDeviceUIDs)
+            }
             statesByIdentity[identity] = state
             throw error
         }

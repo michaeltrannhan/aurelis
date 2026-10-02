@@ -23,6 +23,47 @@ final class CoreAudioAggregateCrashGuardTests: XCTestCase {
         XCTAssertTrue(try journal.records().isEmpty)
     }
 
+    func testConcurrentJournalMutationsKeepCompleteSameInstanceTransactions() throws {
+        let journal = CoreAudioAggregateOwnershipJournal(journalURL: uniqueJournalURL())
+        let uids = (0..<32).map { _ in aggregateUID() }
+        let failures = ConcurrentJournalFailures()
+
+        DispatchQueue.concurrentPerform(iterations: uids.count) { index in
+            do {
+                try journal.recordAggregate(uid: uids[index], deviceID: AudioObjectID(index + 1))
+            } catch {
+                failures.record(error)
+            }
+        }
+        XCTAssertTrue(failures.messages.isEmpty, failures.messages.joined(separator: "; "))
+        let initialRecords = try journal.records()
+        XCTAssertEqual(Set(initialRecords.map(\.aggregateUID)), Set(uids))
+        XCTAssertEqual(initialRecords.count, uids.count)
+
+        DispatchQueue.concurrentPerform(iterations: uids.count) { index in
+            do {
+                if index.isMultiple(of: 2) {
+                    try journal.removeAggregate(uid: uids[index])
+                } else {
+                    try journal.recordAggregate(uid: uids[index], deviceID: AudioObjectID(index + 100))
+                }
+            } catch {
+                failures.record(error)
+            }
+        }
+        XCTAssertTrue(failures.messages.isEmpty, failures.messages.joined(separator: "; "))
+        let records = try journal.records()
+        let expectedIndices = uids.indices.filter { !$0.isMultiple(of: 2) }
+        XCTAssertEqual(Set(records.map(\.aggregateUID)), Set(expectedIndices.map { uids[$0] }))
+        XCTAssertEqual(records.count, expectedIndices.count)
+        for index in expectedIndices {
+            XCTAssertEqual(
+                records.first(where: { $0.aggregateUID == uids[index] })?.lastKnownDeviceID,
+                AudioObjectID(index + 100)
+            )
+        }
+    }
+
     func testProductionJournalPersistsPrecreationIntentUsingStableUIDAlone() throws {
         let journal = CoreAudioAggregateOwnershipJournal(journalURL: uniqueJournalURL())
         let uid = aggregateUID()
@@ -80,5 +121,16 @@ final class CoreAudioAggregateCrashGuardTests: XCTestCase {
 
     private func uniqueJournalURL() -> URL {
         temporaryFileURL(prefix: "AuralisJournal", filename: "aggregate-ownership.json")
+    }
+}
+
+private final class ConcurrentJournalFailures: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedMessages: [String] = []
+
+    var messages: [String] { lock.withLock { storedMessages } }
+
+    func record(_ error: Error) {
+        lock.withLock { storedMessages.append(error.localizedDescription) }
     }
 }

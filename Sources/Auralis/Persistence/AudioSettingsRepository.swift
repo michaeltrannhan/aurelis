@@ -18,6 +18,7 @@ actor SettingsPersistenceActor {
 
     let store: SettingsStore
     private let retryDelaysNanoseconds: [UInt64]
+    private var isAcceptingWrites = true
     private var lastPersisted: PersistedSettings?
     private var pendingSave: PendingSave?
     private var nextRevision: UInt64 = 0
@@ -54,6 +55,7 @@ actor SettingsPersistenceActor {
     /// settings are already on disk.
     @discardableResult
     func commit(_ settings: PersistedSettings) throws -> Bool {
+        guard isAcceptingWrites else { throw CancellationError() }
         if settings == lastPersisted, pendingSave == nil { return false }
         let pending = replacePending(with: settings)
         retryAttemptCount = 0
@@ -81,6 +83,7 @@ actor SettingsPersistenceActor {
         _ settings: PersistedSettings,
         debounceNanoseconds: UInt64 = 200_000_000
     ) {
+        guard isAcceptingWrites else { return }
         if settings == lastPersisted {
             pendingSave = nil
             saveTask?.cancel()
@@ -95,7 +98,7 @@ actor SettingsPersistenceActor {
         scheduleAttempt(for: pending, afterNanoseconds: debounceNanoseconds)
     }
 
-    func flush() throws {
+    func flush(retryOnFailure: Bool = true) throws {
         saveTask?.cancel()
         saveTask = nil
         guard let pendingSave else { return }
@@ -105,9 +108,18 @@ actor SettingsPersistenceActor {
         } catch {
             lastPersisted = nil
             lastSaveError = error
-            scheduleNextRetry(for: pendingSave)
+            if retryOnFailure { scheduleNextRetry(for: pendingSave) }
             throw error
         }
+    }
+
+    func shutdownFlush() async throws {
+        isAcceptingWrites = false
+        let scheduled = saveTask
+        scheduled?.cancel()
+        saveTask = nil
+        await scheduled?.value
+        try flush(retryOnFailure: false)
     }
 
     func diagnostics() -> SettingsPersistenceDiagnostics {
@@ -170,7 +182,7 @@ actor SettingsPersistenceActor {
     }
 
     private func scheduleNextRetry(for pending: PendingSave) {
-        guard writeBlockError == nil,
+        guard isAcceptingWrites, writeBlockError == nil,
               pendingSave?.revision == pending.revision,
               retryAttemptCount < retryDelaysNanoseconds.count else {
             saveTask = nil

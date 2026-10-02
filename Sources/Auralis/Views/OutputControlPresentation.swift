@@ -10,6 +10,4 @@ struct OutputControlPresentation: Equatable {
         showsMute = capabilities.canReadMute
         enablesMute = capabilities.canReadMute && capabilities.canSetMute
     }
-
-    var hasAnyReadableControl: Bool { showsVolume || showsMute }
 }

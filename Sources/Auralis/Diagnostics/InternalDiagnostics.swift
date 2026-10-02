@@ -79,7 +79,19 @@ final class DiagnosticFileSink: @unchecked Sendable {
             .replacingOccurrences(of: "\r", with: " ")
             .replacingOccurrences(of: "\n", with: " ")
         let line = "\(formatter.string(from: timestamp)) [\(severity.rawValue)] [\(category)] \(normalizedMessage)\n"
-        let data = Data(line.utf8)
+        let data: Data
+        if line.utf8.count > configuration.maximumBytes {
+            let prefix = line.utf8.prefix(configuration.maximumBytes - 1)
+            // Repair a split UTF-8 scalar before appending the line terminator.
+            var boundedPrefix = Data(prefix)
+            while !boundedPrefix.isEmpty, String(data: boundedPrefix, encoding: .utf8) == nil {
+                boundedPrefix.removeLast()
+            }
+            boundedPrefix.append(0x0a)
+            data = boundedPrefix
+        } else {
+            data = Data(line.utf8)
+        }
 
         do {
             let fileManager = FileManager.default

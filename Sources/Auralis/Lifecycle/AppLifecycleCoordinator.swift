@@ -81,7 +81,7 @@ final class AppLifecycleCoordinator {
     func start() async -> AppLifecycleStartReport {
         if let completedStartReport { return completedStartReport }
         if let startTask { return await startTask.value }
-        guard completedStopReport == nil else {
+        guard stopTask == nil, completedStopReport == nil else {
             return AppLifecycleStartReport(
                 discoveryErrorDescription: "Lifecycle has already stopped.",
                 observationStarted: false,
@@ -108,7 +108,7 @@ final class AppLifecycleCoordinator {
     }
 
     func applySettings() async {
-        guard completedStopReport == nil else { return }
+        guard stopTask == nil, completedStopReport == nil else { return }
         controls.applySettings()
         await widgetBridge.flush()
     }
@@ -116,7 +116,7 @@ final class AppLifecycleCoordinator {
     func stop() async -> AppLifecycleStopReport {
         if let completedStopReport { return completedStopReport }
         if let stopTask { return await stopTask.value }
-        if let startTask { _ = await startTask.value }
+        let startup = startTask
         let task = Task { @MainActor [weak self] in
             guard let self else {
                 return AppLifecycleStopReport(
@@ -134,6 +134,7 @@ final class AppLifecycleCoordinator {
                     )
                 )
             }
+            if let startup { _ = await startup.value }
             return await performStop()
         }
         stopTask = task

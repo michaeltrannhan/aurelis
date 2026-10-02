@@ -85,16 +85,7 @@ struct SignalPathView: View {
     }
 
     private func connector(failedAfter: Bool) -> some View {
-        HStack(spacing: 2) {
-            Rectangle()
-                .fill(failedAfter ? Color.red : AuralisColor.hairline)
-                .frame(height: 1)
-            Image(systemName: "chevron.right")
-                .font(.system(size: 7, weight: .bold))
-                .foregroundStyle(failedAfter ? Color.red : Color.secondary)
-        }
-        .frame(minWidth: 18, maxWidth: 34)
-        .accessibilityHidden(true)
+        FlowConnector(failedAfter: failedAfter, isFlowing: nodes.contains(where: \.isActive))
     }
 
     private func accent(for kind: SignalPathNode.Kind) -> Color {
@@ -103,6 +94,69 @@ struct SignalPathView: View {
         case .outputEQ: AuralisColor.stageAccent(.output)
         case .app, .gain, .output: .primary
         }
+    }
+}
+
+/// Hairline between stages. While any stage is selected, a short cyan dash
+/// drifts left-to-right — the only ambient motion in the workbench, disabled
+/// entirely under Reduce Motion.
+private struct FlowConnector: View {
+    let failedAfter: Bool
+    let isFlowing: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var dashPhase: CGFloat = 0
+
+    /// Dash + gap sum, so shifting the phase by one cycle loops seamlessly.
+    private static let flowCycle: CGFloat = 8
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ZStack {
+                Rectangle()
+                    .fill(failedAfter ? Color.red : AuralisColor.hairline)
+                    .frame(height: 1)
+                if isFlowing, !failedAfter, !reduceMotion {
+                    FlowDash()
+                        .stroke(
+                            AuralisColor.signalCyan.opacity(0.7),
+                            style: StrokeStyle(
+                                lineWidth: 1.5,
+                                lineCap: .round,
+                                dash: [2, 6],
+                                dashPhase: dashPhase
+                            )
+                        )
+                        .frame(height: 3)
+                        .onAppear {
+                            dashPhase = 0
+                            DispatchQueue.main.async {
+                                withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
+                                    dashPhase = -Self.flowCycle
+                                }
+                            }
+                        }
+                        .onDisappear { dashPhase = 0 }
+                }
+            }
+            .frame(maxWidth: .infinity)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(failedAfter ? Color.red : Color.secondary)
+        }
+        .frame(minWidth: 18, maxWidth: 34)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A single horizontal line, so dash-phase animation travels along one path.
+private struct FlowDash: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let midY = rect.midY
+        path.move(to: CGPoint(x: rect.minX, y: midY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: midY))
+        return path
     }
 }
 

@@ -6,7 +6,7 @@ set -eu
 # where chronod remembers a disposable Xcode DerivedData bundle after it has
 # been removed by the build.
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$SCRIPT_DIR/lib.sh"
 DEBUG_APPLICATIONS_DIR=${DEBUG_APPLICATIONS_DIR:-/Applications}

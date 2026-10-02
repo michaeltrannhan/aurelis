@@ -32,10 +32,10 @@ final class AppChannelModel: ObservableObject, Identifiable {
     func apply(actionState: ControlActionState) {
         self.actionState = actionState
         switch actionState {
-        case let .pending(projected), let .applied(projected):
+        case let .pending(projected):
             projectedVolume = projected.volume
             projectedMuted = projected.isMuted
-        case .idle, .failed:
+        case .idle, .applied, .failed:
             projectedVolume = nil
             projectedMuted = nil
         }
@@ -91,11 +91,11 @@ final class OutputChannelModel: ObservableObject, Identifiable {
     func apply(actionState: ControlActionState) {
         self.actionState = actionState
         switch actionState {
-        case let .pending(projected), let .applied(projected):
+        case let .pending(projected):
             projectedVolume = projected.volume
             projectedMuted = projected.isMuted
             projectedEQ = projected.eq
-        case .idle, .failed:
+        case .idle, .applied, .failed:
             projectedVolume = nil
             projectedMuted = nil
             projectedEQ = nil

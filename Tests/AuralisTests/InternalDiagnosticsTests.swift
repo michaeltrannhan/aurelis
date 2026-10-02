@@ -27,13 +27,35 @@ final class InternalDiagnosticsTests: XCTestCase {
         XCTAssertEqual(contents.filter { $0 == "\n" }.count, 1)
     }
 
+    func testOversizedUnicodeEventsStayWithinCurrentAndBackupByteLimits() throws {
+        let directory = try temporaryDirectory(prefix: "AuralisOversizedDiagnostics")
+        let logURL = directory.appendingPathComponent("Auralis.log")
+        let maximumBytes = 119
+        let sink = DiagnosticFileSink(configuration: .init(
+            fileURL: logURL,
+            minimumSeverity: .debug,
+            maximumBytes: maximumBytes
+        ))
+        for _ in 0..<2 {
+            sink.append(severity: .notice, category: "test", message: String(repeating: "音", count: 100))
+        }
+        sink.flush()
+
+        for url in [logURL, logURL.appendingPathExtension("1")] {
+            let data = try Data(contentsOf: url)
+            XCTAssertLessThanOrEqual(data.count, maximumBytes)
+            let contents = try XCTUnwrap(String(data: data, encoding: .utf8))
+            XCTAssertTrue(contents.hasSuffix("\n"))
+        }
+    }
+
     func testSinkRotatesToOneBoundedBackup() throws {
         let directory = try temporaryDirectory(prefix: "AuralisDiagnosticsRotation")
         let logURL = directory.appendingPathComponent("Auralis.log")
         let sink = DiagnosticFileSink(configuration: .init(
             fileURL: logURL,
             minimumSeverity: .debug,
-            maximumBytes: 120
+            maximumBytes: 160
         ))
 
         sink.append(severity: .notice, category: "test", message: String(repeating: "a", count: 80))

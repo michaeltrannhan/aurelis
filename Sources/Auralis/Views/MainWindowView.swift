@@ -4,34 +4,20 @@ import SwiftUI
 /// adjustable, and one stable inspector owns all detailed Process/Output work.
 struct MainWindowView: View {
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var store: AudioControlStore
 
     @State private var inspectorSelection: InspectorSelection?
     @State private var searchText = ""
-    @State private var channelFilter: ChannelFilter = .playing
+    @State private var channelFilter: MixerChannelFilter = .playing
     @State private var pulseToken: UUID?
     @State private var showsInspectorSheet = false
     @State private var outputDeckScrollID: String?
+    @FocusState private var searchFocused: Bool
 
     private enum InspectorSelection: Hashable {
         case app(AudioAppIdentity)
         case output(String)
-    }
-
-    private enum ChannelFilter: String, CaseIterable, Identifiable {
-        case playing
-        case pinned
-        case all
-
-        var id: String { rawValue }
-
-        var title: String {
-            switch self {
-            case .playing: "Playing"
-            case .pinned: "Pinned"
-            case .all: "All"
-            }
-        }
     }
 
     var body: some View {
@@ -69,6 +55,11 @@ struct MainWindowView: View {
                 showsInspectorSheet = shouldUseSheet
             }
             .onDisappear(perform: endSelectedContinuousEdits)
+            .background {
+                Button("Find Apps") { searchFocused = true }
+                    .keyboardShortcut("f", modifiers: .command)
+                    .hidden()
+            }
         }
         .accessibilityIdentifier("auralis.main.workbench")
     }
@@ -101,17 +92,39 @@ struct MainWindowView: View {
             }
 
             HStack(spacing: 10) {
-                TextField("Search apps", text: $searchText)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 320)
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    TextField("Search apps", text: $searchText)
+                        .textFieldStyle(.plain)
+                        .focused($searchFocused)
+                        .accessibilityLabel("Search audio apps")
+                        .onExitCommand { searchText = ""; searchFocused = false }
+                    if !searchText.isEmpty {
+                        Button { searchText = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear search")
+                    }
+                }
+                .padding(.horizontal, 8)
+                .frame(minHeight: 28)
+                .background(AuralisColor.mutedPanel, in: RoundedRectangle(cornerRadius: 7))
+                .overlay { RoundedRectangle(cornerRadius: 7).stroke(AuralisColor.hairline) }
+                .frame(maxWidth: 320)
 
                 Picker("Channels", selection: $channelFilter) {
-                    ForEach(ChannelFilter.allCases) { filter in
+                    ForEach(MixerChannelFilter.allCases) { filter in
                         Text(filter.title).tag(filter)
                     }
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 250)
+                .labelsHidden()
 
                 Spacer(minLength: 8)
 
@@ -309,7 +322,7 @@ struct MainWindowView: View {
 
     private func scrollOutputDeck(to index: Int, outputIDs: [String]) {
         guard outputIDs.indices.contains(index) else { return }
-        withAnimation(.easeInOut(duration: 0.16)) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) {
             outputDeckScrollID = outputIDs[index]
         }
     }
@@ -363,9 +376,10 @@ struct MainWindowView: View {
 
             if filteredRows.isEmpty {
                 MixerEmptyStateView(
-                    state: MixerEmptyState(phase: store.mixerPhase),
+                    state: listPresentation.emptyState,
                     onRefresh: { store.refreshIntent() },
-                    onShowInactive: showInactiveApps
+                    onShowInactive: showInactiveApps,
+                    onResetFilter: resetEmptyFilter
                 )
             } else {
                 ScrollView {
@@ -376,7 +390,13 @@ struct MainWindowView: View {
                                 row: row,
                                 rowHeight: 56,
                                 isSelected: inspectorSelection == .app(row.identity),
-                                onSelect: { select(.app(row.identity), usesSheet: usesSheet) },
+                                onSelect: {
+                                    if inspectorSelection == .app(row.identity) {
+                                        closeInspector()
+                                    } else {
+                                        select(.app(row.identity), usesSheet: usesSheet)
+                                    }
+                                },
                                 layout: .desktop
                             )
                             .padding(.horizontal, 12)
@@ -419,7 +439,14 @@ struct MainWindowView: View {
                 InspectorPlaceholder()
             }
         case nil:
-            InspectorPlaceholder()
+            InspectorPlaceholder(
+                onTuneApp: (store.displayRows.first(where: \.isActive) ?? store.displayRows.first).map { row in
+                    { select(.app(row.identity), usesSheet: showsInspectorSheet) }
+                },
+                onTuneOutput: store.currentOutput.map { device in
+                    { select(.output(device.id), usesSheet: showsInspectorSheet) }
+                }
+            )
         }
     }
 
@@ -428,18 +455,11 @@ struct MainWindowView: View {
         return store.displayRows.first { $0.identity == identity }
     }
 
-    private var filteredRows: [DisplayableAppRow] {
-        store.displayRows.filter { row in
-            switch channelFilter {
-            case .playing: row.isActive
-            case .pinned: row.isPinned
-            case .all: true
-            }
-        }.filter { row in
-            let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-            return query.isEmpty || row.displayName.localizedCaseInsensitiveContains(query)
-        }
+    private var listPresentation: MixerListPresentation {
+        MixerListPresentation(rows: store.displayRows, search: searchText, filter: channelFilter, phase: store.mixerPhase)
     }
+
+    private var filteredRows: [DisplayableAppRow] { listPresentation.rows }
 
     private var channelCountLabel: String {
         "\(filteredRows.count) of \(store.displayRows.count) apps"
@@ -447,7 +467,7 @@ struct MainWindowView: View {
 
     private func select(_ selection: InspectorSelection, usesSheet: Bool) {
         endSelectedContinuousEdits()
-        withAnimation(.easeInOut(duration: 0.16)) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) {
             inspectorSelection = selection
             showsInspectorSheet = usesSheet
         }
@@ -455,7 +475,7 @@ struct MainWindowView: View {
 
     private func closeInspector() {
         endSelectedContinuousEdits()
-        withAnimation(.easeInOut(duration: 0.16)) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) {
             inspectorSelection = nil
             showsInspectorSheet = false
         }
@@ -480,9 +500,19 @@ struct MainWindowView: View {
         }
     }
 
+    private func resetEmptyFilter() {
+        if listPresentation.emptyState == .noMatchingApps {
+            searchText = ""
+        } else {
+            channelFilter = .all
+        }
+    }
+
     private func showInactiveApps() {
         var customization = store.settings.customization
         customization.showInactiveApps = true
+        channelFilter = .all
+        searchText = ""
         store.applyCustomizationIntent(customization)
     }
 }
@@ -525,24 +555,24 @@ private struct OutputChannelStrip: View {
                 }
             }
 
-            if presentation.showsVolume {
-                HStack(spacing: 7) {
-                    if presentation.showsMute {
-                        Button {
-                            _ = store.commandCoordinator.submit(
-                                ControlCommand(target: target, mutation: .toggleMute)
-                            )
-                        } label: {
-                            Image(systemName: model.visibleMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                .foregroundStyle(model.visibleMuted ? Color.red : Color.primary)
-                                .frame(width: 28, height: 28)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!presentation.enablesMute)
-                        .accessibilityLabel(model.visibleMuted ? "Unmute \(model.name)" : "Mute \(model.name)")
+            HStack(spacing: 7) {
+                if presentation.showsMute {
+                    Button {
+                        _ = store.commandCoordinator.submit(
+                            ControlCommand(target: target, mutation: .toggleMute)
+                        )
+                    } label: {
+                        Image(systemName: model.visibleMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .foregroundStyle(model.visibleMuted ? Color.red : Color.primary)
+                            .frame(width: 28, height: 28)
                     }
+                    .buttonStyle(.plain)
+                    .disabled(!presentation.enablesMute)
+                    .accessibilityLabel(model.visibleMuted ? "Unmute \(model.name)" : "Mute \(model.name)")
+                }
 
-                    Slider(
+                if presentation.showsVolume {
+                    VolumeSlider(
                         value: Binding(
                             get: { model.visibleVolume },
                             set: { value in
@@ -551,22 +581,23 @@ private struct OutputChannelStrip: View {
                                 )
                             }
                         ),
-                        in: 0...1,
+                        isMuted: model.visibleMuted,
                         onEditingChanged: { editing in
                             if !editing { store.commandCoordinator.flushContinuous(for: target) }
                         }
                     )
                     .disabled(!presentation.enablesVolume)
+                    .accessibilityLabel("Volume for \(model.name)")
 
                     Text("\(Int((model.visibleVolume * 100).rounded()))%")
                         .font(AuralisTypography.metric(10))
                         .frame(width: 34, alignment: .trailing)
+                } else {
+                    Text("Hardware volume unavailable")
+                        .font(AuralisTypography.content(.caption2))
+                        .foregroundStyle(.secondary)
+                        .frame(minHeight: 28)
                 }
-            } else {
-                Text("Hardware volume unavailable")
-                    .font(AuralisTypography.content(.caption2))
-                    .foregroundStyle(.secondary)
-                    .frame(minHeight: 28)
             }
 
             Button(action: onTune) {
@@ -609,6 +640,9 @@ private struct OutputChannelStrip: View {
 }
 
 private struct InspectorPlaceholder: View {
+    var onTuneApp: (() -> Void)? = nil
+    var onTuneOutput: (() -> Void)? = nil
+
     var body: some View {
         VStack(spacing: 10) {
             Image(systemName: "slider.horizontal.below.square.filled.and.square")
@@ -616,11 +650,27 @@ private struct InspectorPlaceholder: View {
                 .foregroundStyle(.secondary)
             Text("Select an app or output")
                 .font(AuralisTypography.workspaceTitle(17))
-            Text("Detailed tuning stays here, so the channel list never jumps or expands.")
+            Text("Select Process EQ to shape an app’s sound, or Output EQ to tune your speakers.")
                 .font(AuralisTypography.content(.caption))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 260)
+            if let onTuneApp {
+                Button(action: onTuneApp) {
+                    Label("Tune an app", systemImage: "waveform")
+                        .frame(minWidth: 180, minHeight: 30)
+                }
+                .buttonStyle(.bordered)
+                .tint(AuralisColor.stageAccent(.process))
+            }
+            if let onTuneOutput {
+                Button(action: onTuneOutput) {
+                    Label("Tune current output", systemImage: "hifispeaker.fill")
+                        .frame(minWidth: 180, minHeight: 30)
+                }
+                .buttonStyle(.bordered)
+                .tint(AuralisColor.peakRose)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(24)

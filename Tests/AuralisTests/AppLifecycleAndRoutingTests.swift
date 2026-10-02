@@ -142,6 +142,27 @@ final class AppLifecycleCoordinatorTests: XCTestCase {
         XCTAssertEqual(widget.startCount, 0)
     }
 
+    func testConcurrentStopDuringStartupPerformsOneTeardownAndClosesSettingsAdmission() async throws {
+        let controls = RecordingExternalControls()
+        let widget = SuspendedWidgetLifecycle()
+        let store = makeStore(backend: MockAudioBackend())
+        let lifecycle = AppLifecycleCoordinator(store: store, controls: controls, widgetBridge: widget)
+        let startup = Task { await lifecycle.start() }
+        await widget.waitUntilStarting()
+        let firstStop = Task { await lifecycle.stop() }
+        let secondStop = Task { await lifecycle.stop() }
+        await Task.yield()
+        await lifecycle.applySettings()
+        XCTAssertEqual(controls.applyCount, 0)
+        widget.resumeStartup()
+        _ = await startup.value
+        let first = await firstStop.value
+        let second = await secondStop.value
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(controls.stopCount, 1)
+        XCTAssertEqual(widget.stopCount, 1)
+    }
+
     private func makeStore(backend: MockAudioBackend) -> AudioControlStore {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("Auralis-Lifecycle-\(UUID().uuidString).json")
@@ -264,4 +285,29 @@ private enum LifecycleTestError: LocalizedError {
     case discovery
 
     var errorDescription: String? { "Synthetic discovery failure" }
+}
+
+@MainActor
+private final class SuspendedWidgetLifecycle: WidgetBridgeLifecycle {
+    private var startup: CheckedContinuation<Bool, Never>?
+    private var startingWaiter: CheckedContinuation<Void, Never>?
+    private(set) var stopCount = 0
+
+    func start() async -> Bool {
+        await withCheckedContinuation { continuation in
+            startup = continuation
+            startingWaiter?.resume()
+            startingWaiter = nil
+        }
+    }
+    func waitUntilStarting() async {
+        if startup != nil { return }
+        await withCheckedContinuation { startingWaiter = $0 }
+    }
+    func resumeStartup() {
+        startup?.resume(returning: true)
+        startup = nil
+    }
+    func stop() async { stopCount += 1 }
+    func flush() async {}
 }

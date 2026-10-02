@@ -7,6 +7,7 @@ import SwiftUI
 final class VolumeHUDWindowController {
     private var panel: NSPanel?
     private var hideWorkItem: DispatchWorkItem?
+    private var peakTracker = VolumeHUDPeakTracker()
     private let visibleDuration: TimeInterval
 
     init(visibleDuration: TimeInterval = 0.9) {
@@ -15,7 +16,8 @@ final class VolumeHUDWindowController {
 
     func show(_ state: VolumeHUDState) {
         let panel = ensurePanel()
-        panel.contentView = NSHostingView(rootView: VolumeHUDView(state: state))
+        let peak = peakTracker.update(for: state)
+        panel.contentView = NSHostingView(rootView: VolumeHUDView(state: state, peak: peak))
         positionPanel(panel)
         panel.orderFrontRegardless()
 
@@ -30,7 +32,7 @@ final class VolumeHUDWindowController {
     private func ensurePanel() -> NSPanel {
         if let panel { return panel }
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 200, height: 180),
+            contentRect: NSRect(x: 0, y: 0, width: 208, height: 148),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false

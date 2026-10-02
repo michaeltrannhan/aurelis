@@ -120,6 +120,32 @@ enum WidgetCommandQueue {
         return command
     }
 
+    /// Resolve a gesture durably before applying it. Crash recovery then reads
+    /// the same absolute command, so retries cannot compound volume or mute.
+    static func resolve(_ command: WidgetCommand, to action: WidgetCommandAction,
+                        for claim: WidgetCommandClaim, now: Date = Date()) throws -> WidgetCommand {
+        guard command.id == claim.commandID, !action.isRelative else {
+            throw WidgetIPCError.invalidCommandFile(claim.fileURL.lastPathComponent)
+        }
+        let resolved = WidgetCommand(
+            schemaVersion: command.schemaVersion,
+            id: command.id,
+            sequence: command.sequence,
+            createdAt: command.createdAt,
+            expiresAt: command.expiresAt,
+            targetType: command.targetType,
+            targetIdentity: command.targetIdentity,
+            action: action
+        )
+        try resolved.validate(now: now)
+        let data: Data
+        do { data = try WidgetWireCodec.makeEncoder().encode(resolved) }
+        catch { throw WidgetIPCError.cannotEncode("resolved command", error) }
+        do { try data.write(to: claim.fileURL, options: .atomic) }
+        catch { throw WidgetIPCError.cannotWrite(claim.fileURL, error) }
+        return resolved
+    }
+
     /// Publishes an acknowledgment without replacing an existing one. The
     /// first result for a command ID is authoritative across duplicate drains.
     static func publish(

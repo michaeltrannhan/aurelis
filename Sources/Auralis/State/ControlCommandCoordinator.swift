@@ -11,9 +11,16 @@ final class ControlCommandCoordinator: ObservableObject {
 
     private weak var store: AudioControlStore?
     private var pendingProjection: [ControlTarget: ControlProjectedState] = [:]
-    private var workerQueued = false
-    private var commandQueue: [(receiptID: UUID, command: ControlCommand)] = []
+    private var isAcceptingCommands = true
+    private var workerTask: Task<Void, Never>?
+    private enum Work {
+        case command(receiptID: UUID, command: ControlCommand, preview: Bool)
+        case operation(@MainActor @Sendable () async throws -> Void, CheckedContinuation<Void, Error>)
+    }
+    private var commandQueue: [Work] = []
+    private var previewOrder: [ControlTarget] = []
     private var previewTasks: [ControlTarget: Task<Void, Never>] = [:]
+    private var previewWorkers: [UUID: Task<Void, Never>] = [:]
     private var previewInFlight: Set<ControlTarget> = []
     private var latestPreview: [ControlTarget: (receiptID: UUID, command: ControlCommand)] = [:]
     private var pendingReceiptIDs: Set<UUID> = []
@@ -30,7 +37,7 @@ final class ControlCommandCoordinator: ObservableObject {
 
     /// Synchronously accepts and projects; durable work runs on the ordered worker.
     func submit(_ command: ControlCommand) -> ControlReceipt {
-        guard let store else {
+        guard isAcceptingCommands, let store else {
             return .rejected(
                 target: command.target,
                 mutation: command.mutation,
@@ -69,6 +76,18 @@ final class ControlCommandCoordinator: ObservableObject {
             return receipt
         }
 
+        if command.target == .activeApps {
+            for row in store.displayRows where row.isActive {
+                let target = ControlTarget.app(row.identity)
+                let baseline = pendingProjection[target] ?? (try? ControlProjection.committed(
+                    for: target, displayRows: store.displayRows, settings: store.settings,
+                    devices: store.devices, deviceVolumeStates: store.deviceVolumeStates))
+                if let baseline, let next = try? ControlProjection.applying(command.mutation, to: baseline, target: target) {
+                    pendingProjection[target] = next
+                    actionStates[target] = .pending(projected: next)
+                }
+            }
+        }
         pendingProjection[command.target] = projected
         actionStates[command.target] = .pending(projected: projected)
         let receipt = ControlReceipt.accepted(
@@ -84,7 +103,10 @@ final class ControlCommandCoordinator: ObservableObject {
         case .ui where isContinuous(command.mutation):
             enqueuePreview(command, receiptID: receipt.id)
         default:
-            commandQueue.append((receipt.id, command))
+            // Earlier gestures must enter the ordered worker before a key,
+            // widget, or other discrete mutation can execute.
+            for target in previewOrder { flushContinuous(for: target) }
+            commandQueue.append(.command(receiptID: receipt.id, command: command, preview: false))
             kickWorker()
         }
         return receipt
@@ -102,8 +124,42 @@ final class ControlCommandCoordinator: ObservableObject {
         previewTasks[target]?.cancel()
         previewTasks[target] = nil
         guard let pending = latestPreview.removeValue(forKey: target) else { return }
-        commandQueue.append(pending)
+        previewOrder.removeAll { $0 == target }
+        commandQueue.append(.command(receiptID: pending.receiptID, command: pending.command, preview: false))
         kickWorker()
+    }
+
+    /// Closes admission before waiting, cancels uncommitted gesture work, and
+    /// waits for the active ordered transaction to finish before engine teardown.
+    func stop() async {
+        isAcceptingCommands = false
+        let previews = Array(previewWorkers.values)
+        for task in previews { task.cancel() }
+        previewTasks.removeAll()
+        let cancelled = Array(latestPreview.values)
+        let queued = commandQueue
+        latestPreview.removeAll()
+        previewOrder.removeAll()
+        commandQueue.removeAll()
+        for item in cancelled { complete(receiptID: item.receiptID, result: .cancelled) }
+        for work in queued {
+            switch work {
+            case let .command(id, _, preview): if !preview { complete(receiptID: id, result: .cancelled) }
+            case let .operation(_, continuation): continuation.resume(throwing: CancellationError())
+            }
+        }
+        for task in previews { await task.value }
+        await workerTask?.value
+        pendingProjection.removeAll()
+        actionStates = actionStates.mapValues { _ in .idle }
+    }
+
+    private func coalesces(_ first: ControlMutation, with second: ControlMutation) -> Bool {
+        switch (first, second) {
+        case (.setVolume, .setVolume), (.setEQ, .setEQ), (.setBoost, .setBoost): true
+        case let (.setEQBand(firstBand, _), .setEQBand(secondBand, _)): firstBand == secondBand
+        default: false
+        }
     }
 
     private func isContinuous(_ mutation: ControlMutation) -> Bool {
@@ -116,13 +172,19 @@ final class ControlCommandCoordinator: ObservableObject {
     }
 
     private func enqueuePreview(_ command: ControlCommand, receiptID: UUID) {
-        if let superseded = latestPreview[command.target] {
-            complete(receiptID: superseded.receiptID, result: .cancelled)
+        if let previous = latestPreview[command.target] {
+            if coalesces(previous.command.mutation, with: command.mutation) {
+                complete(receiptID: previous.receiptID, result: .cancelled)
+            } else {
+                flushContinuous(for: command.target)
+            }
         }
+        if latestPreview[command.target] == nil { previewOrder.append(command.target) }
         latestPreview[command.target] = (receiptID, command)
         previewTasks[command.target]?.cancel()
-        previewTasks[command.target] = Task { [weak self] in
+        let task = Task { [weak self] in
             guard let self else { return }
+            defer { self.previewWorkers[receiptID] = nil }
             try? await Task.sleep(nanoseconds: self.previewMinIntervalNanoseconds)
             guard !Task.isCancelled else { return }
             await self.runPreviewIfNeeded(for: command.target)
@@ -132,36 +194,54 @@ final class ControlCommandCoordinator: ObservableObject {
                   pending.receiptID == receiptID else { return }
             self.latestPreview[command.target] = nil
             self.previewTasks[command.target] = nil
-            self.commandQueue.append(pending)
+            self.previewOrder.removeAll { $0 == command.target }
+            self.commandQueue.append(.command(receiptID: pending.receiptID, command: pending.command, preview: false))
             self.kickWorker()
         }
+        previewTasks[command.target] = task
+        previewWorkers[receiptID] = task
     }
 
     private func runPreviewIfNeeded(for target: ControlTarget) async {
-        guard let store,
-              let command = latestPreview[target]?.command,
-              !previewInFlight.contains(target) else { return }
+        guard let pending = latestPreview[target], !previewInFlight.contains(target) else { return }
         previewInFlight.insert(target)
-        defer { previewInFlight.remove(target) }
-        _ = await store.executeProjectedControl(command)
+        commandQueue.append(.command(receiptID: pending.receiptID, command: pending.command, preview: true))
+        kickWorker()
+    }
+
+    func performOrdered(_ operation: @escaping @MainActor @Sendable () async throws -> Void) async throws {
+        guard isAcceptingCommands else { throw CancellationError() }
+        for target in previewOrder { flushContinuous(for: target) }
+        try await withCheckedThrowingContinuation { continuation in
+            commandQueue.append(.operation(operation, continuation))
+            kickWorker()
+        }
     }
 
     private func kickWorker() {
-        guard !workerQueued else { return }
-        workerQueued = true
-        Task { @MainActor [weak self] in
+        guard workerTask == nil else { return }
+        workerTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            while let item = self.commandQueue.first {
+            while let work = self.commandQueue.first {
                 self.commandQueue.removeFirst()
-                guard let store = self.store else {
-                    self.complete(receiptID: item.receiptID, result: .cancelled)
-                    continue
+                switch work {
+                case let .operation(operation, continuation):
+                    do { try await operation(); continuation.resume() }
+                    catch { continuation.resume(throwing: error) }
+                case let .command(id, command, preview):
+                    guard let store = self.store else {
+                        self.complete(receiptID: id, result: .cancelled)
+                        continue
+                    }
+                    let result = await store.executeProjectedControl(command)
+                    if preview { self.previewInFlight.remove(command.target) }
+                    else {
+                        self.settle(item: (id, command), result: result, store: store)
+                        self.complete(receiptID: id, result: result)
+                    }
                 }
-                let result = await store.executeProjectedControl(item.command)
-                self.settle(item: item, result: result, store: store)
-                self.complete(receiptID: item.receiptID, result: result)
             }
-            self.workerQueued = false
+            self.workerTask = nil
         }
     }
 
@@ -171,6 +251,15 @@ final class ControlCommandCoordinator: ObservableObject {
         store: AudioControlStore
     ) {
         let target = item.command.target
+        if target == .activeApps {
+            for row in store.displayRows where row.isActive {
+                let appTarget = ControlTarget.app(row.identity)
+                if !hasNewerWork(for: appTarget) {
+                    pendingProjection[appTarget] = nil
+                    actionStates[appTarget] = .idle
+                }
+            }
+        }
         if hasNewerWork(for: target) {
             if let projected = pendingProjection[target] {
                 actionStates[target] = .pending(projected: projected)
@@ -202,7 +291,10 @@ final class ControlCommandCoordinator: ObservableObject {
 
     private func hasNewerWork(for target: ControlTarget) -> Bool {
         latestPreview[target] != nil
-            || commandQueue.contains { $0.command.target == target }
+            || commandQueue.contains { work in
+                if case let .command(_, command, _) = work { return command.target == target || command.target == .activeApps }
+                return false
+            }
     }
 
     private func complete(receiptID: UUID, result: ControlResult) {

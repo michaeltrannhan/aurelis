@@ -14,8 +14,8 @@ Intel, universal binaries, ad-hoc signing, and remote telemetry are out of scope
 | --- | --- |
 | `AGENTS.md` (this file) | Cursor, Codex, and other agents that read a root `AGENTS.md` |
 | `CLAUDE.md` | Claude Code / Claude-oriented sessions |
-| `README.md` | Humans: install, permissions, widget gallery, hardware caveats |
-| `packaging/README.md` | Prebuilt zip/tar.xz names and unpack |
+| `README.md` | Humans: capabilities, install, permissions, essential caveats |
+| `packaging/README.md` | Zip/tar/DMG names, trust levels, checksums, packaging |
 
 Point the agent at the repo root. Do **not** add `.cursor/rules/` unless a Cursor-only constraint cannot live here. `Documentation/` and `ULTIMATE_REFACTORING_PLAN.md` are gitignored — do not commit them.
 
@@ -32,7 +32,7 @@ Point the agent at the repo root. Do **not** add `.cursor/rules/` unless a Curso
 | `Sources/AuralisWidget/` | WidgetKit UI |
 | `Sources/AuralisWidgetShared/` | Shared snapshot/command models |
 | `Scripts/` | Build, install, verification, packaging |
-| `packaging/` | `dist.toml`, Homebrew cask template |
+| `packaging/` | Distribution contract, DMG payload, Homebrew cask template |
 | `Tests/AuralisTests/` | SwiftPM + Xcode |
 | `Tests/AuralisWidgetTests/` | Xcode scheme only |
 
@@ -48,6 +48,36 @@ Control flow is command-in, snapshot-out. Do not call CoreAudio from views.
 - **Widget IPC**: App Group. Host writes `WidgetSnapshot`; AppIntents enqueue; host drains via `WidgetBridge`. Interactive AppIntents compile into **both** app and widget (`project.yml`).
 - **Routing**: non-stacked private aggregates; first output is clock; Output EQ per physical device. Do not leak one output’s context into another.
 
+### Lifecycle and resource ownership
+
+- An owner must not strongly retain an unbounded `Task` whose body strongly
+  retains that owner. Suspend first, then briefly upgrade a weak owner per
+  iteration, or move the loop into a separately owned worker.
+- `stop()` is a quiescence boundary: close admission, cancel producers, await
+  their completion, drain or cancel ordered work, remove subscriptions/listeners,
+  and release processors/controllers. `deinit` is a best-effort fallback, not
+  the primary shutdown path.
+- Every HAL listener, `DispatchSource`, Combine subscription, retry task, meter
+  loop, process tap, aggregate, and widget watcher needs an explicit symmetric
+  teardown. Retiring tap controllers must be stopped as well as the active one.
+- Keep waits and retry delays cancellable. Never hold an actor or main-actor
+  isolation across an infinite monitoring loop when callers need shutdown.
+
+### UI flow ownership
+
+- Text entry owns printable keys and arrows while search is focused; inspectors
+  own their editing keys; only then may popup row shortcuts act. Keep this
+  priority in `PopupKeyboardOwnership` rather than duplicating view predicates.
+- First run exposes one contextual completion action: continue discovery until
+  process-tap permission exists, then start mixing. Launch at login is a
+  checkbox on that sheet (default on) plus General settings; `SMAppService`
+  is the source of truth, not settings JSON. Do not register on launch.
+- Transient HUD animation state belongs to the window controller/state model.
+  Replacing an `NSHostingView` recreates SwiftUI `@State`, so do not keep peak or
+  decay history only inside the hosted view.
+- Views emit commands and render snapshots. They do not own CoreAudio work,
+  widget transport, or long-lived discovery tasks.
+
 ## Install, build, test
 
 ```sh
@@ -55,7 +85,7 @@ Control flow is command-in, snapshot-out. Do not call CoreAudio from views.
 make install                           # ./install.sh --yes
 make build                             # Scripts/build-release-app.sh
 make test                              # swift test
-Scripts/auralis.sh {install|build|test|dev|verify|release}
+Scripts/auralis.sh {install|build|test|dev|verify|release|dmg}
 RUN_APP=YES Scripts/build-debug-app.sh
 ```
 
@@ -69,7 +99,7 @@ Install tries **prebuilt first** (`Scripts/install-prebuilt.sh` / `Scripts/lib/p
 **Software (always, including CI):**
 
 ```sh
-swift test                             # 351 AuralisTests; CoreAudioHardwareTests skip without AURALIS_HW_TESTS
+swift test                             # 371 tests; CoreAudioHardwareTests skip without AURALIS_HW_TESTS
 Scripts/run-verification.sh all        # or: preflight|strict|tsan|asan|ubsan|stress|xcode|coverage
 ```
 
@@ -97,6 +127,27 @@ Hardware CI is **off** unless `AURALIS_HW_TESTS=1` via `workflow_dispatch` (`run
 
 Tags `v*`: `Scripts/package-release.sh` publishes `Auralis-{version}-aarch64-apple-darwin.zip`, `.tar.xz`, and `Auralis-{version}-SHA256SUMS`. Hosted runners **skip publish** without Developer ID Application and `NOTARY_PROFILE`. Local: `NOTARY_PROFILE=your-profile Scripts/package-release.sh`.
 
+### DMG distribution contract
+
+| Artifact | Publisher requirement | Recipient experience |
+| --- | --- | --- |
+| `Auralis-{version}-aarch64-apple-darwin.dmg` | Developer ID Application + `NOTARY_PROFILE`; `REQUIRE_NOTARIZATION=YES` | Normal Gatekeeper confirmation; no Apple account |
+| `Auralis-{version}-aarch64-apple-darwin-unnotarized.dmg` | Apple Development or Developer ID certificate; no notarization | External SHA-256 verification plus possible Privacy & Security → Open Anyway; no Apple account |
+
+`Scripts/package-dmg.sh` rejects unsigned and ad-hoc apps because permissions,
+WidgetKit, and App Group identity depend on a stable certificate-backed
+designated requirement. The unnotarized artifact is a testing/community
+deliverable, never equivalent to an Apple-notarized public release. It must stay
+visibly named `-unnotarized.dmg`.
+
+The DMG contains the intact signed app, `/Applications` link,
+`Install Auralis.command`, and `READ ME.txt`. The guided installer verifies both
+bundle identifiers, arm64-only executables, certificate classes, matching teams,
+hardened runtime, and nested signatures. It installs to `~/Applications`, moves
+an existing valid Auralis copy to Trash, refuses a second system copy, and does
+not remove quarantine or disable Gatekeeper. Keep the companion `.dmg.sha256`
+outside the image so it can authenticate the download before mounting.
+
 ## Conventions
 
 - Swift 6, complete concurrency. Backend calls stay off the main actor and out of views.
@@ -104,5 +155,7 @@ Tags `v*`: `Scripts/package-release.sh` publishes `Auralis-{version}-aarch64-app
 - Additive settings migrations; missing Output EQ loads flat.
 - Local logs only. FineTune-adapted UI keeps a short source comment.
 - Edit `project.yml`, regenerate; do not hand-edit `Auralis.xcodeproj`.
-- Don’t add x86_64/universal/ad-hoc signing, stack aggregates, edit `.github/workflows`, rewrite README install sections, or relicense.
+- Keep `README.md` concise and human-facing; put architecture, CI, and packaging
+  internals here or in `packaging/README.md`.
+- Don’t add x86_64/universal/ad-hoc signing, stack aggregates, edit `.github/workflows`, or relicense.
 - Don’t commit `.build/`, `DerivedData/`, generated Xcode projects, or `Documentation/`.

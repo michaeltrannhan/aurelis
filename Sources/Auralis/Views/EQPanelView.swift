@@ -11,7 +11,7 @@ struct EQBandEditor: View {
         var graphHeight: CGFloat {
             switch self {
             case .desktop: 224
-            case .compact: 172
+            case .compact: 148
             }
         }
 
@@ -45,6 +45,7 @@ struct EQBandEditor: View {
         VStack(alignment: .leading, spacing: style == .compact ? 10 : 14) {
             header
             responseGraph
+            if style == .compact { bandSelector }
             selectedBandControls
             footer
         }
@@ -93,7 +94,7 @@ struct EQBandEditor: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(stage.title) · \(targetName)")
+                Text(style == .compact ? stage.title : "\(stage.title) · \(targetName)")
                     .font(AuralisTypography.workspaceTitle(style == .compact ? 16 : 19))
                     .lineLimit(1)
                 Text(stageExplanation)
@@ -111,18 +112,20 @@ struct EQBandEditor: View {
                 .background(AuralisColor.mutedPanel, in: Capsule())
                 .accessibilityLabel("Gain range plus or minus \(Int(range)) decibels")
 
-            Button("Done", action: onClose)
-                .controlSize(.small)
-                .frame(minHeight: AuralisSpacing.controlMinHit)
+            if style == .desktop {
+                Button("Done", action: onClose)
+                    .controlSize(.small)
+                    .frame(minHeight: AuralisSpacing.controlMinHit)
+            }
         }
     }
 
     private var stageExplanation: String {
         switch stage {
         case .process:
-            "Shapes only this app before volume and routing."
+            style == .compact ? "Adjust this app’s sound." : "Shapes only this app before volume and routing."
         case .output:
-            "Shapes this physical output for every routed app."
+            style == .compact ? "Tune this output for every app using it." : "Shapes this physical output for every routed app."
         }
     }
 
@@ -270,7 +273,76 @@ struct EQBandEditor: View {
         }
     }
 
-    private var selectedBandControls: some View {
+    private var bandSelector: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 5), spacing: 5) {
+            ForEach(0..<EQCurve.bandCount, id: \.self) { index in
+                Button {
+                    selectedBand = index
+                    graphFocused = true
+                } label: {
+                    VStack(spacing: 3) {
+                        Text(EQCurve.frequencies[index])
+                            .font(AuralisTypography.metric(10))
+                        Text(String(format: "%+.1f", curve.gains[index]))
+                            .font(AuralisTypography.metric(9))
+                            .foregroundStyle(selectedBand == index ? accent : Color.secondary)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 36)
+                    .background(selectedBand == index ? accent.opacity(0.12) : AuralisColor.mutedPanel,
+                                in: RoundedRectangle(cornerRadius: 7))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 7)
+                            .stroke(selectedBand == index ? accent : AuralisColor.hairline)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Select \(frequencyLabel(index))")
+                .accessibilityValue("\(String(format: "%+.1f", curve.gains[index])) decibels")
+                .accessibilityAddTraits(selectedBand == index ? .isSelected : [])
+            }
+        }
+    }
+
+    @ViewBuilder private var selectedBandControls: some View {
+        if style == .compact {
+            compactBandControls
+        } else {
+            desktopBandControls
+        }
+    }
+
+    private var compactBandControls: some View {
+        HStack(spacing: 6) {
+            Text(frequencyLabel(selectedBand))
+                .font(AuralisTypography.metric(11))
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Button { adjustSelectedBand(by: -0.5) } label: { bandStepIcon("minus") }
+                .accessibilityLabel("Decrease \(frequencyLabel(selectedBand)) by half a decibel")
+            Text(String(format: "%+.1f dB", curve.gains[selectedBand]))
+                .font(AuralisTypography.metric(11))
+                .foregroundStyle(abs(curve.gains[selectedBand]) < 0.05 ? Color.secondary : accent)
+                .frame(width: 68)
+            Button { adjustSelectedBand(by: 0.5) } label: { bandStepIcon("plus") }
+                .accessibilityLabel("Increase \(frequencyLabel(selectedBand)) by half a decibel")
+            Button { setBand(selectedBand, to: 0) } label: {
+                Text("0 dB").font(.caption2.weight(.medium))
+                    .frame(width: 36, height: 32)
+                    .background(AuralisColor.mutedPanel, in: RoundedRectangle(cornerRadius: 7))
+            }
+            .disabled(abs(curve.gains[selectedBand]) < 0.05)
+            .accessibilityLabel("Reset \(frequencyLabel(selectedBand)) to zero decibels")
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func bandStepIcon(_ symbol: String) -> some View {
+        Image(systemName: symbol).font(.caption.weight(.semibold))
+            .frame(width: 32, height: 32)
+            .background(AuralisColor.mutedPanel, in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    private var desktopBandControls: some View {
         HStack(spacing: 8) {
             Menu {
                 ForEach(0..<EQCurve.bandCount, id: \.self) { index in
@@ -346,7 +418,7 @@ struct EQBandEditor: View {
         HStack(spacing: 8) {
             Text(
                 activeBandCount == 0
-                    ? "Flat — drag a band to shape \(targetName)."
+                    ? (style == .compact ? "Flat · no bands adjusted" : "Flat — drag a band to shape \(targetName).")
                     : "\(activeBandCount) adjusted band\(activeBandCount == 1 ? "" : "s")"
             )
             .font(AuralisTypography.content(.caption))

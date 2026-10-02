@@ -6,7 +6,7 @@ set -eu
 # at one durable path avoids stale Launch Services and WidgetKit registrations
 # as disposable repository and DerivedData products are replaced.
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$SCRIPT_DIR/lib.sh"
 SOURCE_APP_PATH=${APP_PATH:-$REPOSITORY_ROOT/.build/products/Debug/$APP_PRODUCT_NAME.app}

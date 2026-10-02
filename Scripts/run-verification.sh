@@ -3,7 +3,7 @@
 # Gates: all|preflight|strict|tsan|asan|ubsan|stress|xcode|signed|hardware|coverage
 set -eu
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$SCRIPT_DIR/lib.sh"
 cd "$REPOSITORY_ROOT"

@@ -191,19 +191,18 @@ enum AudioHealthReducer {
         } else if hasHardFault {
             phase = .degraded
             message = issues.first?.message ?? "Audio is degraded"
-        } else if inputs.isRefreshing {
-            // Refreshing is activity, not health — preserve ready/empty under the activity flag.
-            phase = inputs.visibleAppCount == 0 ? .empty : .ready
-            message = "Refreshing audio apps…"
-        } else if inputs.visibleAppCount == 0 {
-            phase = .empty
-            message = inputs.statusMessage
         } else if inputs.widgetFault
             || inputs.persistenceState == .dirty
             || inputs.persistenceState == .retrying
             || !inputs.backendFaults.isEmpty {
             phase = .degraded
             message = issues.first?.message ?? inputs.statusMessage
+        } else if inputs.isRefreshing {
+            phase = inputs.visibleAppCount == 0 ? .empty : .ready
+            message = "Refreshing audio apps…"
+        } else if inputs.visibleAppCount == 0 {
+            phase = .empty
+            message = inputs.statusMessage
         } else {
             phase = .ready
             message = inputs.statusMessage

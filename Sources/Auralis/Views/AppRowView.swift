@@ -39,7 +39,7 @@ struct AppRowView: View {
 
     private var activityLabel: String {
         if row.settings.isMuted { return "Muted" }
-        return row.isActive ? "Active" : "Inactive"
+        return row.isActive ? "Playing" : "Inactive"
     }
 
     private var activityColor: Color {
@@ -71,13 +71,19 @@ struct AppRowView: View {
 
     private var desktopBody: some View {
         HStack(spacing: 8) {
-            AudioLevelMeter(levels: levels, identity: row.identity, isMuted: row.settings.isMuted)
+            AudioLevelMeter(levels: levels, identity: row.identity, isMuted: row.settings.isMuted, style: .segmented)
                 .frame(width: 32, height: 24)
             appIcon.frame(width: 32, height: 32)
             VStack(alignment: .leading, spacing: 2) {
-                Text(row.displayName).font(.body.weight(.medium)).lineLimit(1)
-                Text(routeDetailLabel)
-                    .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                HStack(spacing: 5) {
+                    Text(row.displayName).font(.body.weight(.medium)).lineLimit(1)
+                    if row.isPinned {
+                        Image(systemName: "pin.fill").font(.caption2)
+                            .foregroundStyle(.secondary).accessibilityLabel("Pinned")
+                    }
+                }
+                Text(row.settings.isMuted ? "Muted · \(routeDetailLabel)" : routeDetailLabel)
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             }
             .frame(minWidth: 90, maxWidth: .infinity, alignment: .leading)
 
@@ -88,17 +94,12 @@ struct AppRowView: View {
                     .frame(width: 28, height: 28)
             }
             .buttonStyle(.plain).help(row.settings.isMuted ? "Unmute" : "Mute")
+            .accessibilityLabel(row.settings.isMuted ? "Unmute \(row.displayName)" : "Mute \(row.displayName)")
 
-            Slider(value: Binding(get: { row.settings.volume }, set: { onVolume($0) }), in: 0...1, onEditingChanged: onVolumeEditingChanged)
+            VolumeSlider(value: Binding(get: { row.settings.volume }, set: { onVolume($0) }), isMuted: row.settings.isMuted, volumeStep: volumeStep, onEditingChanged: onVolumeEditingChanged)
                 .controlSize(.small)
+                .accessibilityLabel("Volume for \(row.displayName)")
                 .frame(minWidth: 90, idealWidth: 120, maxWidth: 150)
-                .scrollWheelSteps(onEditingChanged: onVolumeEditingChanged) { logicalSteps in
-                    onVolume(ScrollWheelStepModel.nextValue(
-                        current: row.settings.volume,
-                        logicalSteps: logicalSteps,
-                        step: volumeStep
-                    ))
-                }
             Text("\(Int((row.settings.volume * 100).rounded()))%")
                 .font(.callout.monospacedDigit().weight(.medium))
                 .foregroundStyle(.secondary).frame(width: 40, alignment: .trailing)
@@ -108,21 +109,22 @@ struct AppRowView: View {
             outputPickerButton()
 
             Button(action: onSelect) {
-                Image(systemName: isSelected ? "xmark" : "slider.vertical.3")
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                Image(systemName: isSelected ? "xmark" : "slider.horizontal.3")
+                    .foregroundStyle(isSelected ? AuralisColor.stageAccent(.process) : Color.secondary)
                     .frame(width: 28, height: 28)
             }
             .buttonStyle(.plain).help(isSelected ? "Close Process EQ" : "Open Process EQ")
+            .accessibilityLabel(isSelected ? "Close Process EQ for \(row.displayName)" : "Open Process EQ for \(row.displayName)")
         }
         .padding(.horizontal, 10).padding(.vertical, 7)
         .frame(minHeight: rowHeight)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(isSelected ? Color.accentColor.opacity(0.10) : Color(nsColor: .controlBackgroundColor).opacity(0.55))
+                .fill(isSelected ? AuralisColor.stageAccent(.process).opacity(0.10) : AuralisColor.panel)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(isSelected ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1)
+                .stroke(isSelected ? AuralisColor.stageAccent(.process).opacity(0.5) : Color.clear, lineWidth: 1)
         )
         .contextMenu {
             Button(row.isPinned ? "Unpin" : "Pin") { onPin(!row.isPinned) }
@@ -137,8 +139,8 @@ struct AppRowView: View {
                 .resizable().aspectRatio(contentMode: .fit)
         } else {
             ZStack {
-                RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.16))
-                Image(systemName: "waveform").foregroundStyle(Color.accentColor)
+                RoundedRectangle(cornerRadius: 8).fill(AuralisColor.stageAccent(.process).opacity(0.16))
+                Image(systemName: "waveform").foregroundStyle(AuralisColor.stageAccent(.process))
             }
         }
     }
@@ -178,7 +180,7 @@ struct AppRowView: View {
                                     .foregroundStyle(Color.white)
                                     .padding(.horizontal, 4)
                                     .frame(minHeight: 12)
-                                    .background(Color.accentColor, in: Capsule())
+                                    .background(AuralisColor.stageAccent(.process), in: Capsule())
                             }
                             if routeSummary.missingCount > 0 {
                                 Image(systemName: "exclamationmark.triangle.fill")
@@ -227,16 +229,16 @@ struct AppRowView: View {
                     .font(.system(size: 7, weight: .bold))
                     .foregroundStyle(.tertiary)
             }
-            .foregroundStyle(row.settings.boost == .x1 ? Color.primary : Color.accentColor)
+            .foregroundStyle(row.settings.boost == .x1 ? Color.primary : AuralisColor.stageAccent(.process))
             .padding(.horizontal, compact ? 6 : 8)
             .frame(height: 30)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(row.settings.boost == .x1 ? Color.secondary.opacity(0.09) : Color.accentColor.opacity(0.12))
+                    .fill(row.settings.boost == .x1 ? Color.secondary.opacity(0.09) : AuralisColor.stageAccent(.process).opacity(0.12))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .stroke(row.settings.boost == .x1 ? Color.secondary.opacity(0.16) : Color.accentColor.opacity(0.28))
+                    .stroke(row.settings.boost == .x1 ? Color.secondary.opacity(0.16) : AuralisColor.stageAccent(.process).opacity(0.28))
             )
             .contentShape(RoundedRectangle(cornerRadius: 6))
         }
@@ -320,11 +322,11 @@ struct AppRowView: View {
                 .help(row.settings.isMuted ? "Unmute" : "Mute")
 
                 Button(action: onSelect) {
-                    Image(systemName: "slider.vertical.3")
-                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    Image(systemName: isSelected ? "xmark" : "slider.horizontal.3")
+                        .foregroundStyle(isSelected ? AuralisColor.stageAccent(.process) : Color.secondary)
                         .frame(width: 28, height: 28)
                         .background(
-                            isSelected ? Color.accentColor.opacity(0.12) : Color.clear,
+                            isSelected ? AuralisColor.stageAccent(.process).opacity(0.12) : Color.clear,
                             in: RoundedRectangle(cornerRadius: 6)
                         )
                 }
@@ -334,21 +336,14 @@ struct AppRowView: View {
             }
 
             HStack(spacing: 7) {
-                CompactAudioLevelMeter(levels: levels, identity: row.identity, isMuted: row.settings.isMuted)
+                AudioLevelMeter(levels: levels, identity: row.identity, isMuted: row.settings.isMuted, style: .compact)
                     .frame(width: 28, height: 6)
 
-                Slider(value: Binding(
+                VolumeSlider(value: Binding(
                     get: { row.settings.volume },
                     set: { onVolume($0) }
-                ), in: 0...1, onEditingChanged: onVolumeEditingChanged)
+                ), isMuted: row.settings.isMuted, volumeStep: volumeStep, onEditingChanged: onVolumeEditingChanged)
                 .controlSize(.mini)
-                .scrollWheelSteps(onEditingChanged: onVolumeEditingChanged) { logicalSteps in
-                    onVolume(ScrollWheelStepModel.nextValue(
-                        current: row.settings.volume,
-                        logicalSteps: logicalSteps,
-                        step: volumeStep
-                    ))
-                }
                 .accessibilityLabel("Volume for \(row.displayName)")
 
                 Text("\(volumePercentage)%")
@@ -364,11 +359,11 @@ struct AppRowView: View {
         .frame(minHeight: rowHeight)
         .background(
             RoundedRectangle(cornerRadius: 9)
-                .fill(isSelected ? Color.accentColor.opacity(0.13) : Color(nsColor: .controlBackgroundColor))
+                .fill(isSelected ? AuralisColor.stageAccent(.process).opacity(0.13) : AuralisColor.panel)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 9)
-                .stroke(isSelected ? Color.accentColor.opacity(0.45) : Color.clear)
+                .stroke(isSelected ? AuralisColor.stageAccent(.process).opacity(0.45) : Color.clear)
         )
         .contextMenu {
             Picker("Boost", selection: Binding(get: { row.settings.boost }, set: { onBoost($0) })) {
@@ -535,29 +530,14 @@ final class AppIconCache {
 /// The live meter is hosted by AppKit/Core Animation so a ~10 Hz level update
 /// changes only a few layer properties. SwiftUI receives no observation event,
 /// avoiding a hosting-view layout pass for every audio meter tick.
-private struct CompactAudioLevelMeter: NSViewRepresentable {
-    let levels: AppLevelStore
-    let identity: AudioAppIdentity
-    let isMuted: Bool
-
-    func makeNSView(context: Context) -> AppKitAudioLevelMeterView {
-        let view = AppKitAudioLevelMeterView(style: .compact)
-        view.configure(levels: levels, identity: identity, isMuted: isMuted)
-        return view
-    }
-
-    func updateNSView(_ view: AppKitAudioLevelMeterView, context: Context) {
-        view.configure(levels: levels, identity: identity, isMuted: isMuted)
-    }
-}
-
 private struct AudioLevelMeter: NSViewRepresentable {
     let levels: AppLevelStore
     let identity: AudioAppIdentity
     let isMuted: Bool
+    let style: AppKitAudioLevelMeterView.Style
 
     func makeNSView(context: Context) -> AppKitAudioLevelMeterView {
-        let view = AppKitAudioLevelMeterView(style: .segmented)
+        let view = AppKitAudioLevelMeterView(style: style)
         view.configure(levels: levels, identity: identity, isMuted: isMuted)
         return view
     }

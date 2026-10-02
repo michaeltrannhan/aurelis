@@ -31,7 +31,8 @@ final class WidgetCommandQueueTests: XCTestCase {
                 }
             }
             group.addTask {
-                while true {
+                let deadline = Date().addingTimeInterval(10)
+                while Date() < deadline {
                     do {
                         for claim in try WidgetCommandQueue.claimAvailable(layout: layout) {
                             let command = try WidgetCommandQueue.readCommand(claim)
@@ -55,6 +56,7 @@ final class WidgetCommandQueueTests: XCTestCase {
                     }
                     await Task.yield()
                 }
+                await state.record(error: "Drain deadline exceeded; pending commands: \(WidgetCommandQueue.pendingCommandIDs(layout: layout))")
             }
         }
 
@@ -110,7 +112,7 @@ final class WidgetCommandQueueTests: XCTestCase {
         var executionCount = 0
         let processor = WidgetCommandProcessor(
             layout: layout,
-            execute: { _ in executionCount += 1 },
+            execute: { _, _ in executionCount += 1 },
             publishSnapshot: { Date() }
         )
 
@@ -136,7 +138,7 @@ final class WidgetCommandQueueTests: XCTestCase {
 
         let crashingProcessor = WidgetCommandProcessor(
             layout: layout,
-            execute: { command in
+            execute: { command, claim in
                 guard case let .setVolume(value) = command.action else { return }
                 appliedVolume = value
                 executionCount += 1
@@ -154,7 +156,7 @@ final class WidgetCommandQueueTests: XCTestCase {
 
         let recoveredProcessor = WidgetCommandProcessor(
             layout: layout,
-            execute: { command in
+            execute: { command, claim in
                 guard case let .setVolume(value) = command.action else { return }
                 appliedVolume = value
                 executionCount += 1
@@ -168,6 +170,234 @@ final class WidgetCommandQueueTests: XCTestCase {
         XCTAssertEqual(executionCount, 2, "Recovery replays the same absolute value without compounding it")
         XCTAssertTrue(WidgetCommandQueue.pendingCommandIDs(layout: layout).isEmpty)
         XCTAssertEqual(WidgetCommandQueue.result(for: command.id, layout: layout)?.status, .applied)
+    }
+
+    @MainActor
+    func testRelativeGesturesRecoverWithoutRepeatingTheGesture() async throws {
+        for action in [WidgetCommandAction.adjustVolume(0.05), .toggleMuted,
+                       .adjustEQBandGain(band: 4, delta: 0.5), .cycleBoost] {
+            let layout = try makeLayout()
+            let command = WidgetCommand.app(identity: "music", action: action)
+            try WidgetCommandQueue.enqueue(command, layout: layout)
+            var volume = 0.5
+            var muted = false
+            var gain = 0.0
+            var boost = 1.0
+            let apply: @MainActor @Sendable (WidgetCommand) async throws -> Void = { command in
+                switch command.action {
+                case let .setVolume(value): volume = value
+                case let .setMuted(value): muted = value
+                case let .setEQBandGain(_, value): gain = value
+                case let .setBoost(value): boost = value
+                default: XCTFail("The gesture must resolve before execution")
+                }
+            }
+            let resolve: @MainActor @Sendable (WidgetCommand) throws -> WidgetCommandAction = { command in
+                switch command.action {
+                case let .adjustVolume(delta): return .setVolume(volume + delta)
+                case .toggleMuted: return .setMuted(!muted)
+                case let .adjustEQBandGain(band, delta): return .setEQBandGain(band: band, gain: gain + delta)
+                case .cycleBoost: return .setBoost(boost == 4 ? 1 : boost + 1)
+                default: throw WidgetCommandExecutionError.unsupportedAction
+                }
+            }
+            let interrupted = WidgetCommandProcessor(
+                layout: layout, execute: { command, claim in
+                    let action = try resolve(command)
+                    let resolved = try WidgetCommandQueue.resolve(command, to: action, for: claim)
+                    try await apply(resolved)
+                },
+                publishSnapshot: { throw CocoaError(.fileWriteUnknown) }
+            )
+            let report = await interrupted.drain()
+            XCTAssertFalse(report.transportErrors.isEmpty)
+            let expectedVolume = volume
+            let expectedMuted = muted
+            let expectedGain = gain
+            let expectedBoost = boost
+            let claim = try XCTUnwrap(WidgetCommandQueue.claimAvailable(layout: layout).first)
+            XCTAssertFalse(try WidgetCommandQueue.readCommand(claim).action.isRelative)
+
+            let recovered = WidgetCommandProcessor(
+                layout: layout, execute: { command, _ in
+                    XCTAssertFalse(command.action.isRelative, "A recovered claim must already be absolute")
+                    try await apply(command)
+                }, publishSnapshot: { Date() }
+            )
+            let recoveredReport = await recovered.drain()
+            XCTAssertEqual(recoveredReport.results.first?.status, .applied)
+            XCTAssertEqual(volume, expectedVolume, accuracy: 0.0001)
+            XCTAssertEqual(muted, expectedMuted)
+            XCTAssertEqual(gain, expectedGain)
+            XCTAssertEqual(boost, expectedBoost)
+        }
+    }
+
+    @MainActor
+    func testPublicationFailurePreservesOrderingOfLaterGestures() async throws {
+        for failResult in [false, true] {
+            let layout = try makeLayout()
+            let first = WidgetCommand.app(identity: "music", action: .adjustVolume(0.05))
+            let second = WidgetCommand.app(identity: "music", action: .adjustVolume(0.05))
+            try WidgetCommandQueue.enqueue(first, layout: layout)
+            try WidgetCommandQueue.enqueue(second, layout: layout)
+            var volume = 0.5
+            var executionIDs: [UUID] = []
+            var shouldFail = true
+            let processor = WidgetCommandProcessor(
+                layout: layout,
+                execute: { incoming, claim in
+                    let command: WidgetCommand
+                    if case let .adjustVolume(delta) = incoming.action {
+                        command = try WidgetCommandQueue.resolve(incoming, to: .setVolume(volume + delta), for: claim)
+                    } else {
+                        command = incoming
+                    }
+                    guard case let .setVolume(value) = command.action else {
+                        XCTFail("Expected an absolute volume")
+                        return
+                    }
+                    volume = value
+                    executionIDs.append(command.id)
+                },
+                publishSnapshot: {
+                    if shouldFail {
+                        shouldFail = false
+                        if failResult {
+                            try FileManager.default.removeItem(at: layout.resultsURL)
+                            try Data("blocks result publication".utf8).write(to: layout.resultsURL)
+                        } else {
+                            throw CocoaError(.fileWriteUnknown)
+                        }
+                    }
+                    return Date()
+                }
+            )
+            let interrupted = await processor.drain()
+            XCTAssertFalse(interrupted.transportErrors.isEmpty)
+            XCTAssertEqual(executionIDs, [first.id], "Unacknowledged work must block later gestures")
+            XCTAssertEqual(volume, 0.55, accuracy: 0.0001)
+            if failResult {
+                try FileManager.default.removeItem(at: layout.resultsURL)
+                try WidgetSharedContainer.prepare(layout)
+            }
+            XCTAssertNil(WidgetCommandQueue.result(for: second.id, layout: layout))
+            let recovered = await processor.drain()
+            XCTAssertEqual(recovered.results.map(\.commandID), [first.id, second.id])
+            XCTAssertEqual(executionIDs, [first.id, first.id, second.id])
+            XCTAssertEqual(volume, 0.6, accuracy: 0.0001)
+        }
+    }
+
+    @MainActor
+    func testWidgetResolutionSharesOrderingWithPendingSliderAndKeyboard() async throws {
+        let layout = try makeLayout()
+        let identity = AudioAppIdentity(rawValue: "music")
+        let store = AudioControlStore(
+            settingsStore: SettingsStore(settingsURL: layout.rootURL.appendingPathComponent("settings.json")),
+            backend: MockAudioBackend(apps: [AudioAppSnapshot(identity: identity, displayName: "Music")])
+        )
+        try await store.refresh()
+        try await store.setVolume(0.5, for: identity)
+        var release: CheckedContinuation<Void, Never>?
+        let blocker = Task {
+            try await store.commandCoordinator.performOrdered {
+                await withCheckedContinuation { release = $0 }
+            }
+        }
+        for _ in 0..<1_000 where release == nil { await Task.yield() }
+        XCTAssertNotNil(release)
+        let slider = store.submit(ControlCommand(target: .app(identity), mutation: .setVolume(0.2)))
+        let key = store.submit(ControlCommand(target: .app(identity), mutation: .adjustVolume(0.1), source: .hotkey))
+        let widget = WidgetCommand.app(identity: identity.rawValue, action: .adjustVolume(0.05))
+        try WidgetCommandQueue.enqueue(widget, layout: layout)
+        var widgetAccepted = false
+        let processor = WidgetCommandProcessor(
+            layout: layout,
+            execute: { command, claim in
+                widgetAccepted = true
+                try await WidgetCommandStoreExecutor.apply(command, claim: claim, to: store)
+            },
+            publishSnapshot: { Date() }
+        )
+        let drain = Task { await processor.drain() }
+        for _ in 0..<1_000 where !widgetAccepted { await Task.yield() }
+        XCTAssertTrue(widgetAccepted)
+        // This key is accepted after the opaque widget operation, but must
+        // resolve against its committed value when its worker turn arrives.
+        let laterKey = store.submit(ControlCommand(
+            target: .app(identity), mutation: .adjustVolume(0.1), source: .hotkey
+        ))
+        release?.resume()
+        try await blocker.value
+        _ = await store.result(for: slider.id)
+        _ = await store.result(for: key.id)
+        let report = await drain.value
+        _ = await store.result(for: laterKey.id)
+        XCTAssertEqual(report.results.first?.status, .applied)
+        XCTAssertEqual(try XCTUnwrap(store.settings.appSettings[identity]?.volume), 0.45, accuracy: 0.0001)
+        _ = await store.shutdown()
+    }
+
+    @MainActor
+    func testRapidWidgetGesturesAccumulateAgainstLiveStore() async throws {
+        let layout = try makeLayout()
+        let identity = AudioAppIdentity(rawValue: "music")
+        let device = AudioDeviceSnapshot(id: "main", name: "Main", isDefault: true)
+        let store = makeStore(backend: MockAudioBackend(
+            apps: [AudioAppSnapshot(identity: identity, displayName: "Music", isActive: true)],
+            devices: [device]
+        ))
+        await store.waitUntilReady()
+        try await store.refresh()
+        try await store.setVolume(0.5, for: identity)
+        try await store.setMuted(false, for: identity)
+        try await store.setDeviceVolume(0.5, for: device.id)
+        try await store.setDeviceMuted(false, for: device.id)
+        for _ in 0..<2 {
+            let commands = try [
+                XCTUnwrap(WidgetIntentCommandFactory.adjustAppVolume(appID: identity.rawValue, delta: 0.05)),
+                XCTUnwrap(WidgetIntentCommandFactory.toggleAppMuted(appID: identity.rawValue)),
+                XCTUnwrap(WidgetIntentCommandFactory.adjustOutputDeviceVolume(deviceID: device.id, delta: 0.05)),
+                XCTUnwrap(WidgetIntentCommandFactory.toggleOutputDeviceMuted(deviceID: device.id)),
+                XCTUnwrap(WidgetIntentCommandFactory.adjustEQBandGain(appID: identity.rawValue, band: 4, delta: 0.5)),
+                XCTUnwrap(WidgetIntentCommandFactory.cycleAppBoost(appID: identity.rawValue))
+            ]
+            for command in commands { try WidgetCommandQueue.enqueue(command, layout: layout) }
+        }
+        let processor = WidgetCommandProcessor(
+            layout: layout,
+            execute: { try await WidgetCommandStoreExecutor.apply($0, claim: $1, to: store) },
+            publishSnapshot: { Date() }
+        )
+        let report = await processor.drain()
+        XCTAssertEqual(report.results.count, 12)
+        XCTAssertTrue(report.results.allSatisfy { $0.status == .applied })
+        XCTAssertEqual(try XCTUnwrap(store.settings.appSettings[identity]?.volume), 0.6, accuracy: 0.0001)
+        XCTAssertEqual(store.settings.appSettings[identity]?.isMuted, false)
+        XCTAssertEqual(store.settings.appSettings[identity]?.eq.gains[4], 1)
+        XCTAssertEqual(store.settings.appSettings[identity]?.boost, .x3)
+        XCTAssertEqual(try XCTUnwrap(store.deviceVolumeStates[device.id]?.volume), 0.6, accuracy: 0.0001)
+        XCTAssertEqual(store.deviceVolumeStates[device.id]?.isMuted, false)
+        _ = await store.shutdown()
+    }
+
+    @MainActor
+    func testBridgeRetriesAfterInitialSnapshotWriteFails() async throws {
+        let layout = try makeLayout()
+        try FileManager.default.createDirectory(at: layout.snapshotURL, withIntermediateDirectories: false)
+        let store = makeStore(backend: MockAudioBackend())
+        let bridge = WidgetBridge(store: store, layoutResolver: { layout }, reloadTimelines: {})
+        let failed = await bridge.start()
+        XCTAssertFalse(failed)
+        XCTAssertFalse(bridge.hasActiveTransportResources)
+        try FileManager.default.removeItem(at: layout.snapshotURL)
+        let recovered = await bridge.start()
+        XCTAssertTrue(recovered)
+        XCTAssertTrue(bridge.hasActiveTransportResources)
+        await bridge.stop()
+        XCTAssertFalse(bridge.hasActiveTransportResources)
+        _ = await store.shutdown()
     }
 
     @MainActor
@@ -187,7 +417,7 @@ final class WidgetCommandQueueTests: XCTestCase {
         var executionCount = 0
         let processor = WidgetCommandProcessor(
             layout: layout,
-            execute: { _ in executionCount += 1 },
+            execute: { _, _ in executionCount += 1 },
             publishSnapshot: { Date() }
         )
 
@@ -212,7 +442,7 @@ final class WidgetCommandQueueTests: XCTestCase {
         try WidgetCommandQueue.enqueue(command, layout: layout)
         let processor = WidgetCommandProcessor(
             layout: layout,
-            execute: { try await WidgetCommandStoreExecutor.apply($0, to: store) },
+            execute: { try await WidgetCommandStoreExecutor.apply($0, claim: $1, to: store) },
             publishSnapshot: {
                 let snapshot = WidgetBridge.makeSnapshot(from: store)
                 try WidgetSnapshotWriter.write(snapshot, layout: layout)
@@ -251,7 +481,7 @@ final class WidgetCommandQueueTests: XCTestCase {
         try WidgetCommandQueue.enqueue(command, layout: layout)
         let processor = WidgetCommandProcessor(
             layout: layout,
-            execute: { try await WidgetCommandStoreExecutor.apply($0, to: store) },
+            execute: { try await WidgetCommandStoreExecutor.apply($0, claim: $1, to: store) },
             publishSnapshot: {
                 let snapshot = WidgetBridge.makeSnapshot(from: store)
                 try WidgetSnapshotWriter.write(snapshot, layout: layout)
@@ -276,7 +506,7 @@ final class WidgetCommandQueueTests: XCTestCase {
         var callbackObservedAck = false
         let processor = WidgetCommandProcessor(
             layout: layout,
-            execute: { command in
+            execute: { command, claim in
                 guard case let .setVolume(value) = command.action else { return }
                 appliedVolume = value
             },
@@ -365,6 +595,7 @@ final class WidgetCommandQueueTests: XCTestCase {
         XCTAssertEqual(stopped.hostState, .stopped)
         XCTAssertFalse(stopped.isHostAvailable(at: stopped.hostUpdatedAt))
         XCTAssertTrue(stopped.statusMessage.contains("closed"))
+        XCTAssertEqual(bridge.activeTransportResourceNames, [])
 
         XCTAssertTrue(try WidgetCommandQueue.enqueue(command, layout: layout))
         XCTAssertNil(WidgetCommandQueue.result(for: command.id, layout: layout))
@@ -382,6 +613,29 @@ final class WidgetCommandQueueTests: XCTestCase {
         XCTAssertTrue(WidgetCommandQueue.pendingCommandIDs(layout: layout).isEmpty)
 
         await bridge.stop()
+    }
+
+    @MainActor
+    func testStartedBridgeDoesNotRetainItself() async throws {
+        let layout = try makeLayout()
+        let store = makeStore(backend: MockAudioBackend())
+        weak var releasedBridge: WidgetBridge?
+        var bridge: WidgetBridge? = WidgetBridge(
+            store: store,
+            layoutResolver: { layout },
+            reloadTimelines: {}
+        )
+        releasedBridge = bridge
+
+        let started = await bridge?.start()
+        XCTAssertEqual(started, true)
+        bridge = nil
+        for _ in 0..<100 where releasedBridge != nil {
+            await Task.yield()
+        }
+
+        XCTAssertNil(releasedBridge, "The heartbeat task must not retain its WidgetBridge owner")
+        _ = await store.shutdown()
     }
 
     private func makeLayout() throws -> WidgetSharedLayout {

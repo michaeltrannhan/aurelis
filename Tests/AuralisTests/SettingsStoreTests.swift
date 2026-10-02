@@ -2,6 +2,38 @@ import XCTest
 @testable import Auralis
 
 final class SettingsStoreTests: XCTestCase {
+    func testWhitespaceDeviceKeyCollisionsPreferCanonicalUIDInSettingsAndProfiles() throws {
+        let canonical = DeviceAudioSettings(displayName: "Canonical", volume: 0.3, isMuted: false)
+        let alias = DeviceAudioSettings(displayName: "Alias", volume: 0.9, isMuted: true)
+        let values = [" usb ": alias, "usb": canonical, "usb ": alias]
+        let profile = AudioProfile(name: "USB", appSettings: [:], deviceSettings: values, preferredOutputDeviceID: nil)
+        let settings = PersistedSettings(deviceSettings: values, profiles: [profile])
+        XCTAssertEqual(settings.deviceSettings, ["usb": canonical])
+        XCTAssertEqual(profile.deviceSettings, ["usb": canonical])
+
+        let data = try JSONSerialization.data(withJSONObject: [
+            "version": 9,
+            "deviceSettings": [
+                " usb ": ["displayName": "Alias", "volume": 0.9],
+                "usb": ["displayName": "Canonical", "volume": 0.3]
+            ],
+            "profiles": [[
+                "name": "USB",
+                "deviceSettings": [
+                    " usb ": ["displayName": "Alias", "volume": 0.9],
+                    "usb": ["displayName": "Canonical", "volume": 0.3]
+                ]
+            ]]
+        ])
+        let decoded = try JSONDecoder().decode(PersistedSettings.self, from: data)
+        XCTAssertEqual(decoded.deviceSettings["usb"]?.displayName, "Canonical")
+        XCTAssertEqual(decoded.profiles.first?.deviceSettings["usb"]?.displayName, "Canonical")
+        XCTAssertEqual(decoded.deviceSettings.count, 1)
+        XCTAssertEqual(decoded.profiles.first?.deviceSettings.count, 1)
+        let aliases = DeviceAudioSettings.normalizedDictionary([" usb": canonical, "usb ": alias])
+        XCTAssertEqual(aliases["usb"], canonical)
+    }
+
     func testTolerantDecodingNormalizesSettingsAndDeduplicatesOrdering() throws {
         let data = Data(
             """
@@ -477,6 +509,30 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(settings.globalProfilesForDisplay.map(\.id), [active.id, alpha.id])
         XCTAssertTrue(output.matchesMixerPreset(alpha))
         XCTAssertFalse(output.matchesMixerPreset(active))
+    }
+
+    func testFinalPersistenceFlushLeavesNoRetryWorkAfterFailure() async throws {
+        let url = uniqueSettingsURL()
+        let blockedParent = url.deletingLastPathComponent()
+        try Data("blocked".utf8).write(to: blockedParent)
+        defer { try? FileManager.default.removeItem(at: blockedParent) }
+        let persistence = SettingsPersistenceActor(store: SettingsStore(settingsURL: url))
+        await persistence.schedule(PersistedSettings(), debounceNanoseconds: 1_000_000_000)
+        do {
+            try await persistence.shutdownFlush()
+            XCTFail("Expected final flush failure")
+        } catch {}
+        let before = await persistence.diagnostics()
+        await persistence.waitForScheduledWork()
+        let after = await persistence.diagnostics()
+        XCTAssertEqual(before, after)
+        XCTAssertTrue(after.hasDirtyState)
+        XCTAssertEqual(after.attemptedWriteCount, 1)
+        XCTAssertEqual(after.retryAttemptCount, 0)
+        do {
+            _ = try await persistence.commit(PersistedSettings())
+            XCTFail("Stopped persistence accepted a write")
+        } catch is CancellationError {}
     }
 
     func testPersistenceActorDebouncesToLatestSettingsAndFlushes() async throws {

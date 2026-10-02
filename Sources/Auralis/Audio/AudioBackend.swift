@@ -46,6 +46,11 @@ protocol AudioBackendTapSynchronizing {
 /// (process list, device list, default output) so the store can refresh live.
 protocol AudioBackendUpdatePublishing {
     var updateEvents: AsyncStream<Void> { get }
+    func stopPublishingUpdates()
+}
+
+extension AudioBackendUpdatePublishing {
+    func stopPublishingUpdates() {}
 }
 
 /// Backends that can read and control the system default output device's

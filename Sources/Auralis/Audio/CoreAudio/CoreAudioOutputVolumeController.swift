@@ -9,11 +9,29 @@ import Foundation
 /// the UI.
 final class CoreAudioOutputVolumeController: @unchecked Sendable {
     private let queue = DispatchQueue(label: "Auralis.CoreAudioOutputVolumeController", qos: .utility)
+    private let queueKey = DispatchSpecificKey<UInt8>()
     private var defaultDeviceListener: AudioObjectPropertyListenerBlock?
     private var volumeListener: AudioObjectPropertyListenerBlock?
     private var muteListener: AudioObjectPropertyListenerBlock?
     private var observedDeviceID: AudioObjectID = AudioObjectID(kAudioObjectUnknown)
     private var onChange: (@Sendable () -> Void)?
+    private var observationGeneration: UInt64 = 0
+
+    init() {
+        queue.setSpecific(key: queueKey, value: 1)
+    }
+
+    deinit {
+        stopObserving()
+    }
+
+    private func onObservationQueue(_ operation: () -> Void) {
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            operation()
+        } else {
+            queue.sync(execute: operation)
+        }
+    }
 
     func readOutputVolume(forUID uid: String) throws -> OutputVolumeState {
         let deviceID = try CoreAudioPropertyReader.deviceObjectID(forUID: uid)
@@ -52,16 +70,27 @@ final class CoreAudioOutputVolumeController: @unchecked Sendable {
     }
 
     func startObserving(_ onChange: @escaping @Sendable () -> Void) {
-        guard self.onChange == nil else { return }
-        self.onChange = onChange
-        installDefaultDeviceListener()
-        installPropertyListeners(for: try? defaultOutputDeviceID())
+        onObservationQueue {
+            guard self.onChange == nil else { return }
+            removePropertyListeners()
+            removeDefaultDeviceListener()
+            // Keep failed removals owned and retry them on the next start/stop.
+            guard defaultDeviceListener == nil,
+                  volumeListener == nil, muteListener == nil else { return }
+            observationGeneration &+= 1
+            self.onChange = onChange
+            installDefaultDeviceListener()
+            installPropertyListeners(for: try? defaultOutputDeviceID())
+        }
     }
 
     func stopObserving() {
-        removePropertyListeners()
-        removeDefaultDeviceListener()
-        onChange = nil
+        onObservationQueue {
+            observationGeneration &+= 1
+            onChange = nil
+            removePropertyListeners()
+            removeDefaultDeviceListener()
+        }
     }
 
     // MARK: - Per-device reads
@@ -233,10 +262,14 @@ final class CoreAudioOutputVolumeController: @unchecked Sendable {
 
     private func installDefaultDeviceListener() {
         var address = Self.defaultOutputDeviceAddress()
+        let generation = observationGeneration
         let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            guard let self else { return }
+            guard let self, self.onChange != nil,
+                  self.observationGeneration == generation else { return }
             self.removePropertyListeners()
-            self.installPropertyListeners(for: try? self.defaultOutputDeviceID())
+            if self.volumeListener == nil, self.muteListener == nil {
+                self.installPropertyListeners(for: try? self.defaultOutputDeviceID())
+            }
             self.notifyChange()
         }
         let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, queue, listener)
@@ -247,39 +280,48 @@ final class CoreAudioOutputVolumeController: @unchecked Sendable {
     private func removeDefaultDeviceListener() {
         guard let defaultDeviceListener else { return }
         var address = Self.defaultOutputDeviceAddress()
-        AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, queue, defaultDeviceListener)
-        self.defaultDeviceListener = nil
+        let status = AudioObjectRemovePropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject), &address, queue, defaultDeviceListener
+        )
+        if status == noErr { self.defaultDeviceListener = nil }
     }
 
     private func installPropertyListeners(for deviceID: AudioObjectID?) {
         guard let deviceID, deviceID != AudioObjectID(kAudioObjectUnknown) else { return }
         observedDeviceID = deviceID
+        let generation = observationGeneration
         var volumeAddress = Self.volumeAddress()
-        let volumeListener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.notifyChange() }
+        let volumeListener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            guard let self, self.observationGeneration == generation else { return }
+            self.notifyChange()
+        }
         let volumeStatus = AudioObjectAddPropertyListenerBlock(deviceID, &volumeAddress, queue, volumeListener)
-        guard volumeStatus == noErr else { return }
-        self.volumeListener = volumeListener
+        if volumeStatus == noErr { self.volumeListener = volumeListener }
 
         var muteAddress = Self.muteAddress()
-        let muteListener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.notifyChange() }
+        let muteListener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            guard let self, self.observationGeneration == generation else { return }
+            self.notifyChange()
+        }
         let muteStatus = AudioObjectAddPropertyListenerBlock(deviceID, &muteAddress, queue, muteListener)
-        guard muteStatus == noErr else { return }
-        self.muteListener = muteListener
+        if muteStatus == noErr { self.muteListener = muteListener }
     }
 
     private func removePropertyListeners() {
         let deviceID = observedDeviceID
         if let volumeListener, deviceID != AudioObjectID(kAudioObjectUnknown) {
             var address = Self.volumeAddress()
-            AudioObjectRemovePropertyListenerBlock(deviceID, &address, queue, volumeListener)
+            let status = AudioObjectRemovePropertyListenerBlock(deviceID, &address, queue, volumeListener)
+            if status == noErr { self.volumeListener = nil }
         }
         if let muteListener, deviceID != AudioObjectID(kAudioObjectUnknown) {
             var address = Self.muteAddress()
-            AudioObjectRemovePropertyListenerBlock(deviceID, &address, queue, muteListener)
+            let status = AudioObjectRemovePropertyListenerBlock(deviceID, &address, queue, muteListener)
+            if status == noErr { self.muteListener = nil }
         }
-        volumeListener = nil
-        muteListener = nil
-        observedDeviceID = AudioObjectID(kAudioObjectUnknown)
+        if volumeListener == nil, muteListener == nil {
+            observedDeviceID = AudioObjectID(kAudioObjectUnknown)
+        }
     }
 
     private func notifyChange() {

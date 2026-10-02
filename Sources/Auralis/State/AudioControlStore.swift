@@ -104,10 +104,11 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
     private var levelObservationTask: Task<Void, Never>?
     private var topologyReconciliationTask: Task<Void, Never>?
     private var intentTasks: [UUID: Task<Void, Never>] = [:]
-    private var editSessions: [AudioEditSessionKey: PersistedSettings] = [:]
+    private struct ScalarEditSession { let baseline: Double; var latest: Double }
+    private var editSessions: [AudioEditSessionKey: ScalarEditSession] = [:]
     private var activeEditKeys: [EditLookup: AudioEditSessionKey] = [:]
     private var editTasks: [AudioEditSessionKey: Task<Void, Never>] = [:]
-    private var outputEQEditSessions: [OutputEQEditSessionKey: PersistedSettings] = [:]
+    private var outputEQEditSessions: [OutputEQEditSessionKey: ScalarEditSession] = [:]
     private var activeOutputEQEditKeys: [OutputEQEditLookup: OutputEQEditSessionKey] = [:]
     private var outputEQEditTasks: [OutputEQEditSessionKey: Task<Void, Never>] = [:]
     private var shutdownTask: Task<AudioShutdownReport, Never>?
@@ -137,21 +138,6 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         let deviceUID: String
         let band: Int
         let gestureToken: UUID
-    }
-
-    private struct TopologySignature: Equatable {
-        let revision: TopologyRevision
-
-        init(_ snapshot: AudioBackendSnapshot) {
-            revision = TopologyRevision(
-                defaultOutputUID: snapshot.devices.first(where: \.isDefault)?.id,
-                availableOutputUIDs: Set(snapshot.devices.map(\.id))
-            )
-        }
-
-        init(_ revision: TopologyRevision) {
-            self.revision = revision
-        }
     }
 
     var statusMessage: String { operationState.message }
@@ -459,7 +445,8 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         meterIntervalNanoseconds: UInt64 = 100_000_000
     ) async {
         await waitUntilReady()
-        guard topologyObservationTask == nil,
+        guard storePhase == .running,
+              topologyObservationTask == nil,
               outputObservationTask == nil,
               levelObservationTask == nil else { return }
 
@@ -479,6 +466,12 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             for await output in outputEvents {
                 guard !Task.isCancelled, let self else { return }
                 deviceVolumeStates = output.devices
+                channels.reconcile(
+                    rows: displayRows,
+                    devices: devices,
+                    volumes: deviceVolumeStates,
+                    deviceSettings: settings.deviceSettings
+                )
             }
         }
         let levelEvents = engine.levelEvents
@@ -495,20 +488,20 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
     }
 
     func stopBackendObservation() async {
-        cancelObservationConsumers()
+        await stopObservationConsumers()
         await engine.stopObservation()
     }
 
     private func reconcileStableTopology() async {
         contextSwitchState = .detecting
-        var previousSignature: TopologySignature?
+        var previousSignature: TopologyRevision?
         let maximumSamples = 14 // ~1 second at the confirmation interval.
 
         do {
             for sampleIndex in 0..<maximumSamples {
                 try Task.checkCancellation()
                 let revision = try await engine.topologyRevision()
-                let signature = TopologySignature(revision)
+                let signature = revision
                 if signature == previousSignature { break }
                 previousSignature = signature
                 guard sampleIndex < maximumSamples - 1 else { break }
@@ -535,6 +528,12 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                 recovery: .retry
             )
         }
+    }
+
+    private func stopObservationConsumers() async {
+        let tasks = [topologyReconciliationTask, topologyObservationTask, outputObservationTask, levelObservationTask]
+        cancelObservationConsumers()
+        for task in tasks { await task?.value }
     }
 
     private func cancelObservationConsumers() {
@@ -660,6 +659,9 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             mutateLiveOutputEQ(deviceUID: deviceUID) {
                 $0.setGain(gain, at: band)
             }
+            if let curve = settings.deviceSettings[deviceUID]?.eq, curve.gains.indices.contains(band) {
+                outputEQEditSessions[key]?.latest = curve.gains[band]
+            }
             scheduleOutputEQEditPreview(key)
         } else {
             launchIntent { store in
@@ -679,7 +681,9 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             band: band,
             gestureToken: UUID()
         )
-        outputEQEditSessions[key] = settings
+        let curve = settings.deviceSettings[deviceUID]?.eq ?? EQCurve(range: settings.customization.eqGainRange)
+        let value = curve.gains.indices.contains(band) ? curve.gains[band] : 0
+        outputEQEditSessions[key] = ScalarEditSession(baseline: value, latest: value)
         activeOutputEQEditKeys[lookup] = key
         return key.gestureToken
     }
@@ -722,6 +726,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         if let key = activeEditKeys[lookup] {
             ensureSettings(for: identity, in: &settings)
             settings.appSettings[identity]?.setVolume(volume)
+            editSessions[key]?.latest = settings.appSettings[identity]?.volume ?? volume
             AudioProfileContextPlanner.updateActiveDeviceContext(
                 in: &settings,
                 currentOutputID: currentOutput?.id
@@ -746,6 +751,9 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         if let key = activeEditKeys[lookup] {
             ensureSettings(for: identity, in: &settings)
             settings.appSettings[identity]?.eq.setGain(gain, at: band)
+            if let curve = settings.appSettings[identity]?.eq, curve.gains.indices.contains(band) {
+                editSessions[key]?.latest = curve.gains[band]
+            }
             AudioProfileContextPlanner.updateActiveDeviceContext(
                 in: &settings,
                 currentOutputID: currentOutput?.id
@@ -2148,7 +2156,13 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         let lookup = EditLookup(app: app, control: control)
         if let existing = activeEditKeys[lookup] { return existing.gestureToken }
         let key = AudioEditSessionKey(app: app, control: control, gestureToken: UUID())
-        editSessions[key] = settings
+        let appSettings = settings.appSettings[app] ?? AppAudioSettings(displayName: app.rawValue, volume: 1)
+        let value: Double
+        switch control {
+        case .volume: value = appSettings.volume
+        case let .eqBand(band): value = appSettings.eq.gains.indices.contains(band) ? appSettings.eq.gains[band] : 0
+        }
+        editSessions[key] = ScalarEditSession(baseline: value, latest: value)
         activeEditKeys[lookup] = key
         return key.gestureToken
     }
@@ -2177,24 +2191,41 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
     private func flushEditSession(_ key: AudioEditSessionKey, isFinal: Bool) async throws {
         await waitUntilReady()
         try await withMutationGate {
-            guard let baseline = editSessions[key],
-                  let currentApp = settings.appSettings[key.app],
-                  let baselineApp = baseline.appSettings[key.app] else { return }
+            guard let session = editSessions[key] else { return }
+            ensureSettings(for: key.app, in: &settings)
+            switch key.control {
+            case .volume: settings.appSettings[key.app]?.setVolume(session.latest)
+            case let .eqBand(band): settings.appSettings[key.app]?.eq.setGain(session.latest, at: band)
+            }
+            AudioProfileContextPlanner.updateActiveDeviceContext(in: &settings, currentOutputID: currentOutput?.id)
+            guard let currentApp = settings.appSettings[key.app] else { return }
+            // A gesture owns one field, while other controls may have committed
+            // since it began. Compensation must preserve those later changes.
+            var rollback = settings
+            switch key.control {
+            case .volume:
+                rollback.appSettings[key.app]?.setVolume(session.baseline)
+            case let .eqBand(band):
+                rollback.appSettings[key.app]?.eq.setGain(session.baseline, at: band)
+            }
+            AudioProfileContextPlanner.updateActiveDeviceContext(
+                in: &rollback, currentOutputID: currentOutput?.id
+            )
             let desiredCommand: AudioBackendCommand
             let compensation: AudioBackendCommand
             switch key.control {
             case .volume:
                 desiredCommand = .setVolume(key.app, currentApp.volume)
-                compensation = .setVolume(key.app, baselineApp.volume)
+                compensation = .setVolume(key.app, session.baseline)
             case .eqBand:
                 desiredCommand = .setEQ(key.app, currentApp.eq)
-                compensation = .setEQ(key.app, baselineApp.eq)
+                compensation = .setEQ(key.app, rollback.appSettings[key.app]?.eq ?? currentApp.eq)
             }
 
             if isFinal {
                 do {
                     try await performSettingsTransaction(
-                        previous: baseline,
+                        previous: rollback,
                         desired: settings,
                         issueID: "edit-\(key.app.rawValue)-\(key.gestureToken.uuidString)",
                         engineDomain: .backend,
@@ -2204,23 +2235,38 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                         compensate: { [engine] _ in try await engine.apply(compensation) }
                     )
                 } catch {
-                    removeEditSession(key)
+                    finishEditFlush(key, captured: session.latest, isFinal: isFinal)
                     throw error
                 }
-                removeEditSession(key)
+                finishEditFlush(key, captured: session.latest, isFinal: isFinal)
             } else {
                 do {
                     try await engine.apply(desiredCommand)
+                    if editSessions[key]?.latest != session.latest { finishEditFlush(key, captured: session.latest, isFinal: false) }
                 } catch {
                     try? await engine.apply(compensation)
-                    settings = baseline
+                    settings = rollback
                     rebuildDisplayRows()
-                    removeEditSession(key)
+                    finishEditFlush(key, captured: session.latest, isFinal: isFinal)
                     reportMutationFailure(error, id: "edit-\(key.app.rawValue)", domain: .backend, app: key.app)
                     throw error
                 }
             }
         }
+    }
+
+    private func finishEditFlush(_ key: AudioEditSessionKey, captured: Double, isFinal: Bool) {
+        guard let session = editSessions[key] else { return }
+        guard session.latest != captured else { removeEditSession(key); return }
+        ensureSettings(for: key.app, in: &settings)
+        switch key.control {
+        case .volume: settings.appSettings[key.app]?.setVolume(session.latest)
+        case let .eqBand(band): settings.appSettings[key.app]?.eq.setGain(session.latest, at: band)
+        }
+        AudioProfileContextPlanner.updateActiveDeviceContext(in: &settings, currentOutputID: currentOutput?.id)
+        rebuildDisplayRows()
+        if isFinal { launchIntent { try? await $0.flushEditSession(key, isFinal: true) } }
+        else { scheduleEditPreview(key) }
     }
 
     private func removeEditSession(_ key: AudioEditSessionKey) {
@@ -2252,24 +2298,33 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
     ) async throws {
         await waitUntilReady()
         try await withMutationGate {
-            guard let baseline = outputEQEditSessions[key] else { return }
+            guard let session = outputEQEditSessions[key] else { return }
+            mutateLiveOutputEQ(deviceUID: key.deviceUID) { $0.setGain(session.latest, at: key.band) }
             let currentEQ = settings.deviceSettings[key.deviceUID]?.eq
                 ?? EQCurve(range: settings.customization.eqGainRange)
-            let baselineEQ = baseline.deviceSettings[key.deviceUID]?.eq
-                ?? EQCurve(range: baseline.customization.eqGainRange)
+            var rollback = settings
+            var compensationEQ = currentEQ
+            compensationEQ.setGain(session.baseline, at: key.band)
+            if var device = rollback.deviceSettings[key.deviceUID] {
+                device.eq = compensationEQ
+                rollback.deviceSettings[key.deviceUID] = device
+            }
+            AudioProfileContextPlanner.updateActiveDeviceContext(
+                in: &rollback, currentOutputID: currentOutput?.id, changedDeviceID: key.deviceUID
+            )
             let desiredCommand = AudioBackendCommand.setOutputEQ(
                 key.deviceUID,
                 currentEQ
             )
             let compensation = AudioBackendCommand.setOutputEQ(
                 key.deviceUID,
-                baselineEQ
+                compensationEQ
             )
 
             if isFinal {
                 do {
                     try await performSettingsTransaction(
-                        previous: baseline,
+                        previous: rollback,
                         desired: settings,
                         issueID: "edit-output-eq-\(key.deviceUID)-\(key.gestureToken.uuidString)",
                         engineDomain: .backend,
@@ -2283,18 +2338,19 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                         }
                     )
                 } catch {
-                    removeOutputEQEditSession(key)
+                    finishOutputEQEditFlush(key, captured: session.latest, isFinal: isFinal)
                     throw error
                 }
-                removeOutputEQEditSession(key)
+                finishOutputEQEditFlush(key, captured: session.latest, isFinal: isFinal)
             } else {
                 do {
                     try await engine.apply(desiredCommand)
+                    if outputEQEditSessions[key]?.latest != session.latest { finishOutputEQEditFlush(key, captured: session.latest, isFinal: false) }
                 } catch {
                     try? await engine.apply(compensation)
-                    settings = baseline
+                    settings = rollback
                     rebuildDisplayRows()
-                    removeOutputEQEditSession(key)
+                    finishOutputEQEditFlush(key, captured: session.latest, isFinal: isFinal)
                     reportMutationFailure(
                         error,
                         id: "edit-output-eq-\(key.deviceUID)",
@@ -2305,6 +2361,14 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
                 }
             }
         }
+    }
+
+    private func finishOutputEQEditFlush(_ key: OutputEQEditSessionKey, captured: Double, isFinal: Bool) {
+        guard let session = outputEQEditSessions[key] else { return }
+        guard session.latest != captured else { removeOutputEQEditSession(key); return }
+        mutateLiveOutputEQ(deviceUID: key.deviceUID) { $0.setGain(session.latest, at: key.band) }
+        if isFinal { launchIntent { try? await $0.flushOutputEQEditSession(key, isFinal: true) } }
+        else { scheduleOutputEQEditPreview(key) }
     }
 
     private func removeOutputEQEditSession(_ key: OutputEQEditSessionKey) {
@@ -2345,6 +2409,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
     private func performShutdown() async -> AudioShutdownReport {
         // Synchronously enter shutting-down before rejecting new commands.
         storePhase = .shuttingDown
+        await commandCoordinator.stop()
         await mutationGate.cancelAll()
 
         // Intent/edit tasks first after external controls/widget (caller order).
@@ -2369,11 +2434,11 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
         }
         // Stop the main-actor consumers now; let engine.shutdown() stop and
         // report its owned HAL/output/meter observations as one operation.
-        cancelObservationConsumers()
+        await stopObservationConsumers()
 
         let persistenceError: String?
         do {
-            try await persistence.flush()
+            try await persistence.shutdownFlush()
             persistenceError = nil
             if healthInputs.persistenceState != .writeBlocked {
                 healthInputs.persistenceState = .clean
@@ -2545,6 +2610,11 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
             if tasks.isEmpty { return }
             for task in tasks { await task.value }
         }
+    }
+
+    func waitForPendingEditPreviews() async {
+        let tasks = Array(editTasks.values) + Array(outputEQEditTasks.values)
+        for task in tasks { await task.value }
     }
 
     func persistenceDiagnostics() async -> SettingsPersistenceDiagnostics {

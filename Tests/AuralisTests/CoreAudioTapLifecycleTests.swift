@@ -41,6 +41,26 @@ final class CoreAudioTapLifecycleTests: XCTestCase {
         XCTAssertEqual(manager.activeSessions.map(\.identity), [safari])
     }
 
+    func testTapManagerDeinitStopsActiveController() throws {
+        let factory = FakeControllerFactory()
+        var manager: CoreAudioProcessTapManager? = CoreAudioProcessTapManager(
+            operations: FakeTapOperations(),
+            controllerFactory: factory.make
+        )
+        manager?.setAvailableOutputUIDs(["built-in"], defaultOutputUID: "built-in")
+        try manager?.reconcile(targets: [
+            CoreAudioTapTarget(
+                identity: AudioAppIdentity(rawValue: "com.example.Music"),
+                displayName: "Music",
+                processObjectIDs: [10]
+            )
+        ])
+
+        manager = nil
+
+        XCTAssertEqual(factory.stoppedOutputUIDSets, [["built-in"]])
+    }
+
     func testActiveResourcesTearDownInSafeOrder() throws {
         let operations = FakeActiveTapOperations()
         var resources = CoreAudioTapResources(
@@ -405,7 +425,7 @@ final class CoreAudioTapLifecycleTests: XCTestCase {
         XCTAssertEqual(manager.resolvedOutputUIDs(for: music), ["usb", "hdmi"])
     }
 
-    func testNominalSampleRateChangeDoesNotRaceControllerRateListenerWithRebuild() throws {
+    func testRepeatedOutputInventoryDoesNotRebuildController() throws {
         let factory = FakeControllerFactory()
         let manager = CoreAudioProcessTapManager(
             operations: FakeTapOperations(),
@@ -414,8 +434,7 @@ final class CoreAudioTapLifecycleTests: XCTestCase {
         let music = AudioAppIdentity(rawValue: "com.example.Music")
         manager.setAvailableOutputUIDs(
             ["built-in", "usb"],
-            defaultOutputUIDs: ["built-in"],
-            nominalSampleRatesByUID: ["built-in": 48_000, "usb": 48_000]
+            defaultOutputUIDs: ["built-in"]
         )
         try manager.setRoute(music, .multiOutput(["usb", "built-in"]))
         try manager.reconcile(targets: [
@@ -424,8 +443,7 @@ final class CoreAudioTapLifecycleTests: XCTestCase {
 
         manager.setAvailableOutputUIDs(
             ["built-in", "usb"],
-            defaultOutputUIDs: ["built-in"],
-            nominalSampleRatesByUID: ["built-in": 44_100, "usb": 44_100]
+            defaultOutputUIDs: ["built-in"]
         )
 
         XCTAssertEqual(factory.createdOutputUIDSets, [["usb", "built-in"]])
@@ -546,6 +564,40 @@ final class CoreAudioTapLifecycleTests: XCTestCase {
         XCTAssertTrue(factory.stoppedOutputUIDSets.isEmpty)
         XCTAssertEqual(manager.lifecycleSnapshot(for: music)?.phase, .running)
         XCTAssertEqual(manager.health.issueCount, 0)
+    }
+
+    func testFailedRouteReplacementPreservesSurvivingOutputEQ() throws {
+        for topologyDriven in [false, true] {
+            let factory = FailsOnRebuildControllerFactory()
+            let scheduler = ManualTapRetryScheduler()
+            let manager = CoreAudioProcessTapManager(
+                operations: FakeTapOperations(),
+                retryScheduler: scheduler.schedule,
+                controllerFactory: factory.make
+            )
+            let music = AudioAppIdentity(rawValue: "music")
+            manager.setAvailableOutputUIDs(["built-in", "usb"], defaultOutputUID: "built-in")
+            var speakersEQ = EQCurve()
+            speakersEQ.setGain(6, at: 5)
+            var usbEQ = EQCurve()
+            usbEQ.setGain(-6, at: 5)
+            manager.setOutputEQ(speakersEQ, forUID: "built-in")
+            manager.setOutputEQ(usbEQ, forUID: "usb")
+            try manager.reconcile(targets: [
+                CoreAudioTapTarget(identity: music, displayName: "Music", processObjectIDs: [10])
+            ])
+
+            if topologyDriven {
+                manager.setAvailableOutputUIDs(["built-in", "usb"], defaultOutputUID: "usb")
+            } else {
+                XCTAssertThrowsError(try manager.setRoute(music, .selectedDevice("usb")))
+            }
+
+            XCTAssertEqual(manager.gainState(for: music)?.outputEQs, [speakersEQ])
+            manager.setVolume(0.5, for: music)
+            XCTAssertEqual(factory.firstController?.gainUpdates.last?.outputEQs, [speakersEQ])
+            XCTAssertEqual(factory.firstController?.gainUpdates.last?.volume, 0.5)
+        }
     }
 
     func testFailedReplacementCleanupRetriesThenResumesOldController() throws {
@@ -1020,6 +1072,7 @@ private final class FakeController: CoreAudioActiveTapControlling {
     let outputDeviceUIDs: [String]
     let identity: AudioAppIdentity
     let onStop: ([String]) -> Void
+    private(set) var gainUpdates: [CoreAudioRealtimeGainState] = []
 
     init(target: CoreAudioTapTarget, outputDeviceUIDs: [String], onStop: @escaping ([String]) -> Void) {
         self.outputDeviceUIDs = outputDeviceUIDs
@@ -1031,7 +1084,9 @@ private final class FakeController: CoreAudioActiveTapControlling {
         CoreAudioTapSession(identity: identity, tapObjectID: 4242, processObjectIDs: [1])
     }
 
-    func updateGainState(_ state: CoreAudioRealtimeGainState) {}
+    func updateGainState(_ state: CoreAudioRealtimeGainState) {
+        gainUpdates.append(state)
+    }
 
     func stop() {
         onStop(outputDeviceUIDs)
@@ -1282,6 +1337,7 @@ private final class StartFailureController: CoreAudioActiveTapControlling {
 
 private final class FailsOnRebuildControllerFactory {
     private(set) var attempts = 0
+    private(set) var firstController: FakeController?
     private(set) var stoppedOutputUIDSets: [[String]] = []
 
     func make(
@@ -1293,9 +1349,11 @@ private final class FailsOnRebuildControllerFactory {
         if attempts > 1 {
             throw CoreAudioTapStartFailure.deviceUnavailable
         }
-        return FakeController(target: target, outputDeviceUIDs: outputUIDs) { [weak self] uids in
+        let controller = FakeController(target: target, outputDeviceUIDs: outputUIDs) { [weak self] uids in
             self?.stoppedOutputUIDSets.append(uids)
         }
+        firstController = controller
+        return controller
     }
 }
 

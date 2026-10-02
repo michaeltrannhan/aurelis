@@ -104,6 +104,7 @@ struct AuralisMixerWidget: Widget {
                     Color(nsColor: .windowBackgroundColor)
                 }
         }
+        .contentMarginsDisabled()
         .configurationDisplayName("Auralis Mixer")
         .description("Profiles, output selection, master volume, and per-app controls.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
@@ -122,8 +123,9 @@ struct AuralisEQWidget: Widget {
                     Color(nsColor: .windowBackgroundColor)
                 }
         }
+        .contentMarginsDisabled()
         .configurationDisplayName("Auralis Quick Remote")
-        .description("Focused-app volume, mute, boost, route summary, and Open Inspector.")
+        .description("Focused-app volume, mute, boost, route summary, and ten-band EQ in the large widget.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }

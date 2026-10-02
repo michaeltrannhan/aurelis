@@ -6,7 +6,7 @@ set -eu
 # CI sibling publishes the three files under .build/release/ on tag v*.
 # Stable CI entry point — do not rename.
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$SCRIPT_DIR/lib.sh"
 # shellcheck disable=SC1091
@@ -108,7 +108,10 @@ auralis_dist_create_tarball "$APP_PATH" "$TARBALL_PATH"
 
 ARCHIVE_VALIDATION_ROOT=$(/usr/bin/mktemp -d "$OUTPUT_DIRECTORY/.auralis-archive-validation.XXXXXX") ||
     fail "could not create archive validation directory"
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 /usr/bin/ditto -x -k "$ARCHIVE_PATH" "$ARCHIVE_VALIDATION_ROOT" ||
     fail "could not extract release archive for validation"
 EXTRACTED_APP=$ARCHIVE_VALIDATION_ROOT/$APP_PRODUCT_NAME.app

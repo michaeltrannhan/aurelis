@@ -12,7 +12,7 @@ set -eu
 #     SIGN_IDENTITY="Apple Development" Scripts/build-debug-app.sh
 #   (Intel/universal builds are out of scope; arm64-only.)
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$SCRIPT_DIR/lib.sh"
 
@@ -626,7 +626,7 @@ if [ "$RUN_TESTS" = YES ]; then
         CODE_SIGN_STYLE="$CODE_SIGN_STYLE" \
         REGISTER_APP_GROUPS="$REGISTER_APP_GROUPS" \
         AURALIS_APP_GROUP_ID="$APP_GROUP_ID" \
-        AURALIS_DEBUG_LOG_PATH= \
+        AURALIS_DEBUG_LOG_PATH='' \
         AURALIS_DIAGNOSTICS_MODE="$AURALIS_DIAGNOSTICS_MODE" \
         $APP_GROUP_TEST_ARGUMENT \
         clean test \
@@ -712,6 +712,12 @@ for intent_metadata in "$APP_INTENT_METADATA" "$WIDGET_INTENT_METADATA"; do
     assert_app_intent_parameter_count "$intent_metadata" RevertProfileChangesIntent 0
     assert_app_intent_parameter_count "$intent_metadata" SetBoostAppIntent 2
     assert_app_intent_parameter_count "$intent_metadata" SetAppVolumeIntent 2
+    assert_app_intent_parameter_count "$intent_metadata" AdjustAppVolumeIntent 2
+    assert_app_intent_parameter_count "$intent_metadata" ToggleAppMutedIntent 1
+    assert_app_intent_parameter_count "$intent_metadata" AdjustOutputDeviceVolumeIntent 2
+    assert_app_intent_parameter_count "$intent_metadata" ToggleOutputDeviceMutedIntent 1
+    assert_app_intent_parameter_count "$intent_metadata" AdjustEQBandGainAppIntent 3
+    assert_app_intent_parameter_count "$intent_metadata" CycleAppBoostIntent 1
     assert_app_intent_parameter_count "$intent_metadata" SetEQBandGainAppIntent 3
 done
 

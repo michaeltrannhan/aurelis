@@ -26,12 +26,14 @@ struct AudioEngineShutdownReport: Equatable, Sendable {
 }
 
 private enum AudioEngineError: LocalizedError {
+    case stopped
     case backendUnavailable
     case switchAlreadyPending
     case invalidSwitchToken
 
     var errorDescription: String? {
         switch self {
+        case .stopped: "The audio engine has stopped."
         case .backendUnavailable: "The audio backend is unavailable."
         case .switchAlreadyPending: "Another audio backend switch is already pending."
         case .invalidSwitchToken: "The audio backend switch token is no longer valid."
@@ -63,6 +65,7 @@ actor AudioEngineActor {
     private var pendingTopologyTask: Task<Void, Never>?
     private var meterTask: Task<Void, Never>?
     private var observingOutput = false
+    private var observationGeneration: UInt64 = 0
     private var observationDebounceNanoseconds: UInt64 = 250_000_000
     private var meterIntervalNanoseconds: UInt64 = 100_000_000
 
@@ -76,6 +79,10 @@ actor AudioEngineActor {
         let isNoOp: Bool
     }
     private var pendingSwitch: PendingSwitch?
+    private var retiredObservationDrain: Task<Void, Never>?
+    private var observationStopTask: Task<Void, Never>?
+    private var shutdownTask: Task<AudioEngineShutdownReport, Never>?
+    private var isShuttingDown = false
     private var shutdownReport: AudioEngineShutdownReport?
 
     init(
@@ -101,7 +108,7 @@ actor AudioEngineActor {
         guard pendingSwitch == nil,
               restoredBackendIdentities.isEmpty,
               !isObserving,
-              shutdownReport == nil else { return }
+              !isShuttingDown else { return }
         mode = initialMode
     }
 
@@ -109,7 +116,7 @@ actor AudioEngineActor {
         settings: PersistedSettings,
         permissionAllowsTaps: Bool
     ) throws -> AudioEngineSnapshot {
-        let backend = ensureBackend()
+        let backend = try ensureBackend()
         var snapshot = try backend.fetchSnapshot()
 
         var restoreIssues: [String] = []
@@ -182,7 +189,7 @@ actor AudioEngineActor {
     }
 
     func apply(_ commands: [AudioBackendCommand]) throws {
-        let backend = ensureBackend()
+        let backend = try ensureBackend()
         for command in commands { try backend.apply(command) }
     }
 
@@ -191,7 +198,7 @@ actor AudioEngineActor {
         ignoredAppIDs: Set<AudioAppIdentity>,
         permissionAllowsTaps: Bool
     ) throws {
-        guard let tapBackend = ensureBackend() as? AudioBackendTapSynchronizing else { return }
+        guard let tapBackend = try ensureBackend() as? AudioBackendTapSynchronizing else { return }
         guard permissionAllowsTaps else {
             try tapBackend.tearDownAllTaps()
             return
@@ -219,14 +226,21 @@ actor AudioEngineActor {
         debounceNanoseconds: UInt64 = 250_000_000,
         meterIntervalNanoseconds: UInt64 = 100_000_000
     ) {
-        guard topologyObservationTask == nil, meterTask == nil, !observingOutput else { return }
+        guard !isShuttingDown, observationStopTask == nil,
+              topologyObservationTask == nil, meterTask == nil, !observingOutput else { return }
         observationDebounceNanoseconds = debounceNanoseconds
         self.meterIntervalNanoseconds = meterIntervalNanoseconds
         startObservationInternal()
     }
 
-    func stopObservation() {
+    func stopObservation() async {
+        if let observationStopTask { await observationStopTask.value; return }
         stopObservationInternal()
+        let task = retiredObservationDrain ?? Task {}
+        retiredObservationDrain = nil
+        observationStopTask = task
+        await task.value
+        observationStopTask = nil
     }
 
     func beginBackendSwitch(
@@ -234,7 +248,7 @@ actor AudioEngineActor {
         forceRecreate: Bool = false
     ) throws -> AudioBackendSwitchToken {
         guard pendingSwitch == nil else { throw AudioEngineError.switchAlreadyPending }
-        let current = ensureBackend()
+        let current = try ensureBackend()
         let token = AudioBackendSwitchToken(id: UUID())
         let wasObserving = isObserving
         if newMode == mode, !forceRecreate {
@@ -277,11 +291,13 @@ actor AudioEngineActor {
     }
 
     func commitBackendSwitch(_ token: AudioBackendSwitchToken) throws {
+        try requireAdmission()
         guard pendingSwitch?.token == token else { throw AudioEngineError.invalidSwitchToken }
         pendingSwitch = nil
     }
 
     func rollbackBackendSwitch(_ token: AudioBackendSwitchToken) throws {
+        try requireAdmission()
         guard let pending = pendingSwitch, pending.token == token else {
             throw AudioEngineError.invalidSwitchToken
         }
@@ -305,12 +321,20 @@ actor AudioEngineActor {
         if pending.wasObserving { startObservationInternal() }
     }
 
-    func shutdown() -> AudioEngineShutdownReport {
+    func shutdown() async -> AudioEngineShutdownReport {
         if let shutdownReport { return shutdownReport }
+        if let shutdownTask { return await shutdownTask.value }
+        isShuttingDown = true
+        let task = Task { await self.performShutdown() }
+        shutdownTask = task
+        return await task.value
+    }
+
+    private func performShutdown() async -> AudioEngineShutdownReport {
         let stoppedTopology = topologyObservationTask != nil || pendingTopologyTask != nil
         let stoppedOutput = observingOutput
         let stoppedMeter = meterTask != nil
-        stopObservationInternal()
+        await stopObservation()
         let teardownError: String?
         do {
             try (backend as? AudioBackendTapSynchronizing)?.tearDownAllTaps()
@@ -325,6 +349,9 @@ actor AudioEngineActor {
             teardownErrorDescription: teardownError
         )
         shutdownReport = report
+        topologyContinuation.finish()
+        outputContinuation.finish()
+        levelContinuation.finish()
         return report
     }
 
@@ -332,7 +359,12 @@ actor AudioEngineActor {
         topologyObservationTask != nil || meterTask != nil || observingOutput
     }
 
-    private func ensureBackend() -> any AudioBackend {
+    private func requireAdmission() throws {
+        guard !isShuttingDown else { throw AudioEngineError.stopped }
+    }
+
+    private func ensureBackend() throws -> any AudioBackend {
+        try requireAdmission()
         if let backend { return backend }
         let created = backendFactory(mode)
         backend = created
@@ -340,70 +372,99 @@ actor AudioEngineActor {
     }
 
     private func startObservationInternal() {
-        let backend = ensureBackend()
+        guard !isShuttingDown, observationStopTask == nil, let backend = try? ensureBackend() else { return }
+        let generation = observationGeneration
         if let publisher = backend as? AudioBackendUpdatePublishing {
             let events = publisher.updateEvents
             topologyObservationTask = Task { [weak self] in
                 for await _ in events {
                     guard !Task.isCancelled else { return }
-                    await self?.scheduleTopologyEvent()
+                    await self?.scheduleTopologyEvent(generation: generation)
                 }
             }
         }
         if let outputBackend = backend as? AudioBackendOutputVolumeControlling {
             observingOutput = true
             outputBackend.startObservingOutputVolume { [weak self] in
-                Task { await self?.publishOutputSnapshot() }
+                Task { await self?.publishOutputSnapshot(generation: generation) }
             }
         }
         if backend is AudioBackendAppLevelProviding {
+            let interval = meterIntervalNanoseconds
             meterTask = Task { [weak self] in
-                await self?.runMeterLoop()
+                while !Task.isCancelled {
+                    do { try await Task.sleep(nanoseconds: interval) }
+                    catch { return }
+                    guard !Task.isCancelled, let self else { return }
+                    await self.publishMeterLevels(generation: generation)
+                }
             }
         }
     }
 
-    private func runMeterLoop() async {
-        while !Task.isCancelled {
-            do { try await Task.sleep(nanoseconds: meterIntervalNanoseconds) }
-            catch { return }
-            guard !Task.isCancelled,
-                  let levels = (backend as? AudioBackendAppLevelProviding)?.consumeAppLevels() else { continue }
-            levelContinuation.yield(levels)
+    private func publishMeterLevels(generation: UInt64) {
+        guard generation == observationGeneration, meterTask != nil else { return }
+        guard let levels = (backend as? AudioBackendAppLevelProviding)?.consumeAppLevels() else { return }
+        levelContinuation.yield(levels)
+    }
+
+    /// Retain cancellation completion without accumulating finished producer handles.
+    private func retainForDrain(_ producer: Task<Void, Never>) {
+        let previous = retiredObservationDrain
+        retiredObservationDrain = Task {
+            await previous?.value
+            await producer.value
         }
     }
 
     private func stopObservationInternal() {
-        topologyObservationTask?.cancel()
+        observationGeneration &+= 1
+        if let task = topologyObservationTask {
+            task.cancel()
+            retainForDrain(task)
+        }
         topologyObservationTask = nil
-        pendingTopologyTask?.cancel()
+        if let task = pendingTopologyTask {
+            task.cancel()
+            retainForDrain(task)
+        }
         pendingTopologyTask = nil
-        meterTask?.cancel()
+        if let task = meterTask {
+            task.cancel()
+            retainForDrain(task)
+        }
         meterTask = nil
+        (backend as? AudioBackendUpdatePublishing)?.stopPublishingUpdates()
         if observingOutput {
             (backend as? AudioBackendOutputVolumeControlling)?.stopObservingOutputVolume()
             observingOutput = false
         }
     }
 
-    private func scheduleTopologyEvent() {
-        pendingTopologyTask?.cancel()
+    private func scheduleTopologyEvent(generation: UInt64) {
+        guard generation == observationGeneration, topologyObservationTask != nil else { return }
+        if let task = pendingTopologyTask {
+            task.cancel()
+            retainForDrain(task)
+        }
         let delay = observationDebounceNanoseconds
         pendingTopologyTask = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: delay) }
             catch { return }
             guard !Task.isCancelled, let self else { return }
-            await self.emitTopologyEvent()
+            await self.emitTopologyEvent(generation: generation)
         }
     }
 
-    private func emitTopologyEvent() {
+    private func emitTopologyEvent(generation: UInt64) {
+        guard generation == observationGeneration, topologyObservationTask != nil else { return }
         topologyContinuation.yield(())
         pendingTopologyTask = nil
     }
 
-    private func publishOutputSnapshot() {
-        let backend = ensureBackend()
+    private func publishOutputSnapshot(generation: UInt64) {
+        guard generation == observationGeneration, observingOutput else { return }
+        guard let backend = try? ensureBackend() else { return }
         outputContinuation.yield(readOutputSnapshot(using: backend, devices: lastDevices))
     }
 

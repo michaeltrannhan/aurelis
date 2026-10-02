@@ -670,6 +670,31 @@ final class AudioControlStoreTests: XCTestCase {
         XCTAssertEqual(store.issues.last?.domain, .persistence)
     }
 
+    func testFailedOutputEQGesturePreservesOtherBandAndCommittedDeviceMute() async throws {
+        for final in [false, true] {
+            let usb = AudioDeviceSnapshot(id: "usb", name: "USB", isDefault: true)
+            let backend = MockAudioBackend(devices: [usb])
+            let store = makeStore(backend: backend)
+            try await store.refresh()
+            store.beginOutputEQEditing(band: 0, for: usb.id)
+            try await store.setOutputEQGain(4, band: 1, for: usb.id)
+            try await store.setDeviceMuted(true, for: usb.id)
+            backend.applyError = NSError(domain: "GestureTest", code: 1)
+            store.setOutputEQGainIntent(3, band: 0, for: usb.id)
+            if final {
+                store.endOutputEQEditing(band: 0, for: usb.id)
+                await store.waitForPendingOperations()
+            } else {
+                await store.waitForPendingEditPreviews()
+            }
+            XCTAssertEqual(store.settings.deviceSettings[usb.id]?.eq.gains[0], 0)
+            XCTAssertEqual(store.settings.deviceSettings[usb.id]?.eq.gains[1], 4)
+            XCTAssertEqual(store.settings.deviceSettings[usb.id]?.isMuted, true)
+            XCTAssertEqual(store.activeOutputEQEditSessionCount, 0)
+            _ = await store.shutdown()
+        }
+    }
+
     func testMultiOutputPresetRoundTripsEveryRoutedOutputEQ() async throws {
         let music = AudioAppIdentity(rawValue: "music")
         let speakers = AudioDeviceSnapshot(
@@ -868,6 +893,27 @@ final class AudioControlStoreTests: XCTestCase {
         XCTAssertFalse(store.deviceVolumeStates["usb"]?.isMuted ?? true)
         XCTAssertTrue(store.deviceVolumeStates["hdmi"]?.isMuted ?? false)
         XCTAssertEqual(store.deviceVolumeStates["usb"]?.deviceName, "USB DAC")
+    }
+
+    func testOutputObservationUpdatesChannelWithoutTopologyRefresh() async throws {
+        let backend = ObservedOutputBackend()
+        let store = AudioControlStore(
+            settingsStore: SettingsStore(settingsURL: uniqueSettingsURL()), backend: backend,
+            permissionClient: grantedClient()
+        )
+        try await store.refresh()
+        let model = try XCTUnwrap(store.channels.outputModel(for: "usb"))
+        let updated = expectation(description: "external hardware volume reaches channel")
+        let cancellable = model.$volume.sink { volume in
+            if volume == 0.35 { updated.fulfill() }
+        }
+        await store.startBackendObservation()
+        backend.changeVolume(0.35)
+        await fulfillment(of: [updated], timeout: 1)
+        XCTAssertEqual(model.visibleVolume, 0.35)
+        XCTAssertEqual(backend.fetchCount, 1)
+        _ = await store.shutdown()
+        withExtendedLifetime(cancellable) {}
     }
 
     func testSetDeviceVolumeIntentAppliesPerDeviceAndClamps() async throws {
@@ -1533,4 +1579,34 @@ private final class RestoreOrderingBackend: AudioBackend, AudioBackendTapSynchro
 
     func tearDownTap(for identity: AudioAppIdentity) throws {}
     func tearDownAllTaps() throws {}
+}
+
+private final class ObservedOutputBackend: AudioBackend, AudioBackendOutputVolumeControlling, @unchecked Sendable {
+    private let lock = NSLock()
+    private var volume = 0.75
+    private var listener: (@Sendable () -> Void)?
+    private var storedFetchCount = 0
+    var fetchCount: Int { lock.withLock { storedFetchCount } }
+
+    func fetchSnapshot() throws -> AudioBackendSnapshot {
+        lock.withLock { storedFetchCount += 1 }
+        return AudioBackendSnapshot(devices: [AudioDeviceSnapshot(id: "usb", name: "USB", isDefault: true)])
+    }
+    func apply(_ command: AudioBackendCommand) throws {}
+    func readOutputVolume(forUID uid: String) throws -> OutputVolumeState {
+        lock.withLock { OutputVolumeState(volume: volume, capabilities: .controllable) }
+    }
+    func setOutputVolume(_ volume: Double, forUID uid: String) throws {
+        lock.withLock { self.volume = volume }
+    }
+    func setOutputMuted(_ muted: Bool, forUID uid: String) throws {}
+    func setDefaultOutputDevice(forUID uid: String) throws {}
+    func startObservingOutputVolume(_ onChange: @escaping @Sendable () -> Void) {
+        lock.withLock { listener = onChange }
+    }
+    func stopObservingOutputVolume() { lock.withLock { listener = nil } }
+    func changeVolume(_ volume: Double) {
+        let callback = lock.withLock { self.volume = volume; return listener }
+        callback?()
+    }
 }

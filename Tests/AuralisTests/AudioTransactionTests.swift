@@ -110,6 +110,62 @@ final class AudioTransactionTests: XCTestCase {
     private let music = AudioAppIdentity(rawValue: "com.example.Music")
     private let chat = AudioAppIdentity(rawValue: "com.example.Chat")
 
+    func testNewerGestureInputSurvivesItsSuspendedFinalFlush() async throws {
+        let arrived = expectation(description: "gesture final flush suspended")
+        let backend = SuspendedGestureBackend(music: music, chat: chat, arrived: arrived, suspendedApp: music)
+        defer { backend.release() }
+        let store = AudioControlStore(
+            settingsStore: SettingsStore(settingsURL: temporaryFileURL(filename: "settings.json")),
+            backend: backend, permissionClient: TransactionPermissionClient())
+        try await store.refresh()
+        store.beginVolumeEditing(for: music)
+        store.setVolumeIntent(0.4, for: music)
+        store.endVolumeEditing(for: music)
+        await fulfillment(of: [arrived], timeout: 1)
+        store.setVolumeIntent(0.7, for: music)
+        backend.release()
+        await store.waitForPendingOperations()
+        XCTAssertEqual(store.settings.appSettings[music]?.volume, 0.7)
+        XCTAssertEqual(try store.settingsStore.load().appSettings[music]?.volume, 0.7)
+        XCTAssertTrue(store.activeEditSessionKeys.isEmpty)
+        _ = await store.shutdown()
+    }
+
+    func testSuspendedUnrelatedTransactionCannotDiscardLiveGestureIntent() async throws {
+        for control in 0..<3 {
+            let arrived = expectation(description: "unrelated volume suspended")
+            let backend = SuspendedGestureBackend(music: music, chat: chat, arrived: arrived)
+            defer { backend.release() }
+            let store = AudioControlStore(
+                settingsStore: SettingsStore(settingsURL: temporaryFileURL(filename: "settings.json")),
+                backend: backend, permissionClient: TransactionPermissionClient())
+            try await store.refresh()
+            if control == 0 { store.beginVolumeEditing(for: music) }
+            else if control == 1 { store.beginEQEditing(band: 3, for: music) }
+            else { store.beginOutputEQEditing(band: 3, for: "output") }
+            let unrelated = Task { try await store.setVolume(0.4, for: chat) }
+            await fulfillment(of: [arrived], timeout: 1)
+            if control == 0 {
+                store.setVolumeIntent(0.2, for: music)
+                store.endVolumeEditing(for: music)
+            } else if control == 1 {
+                store.setEQGainIntent(6, band: 3, for: music)
+                store.endEQEditing(band: 3, for: music)
+            } else {
+                store.setOutputEQGainIntent(6, band: 3, for: "output")
+                store.endOutputEQEditing(band: 3, for: "output")
+            }
+            backend.release()
+            await assertThrows { try await unrelated.value }
+            await store.waitForPendingOperations()
+            if control == 0 { XCTAssertEqual(store.settings.appSettings[music]?.volume, 0.2) }
+            else if control == 1 { XCTAssertEqual(store.settings.appSettings[music]?.eq.gains[3], 6) }
+            else { XCTAssertEqual(store.settings.deviceSettings["output"]?.eq.gains[3], 6) }
+            XCTAssertEqual(store.settings.appSettings[chat]?.volume, 1)
+            _ = await store.shutdown()
+        }
+    }
+
     func testPinAndUnpinCommitOnceAndPersistenceFailureRollsBack() async throws {
         let context = try await makeContext()
         defer { removeContext(context.url) }
@@ -456,6 +512,44 @@ final class AudioTransactionTests: XCTestCase {
         XCTAssertTrue(context.store.activeEditSessionKeys.isEmpty)
     }
 
+    func testFailedVolumeGesturePreservesInterveningCommittedMuteAndPin() async throws {
+        for final in [false, true] {
+            let context = try await makeContext()
+            defer { removeContext(context.url) }
+            let baselineVolume = context.store.settings.appSettings[music]?.volume
+            context.store.beginVolumeEditing(for: music)
+            try await context.store.setMuted(true, for: music)
+            try await context.store.pin(music)
+            context.backend.failNextApplies()
+            context.store.setVolumeIntent(0.2, for: music)
+            if final {
+                context.store.endVolumeEditing(for: music)
+                await context.store.waitForPendingOperations()
+            } else {
+                await context.store.waitForPendingEditPreviews()
+            }
+            XCTAssertTrue(context.store.activeEditSessionKeys.isEmpty)
+            XCTAssertEqual(context.store.settings.appSettings[music]?.volume, baselineVolume)
+            XCTAssertEqual(context.store.settings.appSettings[music]?.isMuted, true)
+            XCTAssertTrue(context.store.settings.pinnedAppIDs.contains(music))
+            _ = await context.store.shutdown()
+        }
+    }
+
+    func testFailedFinalGesturePersistencePreservesInterveningCommittedMute() async throws {
+        let context = try await makeContext()
+        defer { removeContext(context.url) }
+        context.store.beginVolumeEditing(for: music)
+        try await context.store.setMuted(true, for: music)
+        context.store.setVolumeIntent(0.2, for: music)
+        try blockPersistence(at: context.url)
+        context.store.endVolumeEditing(for: music)
+        await context.store.waitForPendingOperations()
+        XCTAssertEqual(context.store.settings.appSettings[music]?.volume, 1)
+        XCTAssertEqual(context.store.settings.appSettings[music]?.isMuted, true)
+        _ = await context.store.shutdown()
+    }
+
     func testShutdownAttemptsEditsPersistenceObservationAndTapTeardownOnce() async throws {
         let context = try await makeContext()
         defer { removeContext(context.url) }
@@ -647,4 +741,34 @@ private enum TransactionBackendError: LocalizedError {
         case let .injected(operation): "Injected \(operation) failure."
         }
     }
+}
+
+private final class SuspendedGestureBackend: AudioBackend, @unchecked Sendable {
+    private let lock = NSLock()
+    private let semaphore = DispatchSemaphore(value: 0)
+    private let chat: AudioAppIdentity
+    private let arrived: XCTestExpectation
+    private let snapshot: AudioBackendSnapshot
+    private var didSuspend = false
+
+    init(music: AudioAppIdentity, chat: AudioAppIdentity, arrived: XCTestExpectation, suspendedApp: AudioAppIdentity? = nil) {
+        self.chat = suspendedApp ?? chat
+        self.arrived = arrived
+        snapshot = AudioBackendSnapshot(apps: [
+            AudioAppSnapshot(identity: music, displayName: "Music"),
+            AudioAppSnapshot(identity: chat, displayName: "Chat")
+        ], devices: [AudioDeviceSnapshot(id: "output", name: "Output", isDefault: true)])
+    }
+    func fetchSnapshot() throws -> AudioBackendSnapshot { snapshot }
+    func apply(_ command: AudioBackendCommand) throws {
+        guard case let .setVolume(app, volume) = command, app == chat, volume == 0.4 else { return }
+        let first = lock.withLock { if didSuspend { return false }; didSuspend = true; return true }
+        guard first else { return }
+        arrived.fulfill()
+        guard semaphore.wait(timeout: .now() + 5) == .success else {
+            throw UserFacingFailure(title: "Test timeout", message: "Suspended command was not released")
+        }
+        throw UserFacingFailure(title: "Injected", message: "Unrelated transaction failed")
+    }
+    func release() { semaphore.signal() }
 }

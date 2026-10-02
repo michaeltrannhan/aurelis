@@ -14,3 +14,25 @@ struct VolumeHUDState: Equatable {
 
     var percent: Int { Int((volume * 100).rounded()) }
 }
+
+struct VolumeHUDPeakTracker {
+    private(set) var peak = 0.0
+    private var appName: String?
+
+    mutating func update(
+        for state: VolumeHUDState,
+        segmentCount: Int = 12
+    ) -> Double {
+        let sourceChanged = appName != state.appName
+        appName = state.appName
+        if state.isMuted {
+            peak = 0
+        } else if sourceChanged {
+            peak = state.volume
+        } else {
+            let decay = 1 / Double(max(segmentCount, 1)) / 2
+            peak = max(state.volume, peak - decay)
+        }
+        return peak
+    }
+}

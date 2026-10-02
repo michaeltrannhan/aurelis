@@ -84,9 +84,9 @@ private struct TolerantDeviceSettings: Decodable {
                   let settings = try? object.decode(DeviceAudioSettings.self, forKey: key) else {
                 continue
             }
-            decoded[identity] = settings
+            decoded[key.stringValue] = settings
         }
-        values = decoded
+        values = DeviceAudioSettings.normalizedDictionary(decoded)
     }
 }
 
@@ -132,12 +132,7 @@ struct PersistedSettings: Codable, Equatable, Sendable {
                 .filter { $0.key.isPersistable }
                 .map { ($0.key, $0.value.normalized) }
         )
-        self.deviceSettings = Dictionary(
-            uniqueKeysWithValues: deviceSettings.compactMap { key, value in
-                let identity = key.trimmingCharacters(in: .whitespacesAndNewlines)
-                return identity.isEmpty ? nil : (identity, value.normalized)
-            }
-        )
+        self.deviceSettings = DeviceAudioSettings.normalizedDictionary(deviceSettings)
         let preferred = preferredOutputDeviceID?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.preferredOutputDeviceID = preferred?.isEmpty == false ? preferred : nil
         var seenProfileIDs = Set<UUID>()

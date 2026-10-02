@@ -30,6 +30,27 @@ final class AudioHealthReducerTests: XCTestCase {
         XCTAssertFalse(snapshot.message.contains("/Users/"))
     }
 
+    func testSoftFaultsRemainDegradedWhenNoAppsAreVisibleOrRefreshIsActive() {
+        for refreshing in [false, true] {
+            for persistence in [PersistenceHealthState.dirty, .retrying] {
+                let snapshot = AudioHealthReducer.reduce(AudioHealthInputs(
+                    isRefreshing: refreshing,
+                    persistenceState: persistence,
+                    persistenceMessage: "Settings need recovery",
+                    visibleAppCount: 0
+                ))
+                XCTAssertEqual(snapshot.phase, .degraded)
+                XCTAssertEqual(snapshot.operationState.isRefreshing, refreshing)
+            }
+            XCTAssertEqual(AudioHealthReducer.reduce(AudioHealthInputs(
+                isRefreshing: refreshing, widgetFault: true, visibleAppCount: 0
+            )).phase, .degraded)
+            XCTAssertEqual(AudioHealthReducer.reduce(AudioHealthInputs(
+                isRefreshing: refreshing, backendFaults: ["Backend fault"], visibleAppCount: 0
+            )).phase, .degraded)
+        }
+    }
+
     func testEmptyReadyWhenNoAppsAndHealthy() {
         let snapshot = AudioHealthReducer.reduce(
             AudioHealthInputs(visibleAppCount: 0, statusMessage: "No active apps")

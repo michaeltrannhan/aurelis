@@ -1,0 +1,44 @@
+AURALIS @VERSION@
+================
+
+Edition: @EDITION@
+Requires macOS 14.2 or newer on Apple Silicon (arm64).
+
+INSTALL
+
+Option 1: drag Auralis.app to the Applications shortcut.
+
+Option 2: double-click “Install Auralis.command”. The guided installer verifies
+the app and widget signatures, confirms they are arm64-only, installs to your
+user Applications folder, preserves an existing version in the Trash, refreshes
+the widget registration, and launches Auralis. It does not disable Gatekeeper.
+
+Keep only one Auralis.app on the Mac. Duplicate copies share a bundle identifier
+and can create duplicate or stale widget entries.
+
+FIRST OPEN
+
+An Apple-notarized Developer ID edition should open through the normal macOS
+confirmation. An unnotarized edition can be blocked by Gatekeeper even though it
+has a certificate-backed signature. If that happens, first try to open Auralis,
+then go to System Settings > Privacy & Security, click Open Anyway beside the
+Auralis message, and confirm Open. This is Apple’s supported manual override.
+
+Never override the warning unless the DMG came from a source you trust. Verify
+the separately downloaded .sha256 file before opening the DMG:
+
+  shasum -a 256 -c Auralis-*.dmg.sha256
+
+No Apple account is required to install or run the DMG. Producing the normal
+Gatekeeper-friendly edition does require the publisher to use Developer ID and
+Apple notarization. The unnotarized edition cannot provide the same assurance.
+
+AFTER LAUNCH
+
+1. Grant Screen & System Audio Recording for per-app audio controls.
+2. Grant Accessibility for media keys and popup behavior.
+3. Keep Open at login enabled on first run, or later in General settings.
+4. Open Notification Center > Edit Widgets, search Auralis, and add a widget.
+
+Uninstall by quitting Auralis and moving Auralis.app to the Trash. Settings stay
+in your user Library until removed separately.

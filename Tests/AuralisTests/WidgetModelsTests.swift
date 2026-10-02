@@ -203,6 +203,34 @@ final class WidgetModelsTests: XCTestCase {
         XCTAssertNil(WidgetIntentCommandFactory.setAllAppsVolume(2))
     }
 
+    func testGestureFactoriesPreserveRelativeActionsAndRejectInvalidParameters() throws {
+        let commands = try [
+            XCTUnwrap(WidgetIntentCommandFactory.adjustAppVolume(appID: "music", delta: 0.05)),
+            XCTUnwrap(WidgetIntentCommandFactory.toggleAppMuted(appID: "music")),
+            XCTUnwrap(WidgetIntentCommandFactory.adjustOutputDeviceVolume(deviceID: "main", delta: -0.05)),
+            XCTUnwrap(WidgetIntentCommandFactory.toggleOutputDeviceMuted(deviceID: "main")),
+            XCTUnwrap(WidgetIntentCommandFactory.adjustEQBandGain(appID: "music", band: 4, delta: 0.5)),
+            XCTUnwrap(WidgetIntentCommandFactory.cycleAppBoost(appID: "music"))
+        ]
+        XCTAssertEqual(commands.map(\.action), [.adjustVolume(0.05), .toggleMuted, .adjustVolume(-0.05), .toggleMuted,
+                                                 .adjustEQBandGain(band: 4, delta: 0.5), .cycleBoost])
+        XCTAssertEqual(commands.map(\.targetType), [.app, .app, .outputDevice, .outputDevice, .app, .app])
+        XCTAssertTrue(commands.allSatisfy { $0.schemaVersion == 6 && $0.action.isRelative })
+        XCTAssertNil(WidgetIntentCommandFactory.adjustAppVolume(appID: "music", delta: .nan))
+        XCTAssertNil(WidgetIntentCommandFactory.adjustOutputDeviceVolume(deviceID: "main", delta: 2))
+        XCTAssertNil(WidgetIntentCommandFactory.toggleAppMuted(appID: ""))
+        XCTAssertNil(WidgetIntentCommandFactory.toggleOutputDeviceMuted(deviceID: ""))
+        XCTAssertNil(WidgetIntentCommandFactory.adjustEQBandGain(appID: "music", band: 10, delta: 0.5))
+        XCTAssertNil(WidgetIntentCommandFactory.adjustEQBandGain(appID: "music", band: 4, delta: .infinity))
+        XCTAssertNil(WidgetIntentCommandFactory.cycleAppBoost(appID: ""))
+        for action in [WidgetCommandAction.adjustEQBandGain(band: 4, delta: 0.5), .cycleBoost] {
+            let wrongTarget = WidgetCommand(targetType: .outputDevice, targetIdentity: "main", action: action)
+            XCTAssertThrowsError(try wrongTarget.validate())
+        }
+        let decoder = JSONDecoder()
+        XCTAssertEqual(try decoder.decode([WidgetCommand].self, from: JSONEncoder().encode(commands)), commands)
+    }
+
     func testSnapshotDecodingDefaultsMalformedFieldsAndNormalizesEQ() throws {
         let data = Data(
             """

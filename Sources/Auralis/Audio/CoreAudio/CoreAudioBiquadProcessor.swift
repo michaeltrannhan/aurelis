@@ -227,16 +227,6 @@ final class CoreAudioBiquadProcessor {
         )
     }
 
-    @inline(__always)
-    private func resetDelayBuffers(for channel: Int) {
-        let offset = channel * sectionCount * 2
-        memset(
-            delays.baseAddress! + offset,
-            0,
-            sectionCount * 2 * MemoryLayout<Double>.stride
-        )
-    }
-
     private static func initializeUnity(
         _ destination: UnsafeMutableBufferPointer<Double>,
         sectionCount: Int

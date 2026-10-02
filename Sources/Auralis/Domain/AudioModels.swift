@@ -385,6 +385,23 @@ struct DeviceAudioSettings: Codable, Equatable, Sendable {
         )
     }
 
+    /// Canonical UIDs win over whitespace aliases; other collisions use a
+    /// stable raw-key order so malformed files cannot trap or load randomly.
+    static func normalizedDictionary(_ values: [String: DeviceAudioSettings]) -> [String: DeviceAudioSettings] {
+        let keys = values.keys.sorted { lhs, rhs in
+            let lhsCanonical = lhs == lhs.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rhsCanonical = rhs == rhs.trimmingCharacters(in: .whitespacesAndNewlines)
+            return lhsCanonical != rhsCanonical ? lhsCanonical : lhs < rhs
+        }
+        var result: [String: DeviceAudioSettings] = [:]
+        for key in keys {
+            let uid = key.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !uid.isEmpty, result[uid] == nil else { continue }
+            result[uid] = values[key]?.normalized
+        }
+        return result
+    }
+
     var normalized: DeviceAudioSettings {
         DeviceAudioSettings(
             displayName: displayName.isEmpty ? "Output Device" : displayName,
@@ -484,12 +501,7 @@ struct AudioProfile: Codable, Equatable, Identifiable, Sendable {
                 .filter { $0.key.isPersistable }
                 .map { ($0.key, $0.value.normalized) }
         )
-        self.deviceSettings = Dictionary(
-            uniqueKeysWithValues: deviceSettings.compactMap { key, value in
-                let normalizedID = Self.normalizedDeviceID(key)
-                return normalizedID.map { ($0, value.normalized) }
-            }
-        )
+        self.deviceSettings = DeviceAudioSettings.normalizedDictionary(deviceSettings)
         self.preferredOutputDeviceID = self.scope.outputDeviceID
             ?? Self.normalizedDeviceID(preferredOutputDeviceID)
         self.createdAt = Self.finiteDate(createdAt)

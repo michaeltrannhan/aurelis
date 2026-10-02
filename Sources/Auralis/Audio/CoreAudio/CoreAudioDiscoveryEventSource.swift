@@ -17,21 +17,29 @@ final class CoreAudioDiscoveryEventSource {
     }
 
     private var continuation: AsyncStream<Void>.Continuation?
-    private var registrations = Set<ListenerKey>()
+    private var registrations: [ListenerKey: AudioObjectPropertyListenerBlock] = [:]
+    private var retiredRegistrations = Set<ListenerKey>()
+    private let queue = DispatchQueue(label: "Auralis.CoreAudioDiscoveryEvents")
 
     init() {}
 
-    lazy var events: AsyncStream<Void> = AsyncStream { continuation in
-        self.continuation = continuation
-        self.registerListeners()
+    var events: AsyncStream<Void> {
+        stop()
+        let events = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        continuation = events.continuation
+        registerListeners()
+        return events.stream
     }
 
     deinit {
-        unregisterListeners()
+        stop()
     }
 
-    private var selfContext: UnsafeMutableRawPointer {
-        Unmanaged.passUnretained(self).toOpaque()
+    func stop() {
+        continuation?.finish()
+        continuation = nil
+        unregisterListeners()
+        retiredRegistrations = Set(registrations.keys)
     }
 
     private func registerListeners() {
@@ -49,6 +57,7 @@ final class CoreAudioDiscoveryEventSource {
     /// changes catch transports that briefly remain enumerated during unplug;
     /// nominal-rate and aggregate changes keep active routes current.
     func refreshDeviceListeners() {
+        guard continuation != nil else { return }
         let deviceIDs: [AudioObjectID] = (try? CoreAudioPropertyReader.array(
             objectID: AudioObjectID(kAudioObjectSystemObject),
             selector: kAudioHardwarePropertyDevices
@@ -82,7 +91,7 @@ final class CoreAudioDiscoveryEventSource {
         }
 
         let systemObject = AudioObjectID(kAudioObjectSystemObject)
-        for key in Array(registrations) where key.objectID != systemObject && !desired.contains(key) {
+        for key in Array(registrations.keys) where key.objectID != systemObject && !desired.contains(key) {
             removeListener(key)
         }
         for key in desired {
@@ -91,42 +100,33 @@ final class CoreAudioDiscoveryEventSource {
     }
 
     private func addListener(_ key: ListenerKey) {
-        guard !registrations.contains(key) else { return }
+        if retiredRegistrations.contains(key) { removeListener(key) }
+        guard registrations[key] == nil, let continuation else { return }
         var address = key.address
-        let status = AudioObjectAddPropertyListener(
-            key.objectID,
-            &address,
-            Self.listenerProc,
-            selfContext
-        )
+        // Capture only the thread-safe continuation. Failed HAL removal cannot
+        // leave a callback pointing at an already released event source.
+        let listener: AudioObjectPropertyListenerBlock = { _, _ in
+            continuation.yield(())
+        }
+        let status = AudioObjectAddPropertyListenerBlock(key.objectID, &address, queue, listener)
         if status == noErr {
-            registrations.insert(key)
+            registrations[key] = listener
         }
     }
 
     private func removeListener(_ key: ListenerKey) {
+        guard let listener = registrations[key] else { return }
         var address = key.address
-        AudioObjectRemovePropertyListener(
-            key.objectID,
-            &address,
-            Self.listenerProc,
-            selfContext
-        )
-        registrations.remove(key)
-    }
-
-    private func unregisterListeners() {
-        for key in Array(registrations) {
-            removeListener(key)
+        let status = AudioObjectRemovePropertyListenerBlock(key.objectID, &address, queue, listener)
+        if status == noErr {
+            registrations.removeValue(forKey: key)
+            retiredRegistrations.remove(key)
         }
     }
 
-    private static let listenerProc: AudioObjectPropertyListenerProc = { _, _, _, context in
-        guard let context else { return noErr }
-        let source = Unmanaged<CoreAudioDiscoveryEventSource>
-            .fromOpaque(context)
-            .takeUnretainedValue()
-        source.continuation?.yield(())
-        return noErr
+    private func unregisterListeners() {
+        for key in Array(registrations.keys) {
+            removeListener(key)
+        }
     }
 }

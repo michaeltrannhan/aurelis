@@ -2582,7 +2582,7 @@ final class AudioControlStore: ObservableObject, AudioControlCommanding {
 
     // MARK: - Coordination helpers and issues
 
-    private func withMutationGate<Value>(_ operation: () async throws -> Value) async throws -> Value {
+    private func withMutationGate<Value>(_ operation: @MainActor () async throws -> Value) async throws -> Value {
         try await mutationGate.acquire()
         do {
             let value = try await operation()

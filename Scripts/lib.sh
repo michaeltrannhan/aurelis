@@ -98,10 +98,14 @@ if [ -z "${AURALIS_LIB_SH:-}" ]; then
         xcodegen --version 2>/dev/null | /usr/bin/awk '{ print $NF }'
     }
 
+    xcodegen_has_presets() {
+        [ -f "$(dirname -- "$1")/../share/xcodegen/SettingPresets/base.yml" ]
+    }
+
     # Install or reuse the pinned XcodeGen. Idempotent; CI-safe.
     ensure_xcodegen() {
         installed=$(xcodegen_reported_version || true)
-        if [ "$installed" = "$XCODEGEN_VERSION" ]; then
+        if [ "$installed" = "$XCODEGEN_VERSION" ] && xcodegen_has_presets "$(command -v xcodegen)"; then
             printf 'Using XcodeGen %s (%s)\n' "$XCODEGEN_VERSION" "$(command -v xcodegen)"
             return 0
         fi
@@ -113,7 +117,7 @@ if [ -z "${AURALIS_LIB_SH:-}" ]; then
 
         if [ -x "$BIN_DIR/xcodegen" ]; then
             cached=$("$BIN_DIR/xcodegen" --version 2>/dev/null | /usr/bin/awk '{ print $NF }' || true)
-            if [ "$cached" = "$XCODEGEN_VERSION" ]; then
+            if [ "$cached" = "$XCODEGEN_VERSION" ] && xcodegen_has_presets "$BIN_DIR/xcodegen"; then
                 prepend_path "$BIN_DIR"
                 printf 'Using cached XcodeGen %s at %s\n' "$XCODEGEN_VERSION" "$BIN_DIR"
                 return 0
@@ -132,14 +136,20 @@ if [ -z "${AURALIS_LIB_SH:-}" ]; then
         /usr/bin/unzip -q "$ZIP_PATH" -d "$INSTALL_ROOT/extract"
 
         if [ -f "$INSTALL_ROOT/extract/bin/xcodegen" ] && [ -x "$INSTALL_ROOT/extract/bin/xcodegen" ]; then
-            cp "$INSTALL_ROOT/extract/bin/xcodegen" "$BIN_DIR/xcodegen"
+            XCODEGEN_BINARY="$INSTALL_ROOT/extract/bin/xcodegen"
         elif [ -f "$INSTALL_ROOT/extract/xcodegen" ] && [ -x "$INSTALL_ROOT/extract/xcodegen" ]; then
-            cp "$INSTALL_ROOT/extract/xcodegen" "$BIN_DIR/xcodegen"
+            XCODEGEN_BINARY="$INSTALL_ROOT/extract/xcodegen"
         elif [ -f "$INSTALL_ROOT/extract/xcodegen/bin/xcodegen" ] && [ -x "$INSTALL_ROOT/extract/xcodegen/bin/xcodegen" ]; then
-            cp "$INSTALL_ROOT/extract/xcodegen/bin/xcodegen" "$BIN_DIR/xcodegen"
+            XCODEGEN_BINARY="$INSTALL_ROOT/extract/xcodegen/bin/xcodegen"
         else
             fail "could not locate xcodegen binary inside release zip"
         fi
+        XCODEGEN_PRESETS="$(dirname -- "$XCODEGEN_BINARY")/../share/xcodegen/SettingPresets"
+        [ -f "$XCODEGEN_PRESETS/base.yml" ] || fail "XcodeGen archive is missing SettingPresets"
+        mkdir -p "$INSTALL_ROOT/share/xcodegen"
+        rm -rf "$INSTALL_ROOT/share/xcodegen/SettingPresets"
+        cp -R "$XCODEGEN_PRESETS" "$INSTALL_ROOT/share/xcodegen/SettingPresets"
+        cp -f "$XCODEGEN_BINARY" "$BIN_DIR/xcodegen"
         chmod +x "$BIN_DIR/xcodegen"
 
         VERSION=$("$BIN_DIR/xcodegen" --version 2>/dev/null | /usr/bin/awk '{ print $NF }')
